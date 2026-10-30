@@ -68,7 +68,7 @@
 
 /*
  * Experimental Xiri-marked static o32 personality, not general IRIX support.
- * Only direct write(1004) and exit(1001) are implemented. The ELF note and
+ * Static argument, file, and private mapping support. The ELF note and
  * constrained image layout are an explicit test contract, not IRIX branding.
  */
 #include <sys/cdefs.h>
@@ -76,6 +76,8 @@
 #include <sys/cpu.h>
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
+#include <sys/fcntl.h>
+#include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
@@ -104,6 +106,86 @@ irix_o32_nosys(struct lwp *l, const void *args, register_t *rval)
 	return ENOSYS;
 }
 
+/* IRIX uses the historical SVR4 open flag assignments for this subset. */
+static int
+irix_o32_open(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct sys_open_args * const uap = args;
+	struct sys_open_args native = *uap;
+	const uint32_t flags = SCARG(uap, flags);
+	const uint32_t supported = 3 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400;
+	int converted;
+
+	if ((flags & ~supported) != 0 || (flags & 3) == 3)
+		return EINVAL;
+	converted = (flags & 3) == 2 ? O_RDWR : (flags & 3) == 1 ? O_WRONLY : O_RDONLY;
+	if (flags & 0x8)
+		converted |= O_APPEND;
+	if (flags & 0x80)
+		converted |= O_NONBLOCK;
+	if (flags & 0x100)
+		converted |= O_CREAT;
+	if (flags & 0x200)
+		converted |= O_TRUNC;
+	if (flags & 0x400)
+		converted |= O_EXCL;
+	SCARG(&native, flags) = converted;
+	return sys_open(l, &native, rval);
+}
+
+struct irix_o32_mmap_args {
+	syscallarg(void *) addr;
+	syscallarg(uint32_t) len;
+	syscallarg(int32_t) prot;
+	syscallarg(int32_t) flags;
+	syscallarg(int32_t) fd;
+	syscallarg(int32_t) pos;
+};
+
+static int
+irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_o32_mmap_args * const uap = args;
+	struct sys_mmap_args native = { 0 };
+
+	/* Private non-fixed mappings only. In IRIX, 0x1000 is NOT MAP_ANON. */
+	if (SCARG(uap, addr) != NULL || SCARG(uap, len) == 0 ||
+	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
+	    SCARG(uap, flags) != 0x2 || SCARG(uap, pos) < 0 ||
+	    (SCARG(uap, pos) & PAGE_MASK) != 0)
+		return EINVAL;
+	SCARG(&native, addr) = NULL;
+	SCARG(&native, len) = SCARG(uap, len);
+	SCARG(&native, prot) = SCARG(uap, prot);
+	SCARG(&native, flags) = MAP_PRIVATE;
+	SCARG(&native, fd) = SCARG(uap, fd);
+	SCARG(&native, pos) = SCARG(uap, pos); /* signed 32-bit to native off_t */
+	return sys_mmap(l, &native, rval);
+}
+
+static int
+irix_o32_munmap(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct sys_munmap_args * const uap = args;
+
+	if ((int32_t)SCARG(uap, len) <= 0 ||
+	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0)
+		return EINVAL;
+	return sys_munmap(l, uap, rval);
+}
+
+static int
+irix_o32_mprotect(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct sys_mprotect_args * const uap = args;
+
+	if ((int32_t)SCARG(uap, len) <= 0 ||
+	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0 ||
+	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
+		return EINVAL;
+	return sys_mprotect(l, uap, rval);
+}
+
 static struct sysent irix_o32_sysent[] = {
 	[0] = { .sy_call = irix_o32_nosys },
 	[1] = {
@@ -112,18 +194,54 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_call = (sy_call_t *)sys_exit,
 	},
 	[2] = { .sy_call = irix_o32_nosys },
-	[3] = { .sy_call = irix_o32_nosys },
+	[3] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct sys_read_args),
+		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
+		.sy_call = (sy_call_t *)sys_read,
+	},
 	[4] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct sys_write_args),
 		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
 		.sy_call = (sy_call_t *)sys_write,
 	},
+	[5] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct sys_open_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_o32_open,
+	},
+	[6] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct sys_close_args),
+		.sy_call = (sy_call_t *)sys_close,
+	},
+	[134] = {
+		.sy_narg = 6,
+		.sy_argsize = sizeof(struct irix_o32_mmap_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_o32_mmap,
+	},
+	[135] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct sys_munmap_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_o32_munmap,
+	},
+	[136] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct sys_mprotect_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_o32_mprotect,
+	},
 };
 
-static const uint32_t irix_o32_nomodbits[] = { 0 };
-static const char * const irix_o32_syscallnames[] = {
-	"unsupported", "exit", "unsupported", "unsupported", "write"
+static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
+static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
+	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
+	[5] = "open", [6] = "close", [134] = "mmap", [135] = "munmap",
+	[136] = "mprotect",
 };
 
 /* Symbolic native indices avoid importing the obsolete positional table. */
@@ -137,23 +255,46 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	struct reg * const reg = &tf->tf_registers;
 	const mips_reg_t saved_v0 = reg->r_regs[_R_V0];
 	const uint32_t number = (uint32_t)saved_v0;
-	register_t args[3];
+	register_t args[6] = { 0 };
 	int code, error;
 
 	CTASSERT(sizeof(register_t) == 4);
-	CTASSERT(sizeof(struct sys_write_args) == sizeof(args));
+	CTASSERT(sizeof(struct irix_o32_mmap_args) == sizeof(args));
 	KASSERT(p->p_md.md_abi == _MIPS_BSD_API_O32);
 	curcpu()->ci_data.cpu_nsyscall++;
 	reg->r_regs[_R_PC] = (cause & MIPS_CR_BR_DELAY) ?
 	    mips_emul_branch(tf, pc, 0, false) : pc + sizeof(uint32_t);
 
 	/* Never subtract or use an unchecked user value as an array index. */
-	code = number == 1001 ? 1 : number == 1004 ? 4 : 0;
-	args[0] = reg->r_regs[_R_A0];
-	args[1] = reg->r_regs[_R_A1];
-	args[2] = reg->r_regs[_R_A2];
+	switch (number) {
+	case 1001: code = 1; break;
+	case 1003: code = 3; break;
+	case 1004: code = 4; break;
+	case 1005: code = 5; break;
+	case 1006: code = 6; break;
+	case 1134: code = 134; break;
+	case 1135: code = 135; break;
+	case 1136: code = 136; break;
+	default: code = 0; break;
+	}
+	const size_t nargs = irix_o32_sysent[code].sy_narg;
+	KASSERT(nargs <= __arraycount(args));
+	for (size_t i = 0; i < MIN(nargs, 4); i++)
+		args[i] = reg->r_regs[_R_A0 + i];
+	if (nargs > 4) {
+		const uint32_t usp = reg->r_regs[_R_SP];
+		if (usp > UINT32_MAX - 16) {
+			error = EFAULT;
+			goto done;
+		}
+		error = copyin((const void *)(uintptr_t)(usp + 16), args + 4,
+		    (nargs - 4) * sizeof(args[0]));
+		if (error != 0)
+			goto done;
+	}
 	error = sy_invoke(&irix_o32_sysent[code], l, args,
 	    &reg->r_regs[_R_V0], code);
+done:
 	switch (error) {
 	case 0:
 		reg->r_regs[_R_A3] = 0;
@@ -216,6 +357,30 @@ static struct emul emul_irix_o32 = {
 };
 
 static int
+irix_o32_copyargs(struct lwp *l, struct exec_package *pack,
+    struct ps_strings *arginfo, char **stackp, void *argp)
+{
+	struct exec_package local_pack = *pack;
+	struct execsw local_exec = *pack->ep_esch;
+	const uintptr_t vectors_end = (uintptr_t)*stackp +
+	    (arginfo->ps_nargvstr + arginfo->ps_nenvstr + 3) * sizeof(uint32_t);
+	const Aux32Info terminator = { .a_type = AT_NULL, .a_v = 0 };
+	int error;
+
+	/* Keep current copying/ps_strings logic; reserve only static AT_NULL and
+	 * align the first argument string as the historical IRIX loader did. */
+	local_exec.es_arglen = roundup(vectors_end + sizeof(terminator), 16) - vectors_end;
+	KASSERT(local_exec.es_arglen <= pack->ep_esch->es_arglen);
+	local_pack.ep_esch = &local_exec;
+	if ((error = copyargs(l, &local_pack, arginfo, stackp, argp)) != 0)
+		return error;
+	if ((error = copyout(&terminator, *stackp, sizeof(terminator))) != 0)
+		return error;
+	*stackp += sizeof(terminator);
+	return 0;
+}
+
+static int
 irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
     char *interp, vaddr_t *pos)
 {
@@ -276,7 +441,8 @@ static struct execsw irix_o32_execsw[] = {
 		.u = { .elf_probe_func = irix_o32_probe },
 		.es_emul = &emul_irix_o32,
 		.es_prio = EXECSW_PRIO_ANY,
-		.es_copyargs = copyargs,
+		.es_arglen = sizeof(Aux32Info) + 15,
+		.es_copyargs = irix_o32_copyargs,
 		.es_coredump = coredump_elf32,
 		.es_setup_stack = exec_setup_stack,
 	},

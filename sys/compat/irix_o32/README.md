@@ -10,7 +10,7 @@ after the ELF header: one read/execute load segment at `0x00400000`, followed by
 one note. The load segment starts at file offset zero, has equal file/memory
 sizes of at most 1 MiB, and contains both the entry point and note. Alignment
 and file bounds are checked. There is no interpreter, dynamic segment, writable
-data segment, BSS, or general-purpose IRIX stack/auxv implementation.
+data segment, BSS, or dynamic auxiliary-vector implementation.
 
 The note's exact 24 bytes encode namesz 5, descsz 4, type `0x49524958`, name
 `Xiri\0` with zero padding, and big-endian descriptor 1. This is an experimental
@@ -18,12 +18,46 @@ opt-in convention, not historical IRIX branding. Native ELF selection retains
 its existing priority; the foreign probe does not change process ABI state.
 The o32 ABI is committed in `setregs` after selection succeeds.
 
-Only direct IRIX trap numbers 1004 (`write`) and 1001 (`exit`) are implemented,
-using current native syscall argument types and `sy_invoke`. Other numbers,
+Direct IRIX trap numbers 1001 (`exit`), 1003 (`read`), 1004 (`write`), 1005
+(`open`), 1006 (`close`), 1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
+are implemented using current native operations and `sy_invoke`. Other numbers,
 including indirect forms, select a dedicated handler that returns IRIX
 `ENOSYS=89` without posting `SIGSYS`. This is an explicit experiment policy.
 The dispatcher never indexes a table with an unchecked user-supplied number.
 It handles branch-delay return, kernel restart, and the normal `userret` path.
+
+The six-word o32 mmap call takes its descriptor and signed 32-bit offset from
+`sp+16` and `sp+20`. The dispatcher checks address addition before `copyin` and
+translates failures to foreign `EFAULT`. The wrapper expands the offset into
+native `off_t` and initializes the native argument padding.
+
+## Static interface subset
+
+- Argument setup uses current `copyargs` and `ps_strings` handling, with a
+  16-byte-aligned first argument string and an explicit static `AT_NULL` pair.
+  The o32 stack remains aligned to its native eight-byte requirement. There is
+  no interpreter auxv; startup register conventions beyond the earlier native
+  `setregs` behavior remain unqualified against vendor startup code.
+- Open accepts IRIX access modes 0/1/2, APPEND `0x8`, NONBLOCK `0x80`, CREAT
+  `0x100`, TRUNC `0x200`, and EXCL `0x400`, translating them individually to
+  native flags. Access mode 3 or other flag bits return `EINVAL`. Paths currently
+  use the host namespace directly; no emulation-root or IRIX device adaptation
+  is provided. Native mode/umask and descriptor behavior are used.
+- Mmap supports positive-length private non-fixed mappings with a null address
+  hint, page-aligned nonnegative 32-bit file offsets, and basic R/W/X protection
+  bits. `/dev/zero` supplies zero-filled memory through the normal host device
+  mapping path. IRIX's `0x1000` means SGI_ANYADDR, so it is rejected and never
+  passed through as native MAP_ANON. Shared/fixed mappings, autogrow, address
+  hints, reserved-range placement policy, and other IRIX flags are not provided.
+- Munmap/mprotect require page-aligned addresses and positive signed 32-bit
+  lengths; mprotect accepts only basic R/W/X bits. Native VM operations supply
+  the actual protections, copy-on-write, bounds checks, and cleanup. This subset
+  does not implement IRIX process-sharing or PRDA semantics.
+
+These definitions follow the pre-removal `syscalls.master`, `irix_types.h`,
+`irix_exec_elf32.c`, `irix_mman.{c,h}`, `irix_fcntl.c`, and `svr4_fcntl.h` at
+`5aca2679d78276864d2980a08314887b2058fb2c`. Unsupported combinations fail explicitly;
+this is not a claim that all original IRIX errors or edge cases match.
 
 `irix_errno.h` retains the historical NetBSD definitions and license from
 revision `5aca2679d78276864d2980a08314887b2058fb2c`. The translation table uses
@@ -41,6 +75,11 @@ and CI/ordinary IRIS comparison live in the companion
 `scripts/probe-irix-experiment.py`. Build the unmodified baseline first and keep
 its kernel and tool/object paths separate from the qualified NetBSD 11.0 lab.
 
-General static ELF recognition, argument/auxv compatibility, dynamic loading,
+The argument/file/memory extension is developed on `xiri/irix-o32-basics` from
+the first qualified implementation, `6b6a7967685baff3fa1d1fb7e1e50113470fb2a6`.
+Its companion harness uses `--suite basics` and a version 2 fixture manifest.
+The original version 1/minimal suite remains available.
+
+General static ELF recognition, full auxv compatibility, dynamic loading,
 IRIX libraries, n32/n64, PRDA, process sharing, caught signals, and the original
 desktop remain separate work. No vendor IRIX files are included.
