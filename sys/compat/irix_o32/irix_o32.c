@@ -77,10 +77,14 @@
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
 #include <sys/ktrace.h>
 #include <sys/mman.h>
 #include <sys/module.h>
+#include <sys/mount.h>
 #include <sys/proc.h>
+#include <sys/resourcevar.h>
 #include <sys/signalvar.h>
 #include <sys/syscallargs.h>
 #include <sys/syscallvar.h>
@@ -114,12 +118,167 @@ struct irix_o32_syssgi_args {
 	syscallarg(uint32_t) arg3;
 };
 
+/* Linked-address, two-load ELF mapping. Unlike MAP_FIXED mmap, the exec
+ * helpers never replace existing mappings. Journal only mappings we created,
+ * including a partial data page before its file read can fail. */
+static int
+irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
+    register_t *rval)
+{
+	Elf32_Phdr ph[2];
+	struct exec_vmcmd cmds[4] = { 0 };
+	struct proc *p = l->l_proc;
+	struct vm_map *map = &p->p_vmspace->vm_map;
+	struct vattr va;
+	struct file *fp;
+	struct vnode *vp;
+	vsize_t total = 0;
+	unsigned ncmd = 0, mapped = 0;
+	int error;
+	bool single;
+
+	CTASSERT(sizeof(ph) == 64);
+	if (count != __arraycount(ph))
+		return EINVAL;
+	if ((error = copyin((const void *)(uintptr_t)headers, ph, sizeof(ph))) != 0)
+		return error;
+	if ((fp = fd_getfile(fd)) == NULL)
+		return EBADF;
+	if ((fp->f_flag & FREAD) == 0) {
+		error = EBADF;
+		goto out;
+	}
+	if (fp->f_type != DTYPE_VNODE || fp->f_vnode->v_type != VREG) {
+		error = EINVAL;
+		goto out;
+	}
+	vp = fp->f_vnode;
+	vn_lock(vp, LK_SHARED | LK_RETRY);
+	error = VOP_GETATTR(vp, &va, l->l_cred);
+	VOP_UNLOCK(vp);
+	if (error != 0)
+		goto out;
+	for (unsigned i = 0; i < __arraycount(ph); i++) {
+		const Elf32_Phdr *h = &ph[i];
+		if (h->p_type != PT_LOAD ||
+		    h->p_flags != (i == 0 ? PF_R | PF_X : PF_R | PF_W) ||
+		    h->p_memsz == 0 || h->p_memsz > 16 * 1024 * 1024 ||
+		    h->p_filesz > h->p_memsz ||
+		    (i == 0 && h->p_filesz != h->p_memsz) ||
+		    h->p_vaddr < 0x00400000 ||
+		    h->p_vaddr > 0x40000000 - h->p_memsz ||
+		    (h->p_vaddr & PAGE_MASK) != 0 ||
+		    (h->p_offset & PAGE_MASK) != 0 ||
+		    h->p_align < PAGE_SIZE || h->p_align > 1024 * 1024 ||
+		    !powerof2(h->p_align) ||
+		    h->p_vaddr % h->p_align != h->p_offset % h->p_align ||
+		    h->p_offset > INT32_MAX - h->p_filesz ||
+		    (uint64_t)h->p_offset + h->p_filesz > va.va_size) {
+			error = ENOEXEC;
+			goto out;
+		}
+		total += round_page(h->p_memsz);
+	}
+	if (ph[1].p_vaddr < round_page(ph[0].p_vaddr + ph[0].p_memsz) ||
+	    ph[1].p_vaddr + round_page(ph[1].p_memsz) - ph[0].p_vaddr >
+	    32 * 1024 * 1024 || ph[0].p_offset != 0 ||
+	    (ph[1].p_filesz != 0 && ph[1].p_offset < round_page(ph[0].p_filesz))) {
+		error = ENOEXEC;
+		goto out;
+	}
+	/* The personality cannot create LWPs or share a vmspace. Keep this
+	 * requirement explicit: rollback ownership depends on it. */
+	mutex_enter(p->p_lock);
+	single = p->p_nlwps == 1 && p->p_vmspace->vm_refcnt == 1;
+	mutex_exit(p->p_lock);
+	if (!single || (map->flags & VM_MAP_WIREFUTURE) != 0) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if ((rlim_t)map->size + total > p->p_rlimit[RLIMIT_AS].rlim_cur) {
+		error = ENOMEM;
+		goto out;
+	}
+	vn_lock(vp, LK_SHARED | LK_RETRY);
+	if ((vp->v_mount->mnt_flag & MNT_NOEXEC) != 0)
+		error = EACCES;
+	else if ((error = VOP_ACCESS(vp, VEXEC, l->l_cred)) == 0)
+		error = vn_marktext(vp);
+	/* Recheck file size after marking text prevents concurrent writers. */
+	if (error == 0)
+		error = VOP_GETATTR(vp, &va, l->l_cred);
+	VOP_UNLOCK(vp);
+	if (error != 0)
+		goto out;
+	for (unsigned i = 0; i < __arraycount(ph); i++) {
+		const Elf32_Phdr *h = &ph[i];
+		const vm_prot_t prot = i == 0 ? VM_PROT_READ | VM_PROT_EXECUTE :
+		    VM_PROT_READ | VM_PROT_WRITE;
+		const vsize_t paged = i == 0 ? round_page(h->p_filesz) :
+		    trunc_page(h->p_filesz);
+		if ((uint64_t)h->p_offset + h->p_filesz > va.va_size) {
+			error = ENOEXEC;
+			goto out;
+		}
+		if (paged != 0)
+			cmds[ncmd++] = (struct exec_vmcmd){
+			    .ev_proc = vmcmd_map_pagedvn, .ev_addr = h->p_vaddr,
+			    .ev_len = paged, .ev_offset = h->p_offset,
+			    .ev_vp = vp, .ev_prot = prot };
+		if (paged < h->p_filesz)
+			cmds[ncmd++] = (struct exec_vmcmd){
+			    .ev_proc = vmcmd_map_readvn, .ev_addr = h->p_vaddr + paged,
+			    .ev_len = h->p_filesz - paged, .ev_offset = h->p_offset + paged,
+			    .ev_vp = vp, .ev_prot = prot };
+		if (round_page(h->p_filesz) < round_page(h->p_memsz))
+			cmds[ncmd++] = (struct exec_vmcmd){
+			    .ev_proc = vmcmd_map_zero,
+			    .ev_addr = h->p_vaddr + round_page(h->p_filesz),
+			    .ev_len = round_page(h->p_memsz) - round_page(h->p_filesz),
+			    .ev_prot = prot };
+	}
+	KASSERT(ncmd <= __arraycount(cmds));
+	for (unsigned i = 0; i < ncmd; i++) {
+		struct exec_vmcmd *cmd = &cmds[i];
+		if (cmd->ev_proc == vmcmd_map_readvn) {
+			/* Only the RW tail uses readvn. Allocate zero-filled memory
+			 * first, recording ownership even if the following read fails. */
+			struct exec_vmcmd zero = *cmd;
+			zero.ev_len = round_page(zero.ev_len);
+			error = vmcmd_map_zero(l, &zero);
+			if (error != 0)
+				goto rollback;
+			mapped++;
+			error = vmcmd_readvn(l, cmd);
+		} else {
+			error = (*cmd->ev_proc)(l, cmd);
+			if (error == 0)
+				mapped++;
+		}
+		if (error != 0)
+			goto rollback;
+	}
+	*rval = ph[0].p_vaddr;
+	goto out;
+rollback:
+	while (mapped != 0) {
+		struct exec_vmcmd *cmd = &cmds[--mapped];
+		uvm_unmap(map, cmd->ev_addr, cmd->ev_addr + round_page(cmd->ev_len));
+	}
+out:
+	fd_putfile(fd);
+	return error;
+}
+
 static int
 irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_syssgi_args * const uap = args;
 
 	switch (SCARG(uap, request)) {
+	case 68: /* SGI_ELFMAP */
+		return irix_o32_elfmap(l, (int32_t)SCARG(uap, arg1),
+		    SCARG(uap, arg2), SCARG(uap, arg3), rval);
 	case 22: /* SGI_SYSCONF */
 		switch (SCARG(uap, arg1)) {
 		case 11: /* _SC_PAGESIZE */
@@ -156,7 +315,7 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 		return 0;
 	}
 	default:
-		/* Other syssgi operations, including setters and ELFMAP, remain
+		/* Other syssgi operations, including setters, remain
 		 * unsupported; a successful capability query grants no privilege. */
 		return ENOSYS;
 	}

@@ -145,13 +145,13 @@ semantics are added. Untraced execution emits no records.
 
 The initial runtime branch lets IRIX 6.5.22m asa and matching libc pass exec and
 enter libc's bootstrap, stopping at `syssgi(SGI_SYSCONF, _SC_CAP)`. The query
-extension below moves the observed boundary to `SGI_ELFMAP`. Neither result
-means asa's filter or rld has executed.
+extension moved the observed boundary to `SGI_ELFMAP`. The mapping extension
+below now enters rld; asa's filter has not executed.
 
 ## Runtime query subset
 
 Branch `xiri/irix-o32-queries` extends runtime commit
-`64915ea0900cd81e3bc2577504c709fb33051854`. Trap 1040 accepts only these operations:
+`64915ea0900cd81e3bc2577504c709fb33051854`. Its trap 1040 query subset is:
 
 - `SGI_SYSCONF` (22), `_SC_PAGESIZE` (11): returns the native page size.
 - `SGI_SYSCONF`, `_SC_CAP` (29): returns `CAP_SYS_DISABLED` (0), the IRIX-defined
@@ -165,8 +165,9 @@ Branch `xiri/irix-o32-queries` extends runtime commit
   Names are bounded to 80 bytes including NUL, matching the supplied IRIX kernel.
   Overlong names return ENAMETOOLONG; other names return ENOATTR (IRIX 1009).
 
-Other syssgi requests, including setters and ELFMAP, retain the explicit ENOSYS
-policy. Foreign credential-changing syscalls also remain unsupported. The supplied IRIX kernel instead
+Other syssgi requests, including setters, retain the explicit ENOSYS policy;
+ELFMAP is the separate bounded addition below. Foreign credential-changing
+syscalls also remain unsupported. The supplied IRIX kernel instead
 returns EINVAL for an unknown request. That difference is intentional and
 covered by the paired probe. The first four argument registers suffice for
 these implemented operations; later stack arguments are not fetched.
@@ -184,12 +185,72 @@ returns are measured by the same original static probe used on Xiri. The mode
 supported by the supplied capability header and historical NetBSD definition;
 it is not a claim to reproduce the reference's enabled capability subsystem.
 
-Unmodified asa/libc now pass these startup queries, open `/lib/rld` through
-the emulation root, read its 512-byte ELF header area, and request
-`syssgi(SGI_ELFMAP, fd, phdrs, 2)`. That operation remains unsupported. Libc
-prints `Could not map rld from file /lib/rld` and exits 239. No rld instruction
-or vendor main entry has run, and no vendor files are patched.
+At the query checkpoint, unmodified asa/libc pass the startup queries, open
+`/lib/rld` through the emulation root, read its 512-byte ELF header area, and request
+`syssgi(SGI_ELFMAP, fd, phdrs, 2)`. That checkpoint leaves the operation
+unsupported, producing libc's mapping diagnostic and exit 239. The extension
+below advances this boundary without patching vendor files.
 
-General static recognition, wider ELF layouts, runtime syscalls and rld loading,
+## Bounded SGI_ELFMAP
+
+Branch `xiri/irix-o32-elfmap` extends query commit
+`dc08d65a8e7b3e6cdbd7ca978a200b6f50a42ad5`. Request 68 accepts exactly two
+ELF32 program headers, copied once into a fixed-size kernel array. It returns
+the first linked virtual address. It does not relocate or replace existing
+mappings and does not inspect an ELF header in the file: the caller supplies
+the load descriptions, as in the original interface.
+
+The subset requires ordered PT_LOAD headers, RX text at file offset zero
+without BSS, then RW data with optional BSS. Each segment is at most 16 MiB;
+the total virtual span is at most 32 MiB within `0x00400000..0x40000000`.
+Addresses/offsets are page-aligned; ELF alignment is a power of two from one
+page through 1 MiB with congruent address/offset. File/virtual ranges cannot
+overlap, wrap, or exceed the file or signed 32-bit file-offset range. Physical
+addresses are ignored. Gaps remain unmapped. Other layouts return ENOEXEC;
+other counts return EINVAL, and invalid header pointers return EFAULT.
+
+The descriptor must be readable (otherwise EBADF) and refer to a regular
+vnode (otherwise EINVAL). Current credentials must pass VEXEC, the mount must
+allow execution, and vn_marktext must reject active writers. File size is
+rechecked after marking text. File-backed mappings use the native VOP_MMAP
+and exec VM helpers; PaX protection checks remain active. An address-space
+limit check precedes mapping. Shared vmspaces, multiple LWPs, and future-wired
+maps are explicitly unsupported; this personality has no calls creating them.
+
+Full file pages use private paged-vnode mappings. A partial RW page is first
+allocated as zero-filled memory, then read with exactly p_filesz's remaining
+bytes; nonzero bytes following p_filesz cannot enter BSS. Whole BSS pages use
+the native zero-fill helper. At most four VM commands are needed. Each fixed
+insertion refuses overlap without removing an existing entry. The rollback
+journal includes a partial page before its read can fail, and unmaps only
+ranges successfully created by this request. The single, unshared vmspace
+requirement prevents another user thread from replacing journaled mappings.
+This provides all-or-nothing completion for the supported process model, not
+a general multithreaded mapping transaction. Collisions return ENOMEM rather
+than the original system's relocation behavior.
+
+The companion tests exercise executable code, initialized bytes, partial and
+whole BSS, pure BSS, private writes and fresh contents after unmap/remap, text
+and gap faults, two rollback stages with preserved old data and a successful
+retry, descriptor kinds/access modes, non-executable files/mounts, and malformed
+bounds/alignment/counts. Original IRIX observations are pinned separately;
+its wider layout acceptance and error policy are not advertised as implemented.
+In particular, the reference accepts the tested non-executable file, read/write
+descriptor, and /dev/zero descriptor. This subset deliberately retains native
+execution/text-write checks and rejects device mappings. Its ENOEXEC/EINVAL
+results for unsupported layouts/descriptors need not match IRIX's errors.
+
+Unmodified asa's libc now maps the supplied rld at `0x0fb60000` (RX) and
+`0x0fbd8000` (RW/BSS), and transfers control into it. Rld calls the unsupported
+indirect `syscall(1056, MP_PGSIZE)` (sysmp request 14). Its unchecked -1 page
+size contaminates allocation arithmetic: after a successful initial /dev/zero
+mmap, it requests a zero-length mapping with a non-null hint, which the current
+mmap subset rejects. It prints `rld_sbrk: Can't map /dev/zero -- probably not
+enough virtual memory` and exits 1. This diagnostic does not establish host
+memory exhaustion. The next work is indirect dispatch and the real sysmp page
+size query, followed by measured mmap-hint semantics. Asa's filter and vendor
+relocations have not been qualified.
+
+General static recognition, wider ELF layouts, further runtime syscalls,
 n32/n64, PRDA, process sharing, caught signals, and the original desktop remain
 separate work. No vendor IRIX files are included.
