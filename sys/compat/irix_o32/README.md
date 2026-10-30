@@ -5,12 +5,31 @@ big-endian o32 MIPS kernels. It is intended for Xiri's synthetic static fixtures
 not as a restoration of `COMPAT_IRIX` or a claim of vendor-binary compatibility.
 
 The loader accepts ELF32/MSB MIPS III `ET_EXEC`, System V OSABI, ABI version zero,
-and flags `0x20000101`. It requires exactly two program headers immediately
-after the ELF header: one read/execute load segment at `0x00400000`, followed by
-one note. The load segment starts at file offset zero, has equal file/memory
-sizes of at most 1 MiB, and contains both the entry point and note. Alignment
-and file bounds are checked. There is no interpreter, dynamic segment, writable
-data segment, BSS, or dynamic auxiliary-vector implementation.
+and flags `0x20000101`. It requires two or three program headers immediately
+after the ELF header, in this order: read/execute text, optional read/write
+data/BSS, and one note. Text starts at `0x00400000` and file offset zero, has
+equal file/memory sizes of at most 1 MiB, and contains both the entry point and
+note. The earlier text-only layout remains accepted. There is no interpreter,
+dynamic segment, relocation, or dynamic auxiliary-vector implementation.
+
+The optional data segment has exactly R/W flags, nonzero memory size up to
+1 MiB, and file size no larger than memory size. A zero file size supplies pure
+BSS. Virtual address and file offset must be page-aligned, with congruent
+power-of-two ELF alignment from PAGE_SIZE through 1 MiB. Data must start after
+the rounded text end, and end no higher than `0x01000000`. This small synthetic
+image window is a test constraint, not general IRIX address-space policy.
+File-backed data must start after the rounded text file extent. All file
+extents are bounded by the actual file and the native signed 32-bit offset
+range before mapping; overlapping pages, wrapping ranges, and extra segment
+types are rejected.
+
+Current NetBSD ELF VM commands provide private file-backed data, zero-fill in
+the partial final file page, and whole BSS pages. The companion suite checks
+initialized bytes, BSS including a nonzero file sentinel after data, writable
+data, immutable executable files, fresh contents after repeated execs, and
+faults on text writes and unmapped pages. Its permission checks do not establish
+hardware-enforced non-executable data. Partial segment pages retain the native
+page-granularity mapping behavior.
 
 The note's exact 24 bytes encode namesz 5, descsz 4, type `0x49524958`, name
 `Xiri\0` with zero padding, and big-endian descriptor 1. This is an experimental
@@ -75,10 +94,10 @@ and CI/ordinary IRIS comparison live in the companion
 `scripts/probe-irix-experiment.py`. Build the unmodified baseline first and keep
 its kernel and tool/object paths separate from the qualified NetBSD 11.0 lab.
 
-The argument/file/memory extension is developed on `xiri/irix-o32-basics` from
-the first qualified implementation, `6b6a7967685baff3fa1d1fb7e1e50113470fb2a6`.
-Its companion harness uses `--suite basics` and a version 2 fixture manifest.
-The original version 1/minimal suite remains available.
+The data/BSS extension is developed on `xiri/irix-o32-segments` from the
+argument/file/memory implementation, `c9ab9ccc062650870e17006571c93e665e2133d9`.
+Its companion harness uses `--suite segments` and a version 3 fixture manifest.
+The earlier version 1/minimal and version 2/basics suites remain available.
 
 General static ELF recognition, full auxv compatibility, dynamic loading,
 IRIX libraries, n32/n64, PRDA, process sharing, caught signals, and the original

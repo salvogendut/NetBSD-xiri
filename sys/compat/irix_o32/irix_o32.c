@@ -385,8 +385,10 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
     char *interp, vaddr_t *pos)
 {
 	const Elf32_Ehdr * const eh = header;
-	Elf32_Phdr ph[2];
-	const Elf32_Phdr * const load = &ph[0], * const note = &ph[1];
+	Elf32_Phdr ph[3];
+	const Elf32_Phdr * const load = &ph[0];
+	const Elf32_Phdr *note;
+	size_t phsize;
 	/* namesz=5, descsz=4, type=IRIX, name=Xiri\0, version=1; big endian. */
 	static const uint8_t marker[24] = {
 		0, 0, 0, 5, 0, 0, 0, 4, 0x49, 0x52, 0x49, 0x58,
@@ -404,28 +406,52 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 	    eh->e_flags != 0x20000101 ||
 	    mips_options.mips_cpu_arch < CPU_ARCH_MIPS3 ||
 	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
-	    eh->e_phentsize != sizeof(ph[0]) || eh->e_phnum != __arraycount(ph))
+	    eh->e_phentsize != sizeof(ph[0]) ||
+	    (eh->e_phnum != 2 && eh->e_phnum != 3))
 		return ENOEXEC;
-	if ((error = exec_read(l, epp->ep_vp, eh->e_phoff, ph, sizeof(ph),
+	phsize = eh->e_phnum * sizeof(ph[0]);
+	note = &ph[eh->e_phnum - 1];
+	if ((error = exec_read(l, epp->ep_vp, eh->e_phoff, ph, phsize,
 	    IO_NODELOCKED)) != 0)
 		return error;
 
-	/* One fixed, read/execute segment and one exact note; no dynamic loader. */
+	/* Fixed RX text, optional separate RW data/BSS, and the exact note. */
 	if (load->p_type != PT_LOAD || note->p_type != PT_NOTE ||
 	    load->p_offset != 0 || load->p_vaddr != 0x00400000 ||
 	    load->p_flags != (PF_R | PF_X) ||
-	    load->p_filesz < sizeof(*eh) + sizeof(ph) ||
+	    load->p_filesz < sizeof(*eh) + phsize ||
 	    load->p_filesz != load->p_memsz || load->p_filesz > 1024 * 1024 ||
 	    load->p_filesz > epp->ep_vap->va_size ||
 	    load->p_align < PAGE_SIZE || load->p_align > 1024 * 1024 ||
 	    !powerof2(load->p_align) || (load->p_vaddr % load->p_align) != 0 ||
-	    note->p_offset < sizeof(*eh) + sizeof(ph) ||
+	    note->p_offset < sizeof(*eh) + phsize ||
 	    note->p_filesz != sizeof(marker) ||
 	    note->p_offset > load->p_filesz - sizeof(marker) ||
 	    eh->e_entry < load->p_vaddr ||
 	    eh->e_entry >= load->p_vaddr + load->p_filesz ||
 	    (eh->e_entry & 3) != 0)
 		return ENOEXEC;
+	if (eh->e_phnum == 3) {
+		const Elf32_Phdr * const data = &ph[1];
+
+		/* This static subset uses page-separated segments in a bounded
+		 * image window. Check subtraction bounds before any native mapper
+		 * arithmetic, including its signed file offset and page rounding. */
+		if (data->p_type != PT_LOAD || data->p_flags != (PF_R | PF_W) ||
+		    data->p_memsz == 0 || data->p_memsz > 1024 * 1024 ||
+		    data->p_filesz > data->p_memsz ||
+		    data->p_align < PAGE_SIZE || data->p_align > 1024 * 1024 ||
+		    !powerof2(data->p_align) ||
+		    (data->p_vaddr & PAGE_MASK) != 0 ||
+		    (data->p_offset & PAGE_MASK) != 0 ||
+		    data->p_vaddr % data->p_align != data->p_offset % data->p_align ||
+		    data->p_vaddr < round_page(load->p_vaddr + load->p_memsz) ||
+		    data->p_vaddr > 0x01000000 - data->p_memsz ||
+		    data->p_offset > INT32_MAX - data->p_filesz ||
+		    (uint64_t)data->p_offset + data->p_filesz > epp->ep_vap->va_size ||
+		    (data->p_filesz != 0 && data->p_offset < round_page(load->p_filesz)))
+			return ENOEXEC;
+	}
 	if ((error = exec_read(l, epp->ep_vp, note->p_offset, actual,
 	    sizeof(actual), IO_NODELOCKED)) != 0)
 		return error;
