@@ -67,10 +67,12 @@
  */
 
 /*
- * Experimental o32 personality, not general IRIX support. Xiri-marked static
+ * Experimental o32/n32 personality, not general IRIX support. Xiri-marked static
  * fixtures and a bounded vendor interpreter path have separate ELF contracts.
  * File and private mapping support remains deliberately small.
  */
+/* exec_elf32_makecmds supplies a 32-bit elf_args object even on LP64. */
+#define ELFSIZE 32
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -96,12 +98,87 @@
 #include <mips/userret.h>
 #include <compat/irix_o32/irix_errno.h>
 
-#if !defined(__mips_o32) || BYTE_ORDER != BIG_ENDIAN
-#error COMPAT_IRIX_O32 currently requires a big-endian o32 kernel
+#if (!defined(__mips_o32) && !defined(_LP64)) || BYTE_ORDER != BIG_ENDIAN
+#error COMPAT_IRIX_O32 requires a big-endian o32 or LP64 kernel
+#endif
+#ifdef _LP64
+#include <compat/netbsd32/netbsd32.h>
+#include <compat/netbsd32/netbsd32_exec.h>
+#define IRIX_MAXUSER_ADDRESS VM_MAXUSER_ADDRESS32
+#else
+#define IRIX_MAXUSER_ADDRESS VM_MAXUSER_ADDRESS
 #endif
 
 static int compat_irix_o32_modcmd(modcmd_t, void *);
+#ifdef _LP64
+MODULE(MODULE_CLASS_EXEC, compat_irix_o32, "exec_elf32,compat_netbsd32");
+#else
 MODULE(MODULE_CLASS_EXEC, compat_irix_o32, "exec_elf32");
+#endif
+
+/* Both supported foreign ABIs have signed 32-bit pointers. Never interpret
+ * a user register slot as a native pointer or size_t on an LP64 kernel. */
+static void *
+irix_pointer(uint32_t value)
+{
+
+	return (void *)(intptr_t)(int32_t)value;
+}
+
+struct irix_o32_io_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) buf;
+	syscallarg(uint32_t) nbyte;
+};
+
+static int
+irix_o32_read(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_o32_io_args *uap = args;
+	struct sys_read_args native = { 0 };
+
+	SCARG(&native, fd) = SCARG(uap, fd);
+	SCARG(&native, buf) = irix_pointer(SCARG(uap, buf));
+	SCARG(&native, nbyte) = SCARG(uap, nbyte);
+	return sys_read(l, &native, rval);
+}
+
+static int
+irix_o32_write(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_o32_io_args *uap = args;
+	struct sys_write_args native = { 0 };
+
+	SCARG(&native, fd) = SCARG(uap, fd);
+	SCARG(&native, buf) = irix_pointer(SCARG(uap, buf));
+	SCARG(&native, nbyte) = SCARG(uap, nbyte);
+	return sys_write(l, &native, rval);
+}
+
+struct irix_o32_break_args {
+	syscallarg(uint32_t) nsize;
+};
+
+static int
+irix_o32_break(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_o32_break_args *uap = args;
+	struct sys_obreak_args native = { 0 };
+	const vaddr_t end = SCARG(uap, nsize);
+	int error;
+
+	/* Bound page rounding and prevent vm_dsize underflow on a request
+	 * below the data segment. Native obreak enforces RLIMIT_DATA and
+	 * refuses to replace an existing mapping while growing the heap. */
+	if (end < (vaddr_t)l->l_proc->p_vmspace->vm_daddr ||
+	    end > IRIX_MAXUSER_ADDRESS - PAGE_MASK)
+		return ENOMEM;
+	SCARG(&native, nsize) = irix_pointer(end);
+	error = sys_obreak(l, &native, rval);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
 
 static int
 irix_o32_nosys(struct lwp *l, const void *args, register_t *rval)
@@ -140,7 +217,7 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 	CTASSERT(sizeof(ph) == 64);
 	if (count != __arraycount(ph))
 		return EINVAL;
-	if ((error = copyin((const void *)(uintptr_t)headers, ph, sizeof(ph))) != 0)
+	if ((error = copyin(irix_pointer(headers), ph, sizeof(ph))) != 0)
 		return error;
 	if ((fp = fd_getfile(fd)) == NULL)
 		return EBADF;
@@ -302,13 +379,13 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 		CTASSERT(sizeof(caps) == 24);
 		if (SCARG(uap, arg1) == 0 || SCARG(uap, arg2) == 0)
 			return EINVAL;
-		error = copyinstr((const void *)(uintptr_t)SCARG(uap, arg1),
+		error = copyinstr(irix_pointer(SCARG(uap, arg1)),
 		    name, sizeof(name), NULL);
 		if (error != 0)
 			return error;
 		if (strcmp(name, "SGI_CAP_PROCESS") != 0)
 			return ENOATTR;
-		error = copyout(caps, (void *)(uintptr_t)SCARG(uap, arg2), sizeof(caps));
+		error = copyout(caps, irix_pointer(SCARG(uap, arg2)), sizeof(caps));
 		if (error != 0)
 			return error;
 		*rval = 0;
@@ -321,12 +398,18 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 	}
 }
 
+struct irix_o32_open_args {
+	syscallarg(uint32_t) path;
+	syscallarg(int32_t) flags;
+	syscallarg(uint32_t) mode;
+};
+
 /* IRIX uses the historical SVR4 open flag assignments for this subset. */
 static int
 irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 {
-	const struct sys_open_args * const uap = args;
-	struct sys_open_args native = *uap;
+	const struct irix_o32_open_args * const uap = args;
+	struct sys_open_args native = { 0 };
 	const uint32_t flags = SCARG(uap, flags);
 	const uint32_t supported = 3 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400;
 	int converted;
@@ -345,11 +428,13 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	if (flags & 0x400)
 		converted |= O_EXCL;
 	SCARG(&native, flags) = converted;
+	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
+	SCARG(&native, mode) = SCARG(uap, mode);
 	return sys_open(l, &native, rval);
 }
 
 struct irix_o32_mmap_args {
-	syscallarg(void *) addr;
+	syscallarg(uint32_t) addr;
 	syscallarg(uint32_t) len;
 	syscallarg(int32_t) prot;
 	syscallarg(int32_t) flags;
@@ -364,14 +449,14 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	struct sys_mmap_args native = { 0 };
 
 	/* Private non-fixed mappings only. In IRIX, 0x1000 is NOT MAP_ANON. */
-	if ((vaddr_t)SCARG(uap, addr) >= VM_MAXUSER_ADDRESS ||
+	if (SCARG(uap, addr) >= IRIX_MAXUSER_ADDRESS ||
 	    SCARG(uap, len) == 0 ||
 	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
 	    SCARG(uap, flags) != 0x2 || SCARG(uap, pos) < 0 ||
 	    (SCARG(uap, pos) & PAGE_MASK) != 0)
 		return EINVAL;
 	/* Native non-fixed hints may fall back but never replace mappings. */
-	SCARG(&native, addr) = SCARG(uap, addr);
+	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
 	SCARG(&native, len) = SCARG(uap, len);
 	SCARG(&native, prot) = SCARG(uap, prot);
 	SCARG(&native, flags) = MAP_PRIVATE;
@@ -380,27 +465,45 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	return sys_mmap(l, &native, rval);
 }
 
+struct irix_o32_munmap_args {
+	syscallarg(uint32_t) addr;
+	syscallarg(int32_t) len;
+};
+
 static int
 irix_o32_munmap(struct lwp *l, const void *args, register_t *rval)
 {
-	const struct sys_munmap_args * const uap = args;
+	const struct irix_o32_munmap_args * const uap = args;
+	struct sys_munmap_args native = { 0 };
 
 	if ((int32_t)SCARG(uap, len) <= 0 ||
 	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0)
 		return EINVAL;
-	return sys_munmap(l, uap, rval);
+	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
+	SCARG(&native, len) = SCARG(uap, len);
+	return sys_munmap(l, &native, rval);
 }
+
+struct irix_o32_mprotect_args {
+	syscallarg(uint32_t) addr;
+	syscallarg(int32_t) len;
+	syscallarg(int32_t) prot;
+};
 
 static int
 irix_o32_mprotect(struct lwp *l, const void *args, register_t *rval)
 {
-	const struct sys_mprotect_args * const uap = args;
+	const struct irix_o32_mprotect_args * const uap = args;
+	struct sys_mprotect_args native = { 0 };
 
 	if ((int32_t)SCARG(uap, len) <= 0 ||
 	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0 ||
 	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
 		return EINVAL;
-	return sys_mprotect(l, uap, rval);
+	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
+	SCARG(&native, len) = SCARG(uap, len);
+	SCARG(&native, prot) = SCARG(uap, prot);
+	return sys_mprotect(l, &native, rval);
 }
 
 struct irix_o32_sysmp_args {
@@ -433,19 +536,19 @@ static struct sysent irix_o32_sysent[] = {
 	[2] = { .sy_call = irix_o32_nosys },
 	[3] = {
 		.sy_narg = 3,
-		.sy_argsize = sizeof(struct sys_read_args),
+		.sy_argsize = sizeof(struct irix_o32_io_args),
 		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
-		.sy_call = (sy_call_t *)sys_read,
+		.sy_call = irix_o32_read,
 	},
 	[4] = {
 		.sy_narg = 3,
-		.sy_argsize = sizeof(struct sys_write_args),
+		.sy_argsize = sizeof(struct irix_o32_io_args),
 		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
-		.sy_call = (sy_call_t *)sys_write,
+		.sy_call = irix_o32_write,
 	},
 	[5] = {
 		.sy_narg = 3,
-		.sy_argsize = sizeof(struct sys_open_args),
+		.sy_argsize = sizeof(struct irix_o32_open_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_open,
 	},
@@ -453,6 +556,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct sys_close_args),
 		.sy_call = (sy_call_t *)sys_close,
+	},
+	[17] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_o32_break_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_o32_break,
 	},
 	[24] = { .sy_call = (sy_call_t *)sys_getuid_with_euid },
 	[40] = {
@@ -475,13 +584,13 @@ static struct sysent irix_o32_sysent[] = {
 	},
 	[135] = {
 		.sy_narg = 2,
-		.sy_argsize = sizeof(struct sys_munmap_args),
+		.sy_argsize = sizeof(struct irix_o32_munmap_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_munmap,
 	},
 	[136] = {
 		.sy_narg = 3,
-		.sy_argsize = sizeof(struct sys_mprotect_args),
+		.sy_argsize = sizeof(struct irix_o32_mprotect_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_mprotect,
 	},
@@ -490,7 +599,7 @@ static struct sysent irix_o32_sysent[] = {
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
-	[5] = "open", [6] = "close", [24] = "getuid", [40] = "syssgi",
+	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect",
 };
@@ -508,14 +617,14 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	const uint32_t number = (uint32_t)saved_v0;
 	const bool indirect = number == 1000;
 	const uint32_t selected = indirect ? reg->r_regs[_R_A0] : number;
-	const size_t nregs = indirect ? 3 : 4;
+	const bool n32 = p->p_md.md_abi == _MIPS_BSD_API_N32;
+	const size_t nregs = (n32 ? 8 : 4) - indirect;
 	const size_t firstreg = indirect ? _R_A1 : _R_A0;
 	register_t args[6] = { 0 };
 	int code, error;
 
-	CTASSERT(sizeof(register_t) == 4);
 	CTASSERT(sizeof(struct irix_o32_mmap_args) == sizeof(args));
-	KASSERT(p->p_md.md_abi == _MIPS_BSD_API_O32);
+	KASSERT(n32 || p->p_md.md_abi == _MIPS_BSD_API_O32);
 	/* Preserve the actual trap number, including unsupported calls which
 	 * use table slot zero. Only emit records when explicitly traced. */
 	if (KTRPOINT(p, KTR_USER)) {
@@ -540,6 +649,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1017: code = 17; break;
 	case 1024: code = 24; break;
 	case 1040: code = 40; break;
 	case 1047: code = 47; break;
@@ -552,25 +662,33 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	const size_t nargs = irix_o32_sysent[code].sy_narg;
 	KASSERT(nargs <= __arraycount(args));
 	for (size_t i = 0; i < MIN(nargs, nregs); i++)
-		args[i] = reg->r_regs[firstreg + i];
+		args[i] = (int32_t)reg->r_regs[firstreg + i];
 	if (nargs > nregs) {
 		const uint32_t usp = reg->r_regs[_R_SP];
-		const size_t bytes = (nargs - nregs) * sizeof(args[0]);
+		int32_t spill[3];
+		const size_t bytes = (nargs - nregs) * sizeof(spill[0]);
+		/* This allowlist has only 32-bit arguments, at most six slots.
+		 * n32 never spills; wider syscalls need separate marshalling. */
+		KASSERT(!n32 && bytes <= sizeof(spill));
 		/* Both forms spill after the four o32 argument home slots. */
 		if (usp > UINT32_MAX - 16 - (bytes - 1)) {
 			error = EFAULT;
 			goto done;
 		}
-		error = copyin((const void *)(uintptr_t)(usp + 16), args + nregs,
-		    bytes);
+		error = copyin(irix_pointer(usp + 16), spill, bytes);
 		if (error != 0)
 			goto done;
+		for (size_t i = nregs; i < nargs; i++)
+			args[i] = spill[i - nregs];
 	}
 	error = sy_invoke(&irix_o32_sysent[code], l, args,
 	    &reg->r_regs[_R_V0], code);
 done:
 	switch (error) {
 	case 0:
+		/* Every implemented foreign return is a 32-bit value. */
+		reg->r_regs[_R_V0] = (int32_t)reg->r_regs[_R_V0];
+		reg->r_regs[_R_V1] = (int32_t)reg->r_regs[_R_V1];
 		reg->r_regs[_R_A3] = 0;
 		break;
 	case ERESTART:
@@ -604,7 +722,9 @@ irix_o32_setregs(struct lwp *l, struct exec_package *epp, vaddr_t stack)
 {
 
 	/* Commit ABI state only after executable selection has succeeded. */
-	l->l_proc->p_md.md_abi = _MIPS_BSD_API_O32;
+	const Elf32_Ehdr *eh = epp->ep_hdr;
+	l->l_proc->p_md.md_abi = (eh->e_flags & EF_MIPS_ABI2) ?
+	    _MIPS_BSD_API_N32 : _MIPS_BSD_API_O32;
 	setregs(l, epp, stack);
 }
 
@@ -628,7 +748,11 @@ static struct emul emul_irix_o32 = {
 	.e_trapsignal = trapsignal,
 	.e_setregs = irix_o32_setregs,
 	.e_syscall_intern = irix_o32_syscall_intern,
+#ifdef _LP64
+	.e_vm_default_addr = netbsd32_vm_default_addr,
+#else
 	.e_vm_default_addr = uvm_default_mapaddr,
+#endif
 };
 
 static int
@@ -646,6 +770,8 @@ irix_o32_copyargs(struct lwp *l, struct exec_package *pack,
 
 	/* IRIX's six dynamic entries, or just AT_NULL for the static fixtures.
 	 * Use current copyargs/ps_strings and emul-argument ownership rules. */
+	CTASSERT(sizeof(struct elf_args) == 5 * sizeof(Elf32_Addr));
+	CTASSERT(sizeof(Aux32Info) == 8);
 	if (ap != NULL) {
 		aux[count++] = (Aux32Info){ AT_PHDR, ap->arg_phaddr };
 		aux[count++] = (Aux32Info){ AT_PHENT, ap->arg_phentsize };
@@ -659,7 +785,12 @@ irix_o32_copyargs(struct lwp *l, struct exec_package *pack,
 	local_exec.es_arglen = roundup(vectors_end + size, 16) - vectors_end;
 	KASSERT(local_exec.es_arglen <= pack->ep_esch->es_arglen);
 	local_pack.ep_esch = &local_exec;
-	if ((error = copyargs(l, &local_pack, arginfo, stackp, argp)) != 0)
+#ifdef _LP64
+	error = netbsd32_copyargs(l, &local_pack, arginfo, stackp, argp);
+#else
+	error = copyargs(l, &local_pack, arginfo, stackp, argp);
+#endif
+	if (error != 0)
 		return error;
 	if ((error = copyout(aux, *stackp, size)) != 0)
 		return error;
@@ -676,10 +807,16 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 {
 	Elf32_Phdr ph[16];
 	unsigned nload = 0, ninterp = 0, ndynamic = 0, nphdr = 0;
-	const uint32_t flags = interpreter ? 3 : 5;
+	const bool n32 = (eh->e_flags & EF_MIPS_ABI2) != 0;
+	const uint32_t flags = n32 ? (interpreter ? 0x22 : 0x24) :
+	    (interpreter ? 3 : 5);
 	size_t phsize;
 	int error;
 
+#ifndef _LP64
+	if (n32)
+		return ENOEXEC;
+#endif
 	if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
 	    eh->e_ident[EI_CLASS] != ELFCLASS32 ||
 	    eh->e_ident[EI_DATA] != ELFDATA2MSB ||
@@ -688,7 +825,7 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    eh->e_ident[EI_ABIVERSION] != 0 || eh->e_version != EV_CURRENT ||
 	    eh->e_machine != EM_MIPS ||
 	    eh->e_type != (interpreter ? ET_DYN : ET_EXEC) ||
-	    (eh->e_flags != (EF_MIPS_ARCH_2 | flags) &&
+	    ((n32 || eh->e_flags != (EF_MIPS_ARCH_2 | flags)) &&
 	     eh->e_flags != (EF_MIPS_ARCH_3 | flags)) ||
 	    mips_options.mips_cpu_arch < CPU_ARCH_MIPS3 ||
 	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
@@ -786,8 +923,11 @@ irix_o32_runtime_probe(struct lwp *l, struct exec_package *epp,
 	struct vnode *vp;
 	int error;
 
-	if (strcmp(interp, "/lib/libc.so.1") != 0 &&
-	    strcmp(interp, "/usr/lib/libc.so.1") != 0)
+	if ((eh->e_flags & EF_MIPS_ABI2) ?
+	    (strcmp(interp, "/lib32/libc.so.1") != 0 &&
+	     strcmp(interp, "/usr/lib32/libc.so.1") != 0) :
+	    (strcmp(interp, "/lib/libc.so.1") != 0 &&
+	     strcmp(interp, "/usr/lib/libc.so.1") != 0))
 		return ENOEXEC;
 	if ((error = irix_o32_runtime_image(l, epp->ep_vp,
 	    epp->ep_vap->va_size, eh, false, main_loads)) != 0)
@@ -809,6 +949,8 @@ irix_o32_runtime_probe(struct lwp *l, struct exec_package *epp,
 	VOP_UNLOCK(vp);
 	if (error != 0)
 		return error;
+	if (((eh->e_flags ^ ieh.e_flags) & EF_MIPS_ABI2) != 0)
+		return ENOEXEC;
 	/* The native interpreter mapper reserves gaps as well as segments. */
 	const vaddr_t lo = interp_loads[0].p_vaddr;
 	const vaddr_t hi = round_page(interp_loads[1].p_vaddr + interp_loads[1].p_memsz);
@@ -823,7 +965,7 @@ irix_o32_runtime_probe(struct lwp *l, struct exec_package *epp,
 }
 
 static int
-irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
+irix_o32_probe_image(struct lwp *l, struct exec_package *epp, void *header,
     char *interp, vaddr_t *pos)
 {
 	const Elf32_Ehdr * const eh = header;
@@ -848,7 +990,11 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 	    eh->e_ident[EI_OSABI] != ELFOSABI_SYSV ||
 	    eh->e_ident[EI_ABIVERSION] != 0 || eh->e_version != EV_CURRENT ||
 	    eh->e_machine != EM_MIPS || eh->e_type != ET_EXEC || interp != NULL ||
-	    eh->e_flags != 0x20000101 ||
+	    (eh->e_flags != 0x20000101
+#ifdef _LP64
+	     && eh->e_flags != 0x20000021
+#endif
+	    ) ||
 	    mips_options.mips_cpu_arch < CPU_ARCH_MIPS3 ||
 	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
 	    eh->e_phentsize != sizeof(ph[0]) ||
@@ -902,6 +1048,23 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 		return error;
 	if (memcmp(actual, marker, sizeof(marker)) != 0)
 		return ENOEXEC;
+	return 0;
+}
+
+static int
+irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
+    char *interp, vaddr_t *pos)
+{
+	int error = irix_o32_probe_image(l, epp, header, interp, pos);
+
+	if (error != 0)
+		return error;
+#ifdef _LP64
+	/* Only package state here; setregs commits the selected process ABI. */
+	epp->ep_flags |= EXEC_32;
+	epp->ep_vm_minaddr = exec_vm_minaddr(VM_MIN_ADDRESS);
+	epp->ep_vm_maxaddr = USRSTACK32;
+#endif
 	return 0;
 }
 

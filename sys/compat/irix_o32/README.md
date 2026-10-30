@@ -1,12 +1,12 @@
-# Experimental Xiri o32 personality
+# Experimental Xiri o32/n32 personality
 
 `options COMPAT_IRIX_O32` builds a deliberately narrow, opt-in personality on
-big-endian o32 MIPS kernels. It supports Xiri's synthetic static fixtures and a
+big-endian o32 and LP64 MIPS kernels. It supports Xiri's synthetic static fixtures and a
 bounded dynamic interpreter experiment, not restored `COMPAT_IRIX` or general
 vendor-application compatibility.
 
 The static probe accepts ELF32/MSB MIPS III `ET_EXEC`, System V OSABI, ABI version zero,
-and flags `0x20000101`. It requires two or three program headers immediately
+and flags `0x20000101` (o32), or `0x20000021` (n32 on LP64). It requires two or three program headers immediately
 after the ELF header, in this order: read/execute text, optional read/write
 data/BSS, and one note. Text starts at `0x00400000` and file offset zero, has
 equal file/memory sizes of at most 1 MiB, and contains both the entry point and
@@ -36,10 +36,10 @@ The note's exact 24 bytes encode namesz 5, descsz 4, type `0x49524958`, name
 `Xiri\0` with zero padding, and big-endian descriptor 1. This is an experimental
 opt-in convention, not historical IRIX branding. Native ELF selection retains
 its existing priority; the foreign probe does not change process ABI state.
-The o32 ABI is committed in `setregs` after selection succeeds.
+The selected o32/n32 ABI is committed in `setregs` after selection succeeds.
 
 Direct IRIX trap numbers 1001 (`exit`), 1003 (`read`), 1004 (`write`), 1005
-(`open`), 1006 (`close`), 1024 (`getuid`/`geteuid`), 1047 (`getgid`/`getegid`),
+(`open`), 1006 (`close`), 1017 (`break`), 1024 (`getuid`/`geteuid`), 1047 (`getgid`/`getegid`),
 1056 (`sysmp`, MP_PGSIZE only), 1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
 are implemented using current native operations and `sy_invoke`. Trap 1040
 implements the bounded `syssgi` queries below. Trap 1000 dispatches one level of
@@ -286,5 +286,46 @@ regression version 4 updates the two former indirect/hint rejection cases;
 earlier fixture contracts remain separately reproducible.
 
 General static recognition, wider ELF layouts, further runtime syscalls,
-n32/n64, PRDA, process sharing, caught signals, and the original desktop remain
+n64, PRDA, process sharing, caught signals, and the original desktop remain
 separate work. No vendor IRIX files are included.
+
+
+## LP64 and n32 extension
+
+Branch `xiri/irix-lp64` builds on the separately qualified LP64 firmware bridge
+and native ABI baseline. The historical option and emulation name remain
+`COMPAT_IRIX_O32` and `irix_o32`; the implementation now selects o32 or n32
+per accepted ELF image. LP64 also requires the native `compat_netbsd32` module.
+The existing 32-bit kernel route remains available.
+
+All implemented foreign argument types are explicitly 32-bit. Pointers are
+sign-extended from 32 bits, sizes are widened as unsigned values, and file
+offsets retain the supported signed 32-bit form. o32 stack spills are copied
+as 32-bit words before expansion into native register slots. n32 takes up to
+eight arguments from registers, or seven after the indirect selector. No
+current call needs a spilled n32 argument. Full-width saved registers survive
+traps, and current 32-bit returns are sign-extended. This does not implement
+IRIX calls with 64-bit arguments or returns.
+
+LP64 uses netbsd32 address placement and argument copying, 32-bit argc/argv/
+envp/auxv, and the native ABI-specific register/FPR setup. `ELFSIZE=32` is
+explicit: exec_elf32 supplies a 20-byte elf_args even to an LP64 personality.
+Compile-time assertions guard that layout and the eight-byte auxiliary pair.
+Without that definition, native-width fields corrupt the dynamic auxiliary
+vector. Original synthetic interpreters check every auxiliary entry, stack
+layout, initialized data, and BSS before entering the main program.
+
+Dynamic n32 recognition requires MIPS III, flags 0x20000024 for the executable
+and 0x20000022 for libc, and `/lib32/libc.so.1` or `/usr/lib32/libc.so.1`.
+Executable/interpreter ABIs must match. The bounded two-load linked-address
+policy is otherwise shared with o32. Every load must meet the running kernel's
+page alignment; the qualified LP64 kernel uses 8192-byte pages. Four-KiB-only
+layouts are rejected. This is not a general IRIX 4-KiB page emulation layer.
+
+`break` (1017) uses native obreak with an explicit 32-bit user bound and a
+lower bound at vm_daddr, preventing page-rounding overflow and vm_dsize
+underflow. Native RLIMIT_DATA, collision checks, zero-filled private memory,
+and page-granular shrinking apply. Successful returns are explicitly zero.
+No IRIX executable-heap or shared-process semantics are promised. The Xiri
+companion lab adds original growth/shrink, zero-fill, inaccessible released
+page, collision and invalid-range fixtures for both ABIs and call forms.
