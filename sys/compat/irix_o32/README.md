@@ -39,9 +39,11 @@ its existing priority; the foreign probe does not change process ABI state.
 The o32 ABI is committed in `setregs` after selection succeeds.
 
 Direct IRIX trap numbers 1001 (`exit`), 1003 (`read`), 1004 (`write`), 1005
-(`open`), 1006 (`close`), 1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
-are implemented using current native operations and `sy_invoke`. Other numbers,
-including indirect forms, select a dedicated handler that returns IRIX
+(`open`), 1006 (`close`), 1024 (`getuid`/`geteuid`), 1047 (`getgid`/`getegid`),
+1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
+are implemented using current native operations and `sy_invoke`. Trap 1040
+implements the bounded `syssgi` queries below. Other numbers, including indirect
+forms, select a dedicated handler that returns IRIX
 `ENOSYS=89` without posting `SIGSYS`. This is an explicit experiment policy.
 The dispatcher never indexes a table with an unchecked user-supplied number.
 It handles branch-delay return, kernel restart, and the normal `userret` path.
@@ -141,10 +143,52 @@ first four argument registers in `irix_o32` user records. This preserves the
 number of unsupported calls routed through table slot zero; no new syscall
 semantics are added. Untraced execution emits no records.
 
-The supplied IRIX 6.5.22m asa and matching libc now pass exec and enter libc's
-bootstrap. They stop at unsupported trap 1040, `syssgi(SGI_SYSCONF, _SC_CAP)`,
-printing a diagnostic and exiting 239. This is interpreter execution, not
-successful execution of asa's filter. The corresponding rld has not executed.
+The initial runtime branch lets IRIX 6.5.22m asa and matching libc pass exec and
+enter libc's bootstrap, stopping at `syssgi(SGI_SYSCONF, _SC_CAP)`. The query
+extension below moves the observed boundary to `SGI_ELFMAP`. Neither result
+means asa's filter or rld has executed.
+
+## Runtime query subset
+
+Branch `xiri/irix-o32-queries` extends runtime commit
+`64915ea0900cd81e3bc2577504c709fb33051854`. Trap 1040 accepts only these operations:
+
+- `SGI_SYSCONF` (22), `_SC_PAGESIZE` (11): returns the native page size.
+- `SGI_SYSCONF`, `_SC_CAP` (29): returns `CAP_SYS_DISABLED` (0), the IRIX-defined
+  traditional superuser model. No IRIX capability enforcement is implemented;
+  every operation retains current NetBSD credentials and authorization checks.
+  Other sysconf names return EINVAL, rather than invented values.
+- `SGI_PROC_ATTR_GET` (85), `SGI_CAP_PROCESS`: copies three zero 64-bit masks,
+  exactly 24 bytes, describing effective/permitted/inheritable IRIX capability
+  sets. It grants no privileges. Null name or output pointers return EINVAL;
+  non-null bad pointers use checked copyinstr/copyout and return EFAULT.
+  Names are bounded to 80 bytes including NUL, matching the supplied IRIX kernel.
+  Overlong names return ENAMETOOLONG; other names return ENOATTR (IRIX 1009).
+
+Other syssgi requests, including setters and ELFMAP, retain the explicit ENOSYS
+policy. Foreign credential-changing syscalls also remain unsupported. The supplied IRIX kernel instead
+returns EINVAL for an unknown request. That difference is intentional and
+covered by the paired probe. The first four argument registers suffice for
+these implemented operations; later stack arguments are not fetched.
+
+Trap 1024 returns native real uid in v0 and effective uid in v1; 1047 does the
+same for gids. The native `sys_getuid_with_euid`/`sys_getgid_with_egid` operations
+provide both values. The companion native parent tests ordinary and differing
+real/effective credentials without adding foreign identity-changing syscalls.
+
+Original IRIX 6.5.22m reports capability mode 1 on the supplied installation,
+but zero process capability masks for both root and uid/gid 60001. Its query
+layout, guarded copyout, errno values, name-length boundary, and identity
+returns are measured by the same original static probe used on Xiri. The mode
+0 advertisement on Xiri is a deliberate description of its smaller model,
+supported by the supplied capability header and historical NetBSD definition;
+it is not a claim to reproduce the reference's enabled capability subsystem.
+
+Unmodified asa/libc now pass these startup queries, open `/lib/rld` through
+the emulation root, read its 512-byte ELF header area, and request
+`syssgi(SGI_ELFMAP, fd, phdrs, 2)`. That operation remains unsupported. Libc
+prints `Could not map rld from file /lib/rld` and exits 239. No rld instruction
+or vendor main entry has run, and no vendor files are patched.
 
 General static recognition, wider ELF layouts, runtime syscalls and rld loading,
 n32/n64, PRDA, process sharing, caught signals, and the original desktop remain

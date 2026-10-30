@@ -107,6 +107,61 @@ irix_o32_nosys(struct lwp *l, const void *args, register_t *rval)
 	return ENOSYS;
 }
 
+struct irix_o32_syssgi_args {
+	syscallarg(int32_t) request;
+	syscallarg(uint32_t) arg1;
+	syscallarg(uint32_t) arg2;
+	syscallarg(uint32_t) arg3;
+};
+
+static int
+irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_o32_syssgi_args * const uap = args;
+
+	switch (SCARG(uap, request)) {
+	case 22: /* SGI_SYSCONF */
+		switch (SCARG(uap, arg1)) {
+		case 11: /* _SC_PAGESIZE */
+			*rval = PAGE_SIZE;
+			return 0;
+		case 29: /* _SC_CAP: CAP_SYS_DISABLED, traditional uid permissions */
+			*rval = 0;
+			return 0;
+		default:
+			return EINVAL;
+		}
+	case 85: { /* SGI_PROC_ATTR_GET */
+		/* IRIX 6.5.22m proc_attr_get bounds copyinstr to 80 bytes. */
+		char name[80];
+		/* Effective, permitted, inheritable 64-bit IRIX capability masks.
+		 * This personality has no IRIX capabilities. NetBSD credentials
+		 * and authorization still govern every native operation. */
+		const uint64_t caps[3] = { 0, 0, 0 };
+		int error;
+
+		CTASSERT(sizeof(caps) == 24);
+		if (SCARG(uap, arg1) == 0 || SCARG(uap, arg2) == 0)
+			return EINVAL;
+		error = copyinstr((const void *)(uintptr_t)SCARG(uap, arg1),
+		    name, sizeof(name), NULL);
+		if (error != 0)
+			return error;
+		if (strcmp(name, "SGI_CAP_PROCESS") != 0)
+			return ENOATTR;
+		error = copyout(caps, (void *)(uintptr_t)SCARG(uap, arg2), sizeof(caps));
+		if (error != 0)
+			return error;
+		*rval = 0;
+		return 0;
+	}
+	default:
+		/* Other syssgi operations, including setters and ELFMAP, remain
+		 * unsupported; a successful capability query grants no privilege. */
+		return ENOSYS;
+	}
+}
+
 /* IRIX uses the historical SVR4 open flag assignments for this subset. */
 static int
 irix_o32_open(struct lwp *l, const void *args, register_t *rval)
@@ -218,6 +273,14 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_close_args),
 		.sy_call = (sy_call_t *)sys_close,
 	},
+	[24] = { .sy_call = (sy_call_t *)sys_getuid_with_euid },
+	[40] = {
+		.sy_narg = 4,
+		.sy_argsize = sizeof(struct irix_o32_syssgi_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_o32_syssgi,
+	},
+	[47] = { .sy_call = (sy_call_t *)sys_getgid_with_egid },
 	[134] = {
 		.sy_narg = 6,
 		.sy_argsize = sizeof(struct irix_o32_mmap_args),
@@ -241,7 +304,8 @@ static struct sysent irix_o32_sysent[] = {
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
-	[5] = "open", [6] = "close", [134] = "mmap", [135] = "munmap",
+	[5] = "open", [6] = "close", [24] = "getuid", [40] = "syssgi",
+	[47] = "getgid", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect",
 };
 
@@ -284,6 +348,9 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1024: code = 24; break;
+	case 1040: code = 40; break;
+	case 1047: code = 47; break;
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
