@@ -53,6 +53,97 @@ RCSID("$NetBSD: arcbios_calls.S,v 1.7 2026/05/03 23:06:13 adrian Exp $")
 #define	CALLFRAME2_SP	(CALLFRAME_SP + 16)
 
 #ifndef _STANDALONE
+
+#if defined(sgimips) && defined(_LP64)
+/*
+ * IP2x ARCS is o32 firmware, even when the kernel is n64.  In particular,
+ * addiu sp,sp,... in the PROM discards an XKPHYS stack address's upper
+ * word.  Use the KSEG0 alias of low cached RAM for firmware arguments and
+ * the call frame.  This covers IP2x RAM below the 512 MiB direct-map limit;
+ * it is not a bounce-buffer interface for arbitrary 64-bit pointers.
+ *
+ * The PROM also need only preserve the low halves of o32 saved registers.
+ * Keep all n64 callee-saved GPRs, curlwp and the original sp in the frame.
+ * Bytes 0..31 are reserved for the firmware's o32 argument area.
+ */
+	.macro	ARC32_ALIAS reg
+	dli	t1, 0x9800000000000000
+	xor	t1, \reg, t1
+	dsrl	t2, t1, 29
+	bnez	t2, 9f
+	 nop
+	lui	t2, 0x8000
+	or	\reg, t1, t2
+9:
+	.endm
+
+#define ARC32_FRAME 144
+NESTED(arcbios_4orless_args, ARC32_FRAME, ra)
+XNESTED(arcbios_5to8_args)
+	PTR_SUBU sp, ARC32_FRAME
+	REG_S	s0, 32(sp)
+	REG_S	s1, 40(sp)
+	REG_S	s2, 48(sp)
+	REG_S	s3, 56(sp)
+	REG_S	s4, 64(sp)
+	REG_S	s5, 72(sp)
+	REG_S	s6, 80(sp)
+	REG_S	s7, 88(sp)
+	REG_S	s8, 96(sp)
+	REG_S	gp, 104(sp)
+	REG_S	MIPS_CURLWP, 112(sp)
+	PTR_ADDU t1, sp, ARC32_FRAME
+	REG_S	t1, 120(sp)
+	REG_S	ra, 128(sp)
+	mfc0	k0, MIPS_COP_0_STATUS
+	MFC0_HAZARD
+	REG_S	k0, 136(sp)
+	/* The firmware uses paired FPRs; keep interrupts off across the call. */
+	and	k0, ~(MIPS_SR_INT_IE | MIPS3_SR_FR)
+	or	k0, MIPS_SR_COP_1_BIT
+	mtc0	k0, MIPS_COP_0_STATUS
+	COP0_HAZARD_FPUENABLE
+
+	ARC32_ALIAS sp
+	ARC32_ALIAS a0
+	ARC32_ALIAS a1
+	ARC32_ALIAS a2
+	ARC32_ALIAS a3
+	ARC32_ALIAS a4
+	ARC32_ALIAS a5
+	ARC32_ALIAS a6
+	ARC32_ALIAS a7
+	INT_S	a4, 16(sp)
+	INT_S	a5, 20(sp)
+	INT_S	a6, 24(sp)
+	INT_S	a7, 28(sp)
+	PTR_L	t9, _C_LABEL(ARCBIOS)
+	PTR_ADDU t9, t0
+	INT_L	t9, 0(t9)
+	jalr	t9
+	 nop
+	FIX_V0
+
+	REG_L	s0, 32(sp)
+	REG_L	s1, 40(sp)
+	REG_L	s2, 48(sp)
+	REG_L	s3, 56(sp)
+	REG_L	s4, 64(sp)
+	REG_L	s5, 72(sp)
+	REG_L	s6, 80(sp)
+	REG_L	s7, 88(sp)
+	REG_L	s8, 96(sp)
+	REG_L	gp, 104(sp)
+	REG_L	MIPS_CURLWP, 112(sp)
+	REG_L	ra, 128(sp)
+	REG_L	k0, 136(sp)
+	REG_L	sp, 120(sp)
+	mtc0	k0, MIPS_COP_0_STATUS
+	COP0_SYNC
+	jr	ra
+	 nop
+END(arcbios_4orless_args)
+#else
 NESTED(arcbios_4orless_args, CALLFRAME_SIZ, ra)
 	PTR_SUBU sp, CALLFRAME_SIZ
 
@@ -146,6 +237,7 @@ NESTED(arcbios_5to8_args, CALLFRAME2_SIZ, ra)
 	jr	ra
 	 PTR_ADDU sp, CALLFRAME2_SIZ
 END(arcbios_5to8_args)
+#endif /* sgimips && _LP64 */
 #endif /* !_STANDALONE */
 
 #define AFVDIRECT(name)						\
@@ -176,6 +268,11 @@ NESTED(__CONCAT(arcbios_,name), 0, ra);				\
 	b	arcbios_5to8_args;				\
 	 li	t0, __CONCAT(AFV_,name);			\
 END(__CONCAT(arcbios_,name))
+#endif
+
+#if defined(sgimips) && defined(_LP64) && !defined(_STANDALONE)
+#undef AFVDIRECT
+#define AFVDIRECT(name) AFV4ORLESS(name)
 #endif
 
 /*
