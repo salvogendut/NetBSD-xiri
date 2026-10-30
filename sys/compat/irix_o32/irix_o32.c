@@ -88,10 +88,15 @@
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/timevar.h>
 #include <sys/syscallargs.h>
 #include <sys/syscallvar.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <uvm/uvm_extern.h>
 #include <mips/locore.h>
 #include <mips/regnum.h>
@@ -358,6 +363,9 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 		    SCARG(uap, arg2), SCARG(uap, arg3), rval);
 	case 22: /* SGI_SYSCONF */
 		switch (SCARG(uap, arg1)) {
+		case 3: /* _SC_CLK_TCK: IRIX sginap units, not native hz */
+			*rval = 100;
+			return 0;
 		case 11: /* _SC_PAGESIZE */
 			*rval = PAGE_SIZE;
 			return 0;
@@ -526,6 +534,139 @@ irix_o32_sysmp(struct lwp *l, const void *args, register_t *rval)
 	return 0;
 }
 
+/* Initial client TCP subset. Foreign constants must never reach a native
+ * socket call unchecked: IRIX SOCK_STREAM is 2, native SOCK_STREAM is 1. */
+struct irix_socket_args {
+	syscallarg(int32_t) domain;
+	syscallarg(int32_t) type;
+	syscallarg(int32_t) protocol;
+};
+
+static int
+irix_socket(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_socket_args *uap = args;
+	struct sys___socket30_args native = { 0 };
+
+	if (SCARG(uap, domain) != 2)
+		return EAFNOSUPPORT;
+	if (SCARG(uap, type) != 2)
+		return SCARG(uap, type) == 1 ? ESOCKTNOSUPPORT : EPROTONOSUPPORT;
+	if (SCARG(uap, protocol) != 0 && SCARG(uap, protocol) != 6)
+		return EPROTOTYPE;
+	SCARG(&native, domain) = AF_INET;
+	SCARG(&native, type) = SOCK_STREAM;
+	SCARG(&native, protocol) = IPPROTO_TCP;
+	return sys___socket30(l, &native, rval);
+}
+
+struct irix_connect_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) addr;
+	syscallarg(int32_t) len;
+};
+
+static int
+irix_connect(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_connect_args *uap = args;
+	struct {
+		uint16_t family, port;
+		uint32_t address;
+		uint8_t zero[8];
+	} foreign;
+	struct sockaddr_in native = { 0 };
+	int error;
+
+	CTASSERT(sizeof(foreign) == 16);
+	/* No allocation or native access using a foreign length. This subset
+	 * accepts only the complete, fixed-size IPv4 address. */
+	if (SCARG(uap, len) != sizeof(foreign))
+		return EINVAL;
+	error = copyin(irix_pointer(SCARG(uap, addr)), &foreign, sizeof(foreign));
+	if (error != 0)
+		return error;
+	if (foreign.family != 2)
+		return EAFNOSUPPORT;
+	native.sin_len = sizeof(native);
+	native.sin_family = AF_INET;
+	/* Port and address are already in network byte order. */
+	native.sin_port = foreign.port;
+	native.sin_addr.s_addr = foreign.address;
+	error = do_sys_connect(l, SCARG(uap, fd), (struct sockaddr *)&native);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+struct irix_setsockopt_args {
+	syscallarg(int32_t) fd;
+	syscallarg(int32_t) level;
+	syscallarg(int32_t) name;
+	syscallarg(uint32_t) value;
+	syscallarg(int32_t) len;
+};
+
+static int
+irix_setsockopt(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_setsockopt_args *uap = args;
+	struct sys_setsockopt_args native = { 0 };
+	int error;
+
+	if (SCARG(uap, len) != sizeof(int32_t))
+		return EINVAL;
+	if (SCARG(uap, level) == 6 && SCARG(uap, name) == 1) {
+		SCARG(&native, level) = IPPROTO_TCP;
+		SCARG(&native, name) = TCP_NODELAY;
+	} else if (SCARG(uap, level) == 0xffff && SCARG(uap, name) == 8) {
+		SCARG(&native, level) = SOL_SOCKET;
+		SCARG(&native, name) = SO_KEEPALIVE;
+	} else {
+		return EINVAL;
+	}
+	/* Both qualified options contain one big-endian signed 32-bit int.
+	 * The native routine copies it once, while holding the fd reference. */
+	SCARG(&native, s) = SCARG(uap, fd);
+	SCARG(&native, val) = irix_pointer(SCARG(uap, value));
+	SCARG(&native, valsize) = sizeof(int32_t);
+	error = sys_setsockopt(l, &native, rval);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+struct irix_sginap_args {
+	syscallarg(int32_t) ticks;
+};
+
+static int
+irix_sginap(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_sginap_args *uap = args;
+	const int32_t ticks = SCARG(uap, ticks);
+	struct timespec request, remaining = { 0 };
+	int error;
+
+	if (ticks < 0)
+		return EINVAL;
+	*rval = 0;
+	if (ticks == 0)
+		return sys_sched_yield(l, NULL, rval);
+	/* IRIX CLK_TCK is 100, independently of the native kernel's hz.
+	 * Divide before multiplying so every positive int32_t is safe. */
+	request.tv_sec = ticks / 100;
+	request.tv_nsec = (ticks % 100) * 10000000;
+	error = nanosleep1(l, CLOCK_MONOTONIC, 0, &request, &remaining);
+	if (error == EINTR) {
+		int64_t left = (int64_t)remaining.tv_sec * 100 +
+		    (remaining.tv_nsec + 9999999) / 10000000;
+		*rval = MIN(left, ticks);
+		return 0;
+	}
+	return error;
+}
+
 static struct sysent irix_o32_sysent[] = {
 	[0] = { .sy_call = irix_o32_nosys },
 	[1] = {
@@ -576,6 +717,28 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_o32_sysmp_args),
 		.sy_call = irix_o32_sysmp,
 	},
+	[82] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_sginap_args),
+		.sy_call = irix_sginap,
+	},
+	[91] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_connect_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_connect,
+	},
+	[105] = {
+		.sy_narg = 5,
+		.sy_argsize = sizeof(struct irix_setsockopt_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_setsockopt,
+	},
+	[107] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_socket_args),
+		.sy_call = irix_socket,
+	},
 	[134] = {
 		.sy_narg = 6,
 		.sy_argsize = sizeof(struct irix_o32_mmap_args),
@@ -601,7 +764,8 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
-	[136] = "mprotect",
+	[136] = "mprotect", [82] = "sginap", [91] = "connect",
+	[105] = "setsockopt", [107] = "socket",
 };
 
 /* Symbolic native indices avoid importing the obsolete positional table. */
@@ -654,6 +818,10 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1040: code = 40; break;
 	case 1047: code = 47; break;
 	case 1056: code = 56; break;
+	case 1082: code = 82; break;
+	case 1091: code = 91; break;
+	case 1105: code = 105; break;
+	case 1107: code = 107; break;
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
@@ -704,6 +872,14 @@ done:
 		    irix_o32_errno[error] != 0 ? irix_o32_errno[error] : IRIX_EIO;
 		reg->r_regs[_R_A3] = 1;
 		break;
+	}
+	if (KTRPOINT(p, KTR_USER)) {
+		char record[100];
+		int len = snprintf(record, sizeof(record),
+		    "syscall=%u v0=%#x a3=%u", selected,
+		    (uint32_t)reg->r_regs[_R_V0],
+		    (uint32_t)reg->r_regs[_R_A3]);
+		ktr_kuser("irix_ret", record, len);
 	}
 	KASSERT(l->l_blcnt == 0);
 	KASSERT(curcpu()->ci_biglock_count == 0);
