@@ -364,12 +364,14 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	struct sys_mmap_args native = { 0 };
 
 	/* Private non-fixed mappings only. In IRIX, 0x1000 is NOT MAP_ANON. */
-	if (SCARG(uap, addr) != NULL || SCARG(uap, len) == 0 ||
+	if ((vaddr_t)SCARG(uap, addr) >= VM_MAXUSER_ADDRESS ||
+	    SCARG(uap, len) == 0 ||
 	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
 	    SCARG(uap, flags) != 0x2 || SCARG(uap, pos) < 0 ||
 	    (SCARG(uap, pos) & PAGE_MASK) != 0)
 		return EINVAL;
-	SCARG(&native, addr) = NULL;
+	/* Native non-fixed hints may fall back but never replace mappings. */
+	SCARG(&native, addr) = SCARG(uap, addr);
 	SCARG(&native, len) = SCARG(uap, len);
 	SCARG(&native, prot) = SCARG(uap, prot);
 	SCARG(&native, flags) = MAP_PRIVATE;
@@ -399,6 +401,26 @@ irix_o32_mprotect(struct lwp *l, const void *args, register_t *rval)
 	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
 		return EINVAL;
 	return sys_mprotect(l, uap, rval);
+}
+
+struct irix_o32_sysmp_args {
+	syscallarg(int32_t) command;
+	syscallarg(uint32_t) arg1;
+	syscallarg(uint32_t) arg2;
+	syscallarg(uint32_t) arg3;
+	syscallarg(uint32_t) arg4;
+};
+
+static int
+irix_o32_sysmp(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_o32_sysmp_args * const uap = args;
+
+	/* Marshal the full o32 ABI, but only implement the MP_PGSIZE query. */
+	if (SCARG(uap, command) != 14)
+		return ENOSYS;
+	*rval = PAGE_SIZE;
+	return 0;
 }
 
 static struct sysent irix_o32_sysent[] = {
@@ -440,6 +462,11 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_call = irix_o32_syssgi,
 	},
 	[47] = { .sy_call = (sy_call_t *)sys_getgid_with_egid },
+	[56] = {
+		.sy_narg = 5,
+		.sy_argsize = sizeof(struct irix_o32_sysmp_args),
+		.sy_call = irix_o32_sysmp,
+	},
 	[134] = {
 		.sy_narg = 6,
 		.sy_argsize = sizeof(struct irix_o32_mmap_args),
@@ -464,7 +491,7 @@ static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [24] = "getuid", [40] = "syssgi",
-	[47] = "getgid", [134] = "mmap", [135] = "munmap",
+	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect",
 };
 
@@ -479,6 +506,10 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	struct reg * const reg = &tf->tf_registers;
 	const mips_reg_t saved_v0 = reg->r_regs[_R_V0];
 	const uint32_t number = (uint32_t)saved_v0;
+	const bool indirect = number == 1000;
+	const uint32_t selected = indirect ? reg->r_regs[_R_A0] : number;
+	const size_t nregs = indirect ? 3 : 4;
+	const size_t firstreg = indirect ? _R_A1 : _R_A0;
 	register_t args[6] = { 0 };
 	int code, error;
 
@@ -501,7 +532,9 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	    mips_emul_branch(tf, pc, 0, false) : pc + sizeof(uint32_t);
 
 	/* Never subtract or use an unchecked user value as an array index. */
-	switch (number) {
+	/* One level of syscall(number, ...); nested/unknown selectors use
+	 * slot zero, consume no arguments, and never read the user stack. */
+	switch (selected) {
 	case 1001: code = 1; break;
 	case 1003: code = 3; break;
 	case 1004: code = 4; break;
@@ -510,6 +543,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1024: code = 24; break;
 	case 1040: code = 40; break;
 	case 1047: code = 47; break;
+	case 1056: code = 56; break;
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
@@ -517,16 +551,18 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	}
 	const size_t nargs = irix_o32_sysent[code].sy_narg;
 	KASSERT(nargs <= __arraycount(args));
-	for (size_t i = 0; i < MIN(nargs, 4); i++)
-		args[i] = reg->r_regs[_R_A0 + i];
-	if (nargs > 4) {
+	for (size_t i = 0; i < MIN(nargs, nregs); i++)
+		args[i] = reg->r_regs[firstreg + i];
+	if (nargs > nregs) {
 		const uint32_t usp = reg->r_regs[_R_SP];
-		if (usp > UINT32_MAX - 16) {
+		const size_t bytes = (nargs - nregs) * sizeof(args[0]);
+		/* Both forms spill after the four o32 argument home slots. */
+		if (usp > UINT32_MAX - 16 - (bytes - 1)) {
 			error = EFAULT;
 			goto done;
 		}
-		error = copyin((const void *)(uintptr_t)(usp + 16), args + 4,
-		    (nargs - 4) * sizeof(args[0]));
+		error = copyin((const void *)(uintptr_t)(usp + 16), args + nregs,
+		    bytes);
 		if (error != 0)
 			goto done;
 	}

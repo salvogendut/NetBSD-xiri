@@ -40,16 +40,20 @@ The o32 ABI is committed in `setregs` after selection succeeds.
 
 Direct IRIX trap numbers 1001 (`exit`), 1003 (`read`), 1004 (`write`), 1005
 (`open`), 1006 (`close`), 1024 (`getuid`/`geteuid`), 1047 (`getgid`/`getegid`),
-1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
+1056 (`sysmp`, MP_PGSIZE only), 1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
 are implemented using current native operations and `sy_invoke`. Trap 1040
-implements the bounded `syssgi` queries below. Other numbers, including indirect
-forms, select a dedicated handler that returns IRIX
+implements the bounded `syssgi` queries below. Trap 1000 dispatches one level of
+`syscall(number, ...)` through the same checked allowlist. Other numbers and
+nested indirect forms select a dedicated handler that returns IRIX
 `ENOSYS=89` without posting `SIGSYS`. This is an explicit experiment policy.
 The dispatcher never indexes a table with an unchecked user-supplied number.
 It handles branch-delay return, kernel restart, and the normal `userret` path.
 
-The six-word o32 mmap call takes its descriptor and signed 32-bit offset from
-`sp+16` and `sp+20`. The dispatcher checks address addition before `copyin` and
+The six-word direct o32 mmap call takes its descriptor and signed 32-bit offset
+from `sp+16` and `sp+20`. An indirect call uses a0 for the selector, a1..a3 for
+the first three arguments, and `sp+16` onward for the remaining arguments.
+Indirect mmap therefore obtains flags/fd/offset at sp+16/20/24. The dispatcher
+checks the entire spill range for arithmetic overflow before `copyin` and
 translates failures to foreign `EFAULT`. The wrapper expands the offset into
 native `off_t` and initializes the native argument padding.
 
@@ -66,12 +70,14 @@ native `off_t` and initializes the native argument padding.
   emulation-root lookup uses `/emul/irix`, with its normal native-path fallback.
   This is not a chroot. No IRIX device adaptation is provided. Native mode/umask
   and descriptor behavior are used.
-- Mmap supports positive-length private non-fixed mappings with a null address
-  hint, page-aligned nonnegative 32-bit file offsets, and basic R/W/X protection
+- Mmap supports positive-length private non-fixed mappings with address
+  hints below VM_MAXUSER_ADDRESS, page-aligned nonnegative 32-bit file offsets, and basic R/W/X protection
   bits. `/dev/zero` supplies zero-filled memory through the normal host device
   mapping path. IRIX's `0x1000` means SGI_ANYADDR, so it is rejected and never
-  passed through as native MAP_ANON. Shared/fixed mappings, autogrow, address
-  hints, reserved-range placement policy, and other IRIX flags are not provided.
+  passed through as native MAP_ANON. Native non-fixed placement can round,
+  clamp, or fall back from a hint; it never replaces occupied mappings.
+  Shared/fixed mappings, autogrow, IRIX reserved-range placement policy, and
+  other IRIX flags are not provided.
 - Munmap/mprotect require page-aligned addresses and positive signed 32-bit
   lengths; mprotect accepts only basic R/W/X bits. Native VM operations supply
   the actual protections, copy-on-write, bounds checks, and cleanup. This subset
@@ -146,7 +152,7 @@ semantics are added. Untraced execution emits no records.
 The initial runtime branch lets IRIX 6.5.22m asa and matching libc pass exec and
 enter libc's bootstrap, stopping at `syssgi(SGI_SYSCONF, _SC_CAP)`. The query
 extension moved the observed boundary to `SGI_ELFMAP`. The mapping extension
-below now enters rld; asa's filter has not executed.
+below enters rld. The dispatch extension subsequently runs asa's filter.
 
 ## Runtime query subset
 
@@ -240,16 +246,44 @@ descriptor, and /dev/zero descriptor. This subset deliberately retains native
 execution/text-write checks and rejects device mappings. Its ENOEXEC/EINVAL
 results for unsupported layouts/descriptors need not match IRIX's errors.
 
-Unmodified asa's libc now maps the supplied rld at `0x0fb60000` (RX) and
-`0x0fbd8000` (RW/BSS), and transfers control into it. Rld calls the unsupported
+At the mapping checkpoint, unmodified asa's libc maps the supplied rld at
+`0x0fb60000` (RX) and `0x0fbd8000` (RW/BSS), and transfers control into it.
+Rld calls the then-unsupported
 indirect `syscall(1056, MP_PGSIZE)` (sysmp request 14). Its unchecked -1 page
 size contaminates allocation arithmetic: after a successful initial /dev/zero
 mmap, it requests a zero-length mapping with a non-null hint, which the current
 mmap subset rejects. It prints `rld_sbrk: Can't map /dev/zero -- probably not
 enough virtual memory` and exits 1. This diagnostic does not establish host
-memory exhaustion. The next work is indirect dispatch and the real sysmp page
-size query, followed by measured mmap-hint semantics. Asa's filter and vendor
-relocations have not been qualified.
+memory exhaustion. The extension below resolves that measured boundary.
+
+## Indirect calls and asa execution
+
+Branch `xiri/irix-o32-dispatch` extends mapping commit
+`755afd768ae96bfde4a52705f1afe0fe1889d068`. Indirect selectors use the same
+explicit switch as direct traps, without unchecked subtraction or indexing.
+Unsupported selectors consume no arguments and never read the stack. Known
+calls copy only the implemented argument words; saved trap number, original
+argument registers, restart PC, and branch-delay handling remain intact.
+This does not add `__syscall`, recursive dispatch, or 64-bit argument forms.
+
+`sysmp(MP_PGSIZE)` (1056, command 14) returns PAGE_SIZE. The dispatcher marshals
+its five o32 argument words, including checked stack spills, matching the
+reference's bad-stack EFAULT. Only the command is interpreted; other commands
+return ENOSYS. Native non-fixed mmap now accepts the supplied user-space hint
+while preserving all previous flag, length, protection and offset checks.
+
+With unchanged IRIX 6.5.22m asa/libc/rld, the page-size query now returns 4096
+and rld maps 0x6000 bytes of /dev/zero using hint 0x0fbda000. Startup reaches
+the filter, which reads stdin, writes the expected output and exits zero as
+root and as an ordinary native user. No vendor file is patched. Optional
+syssgi RXEV_GET/USE_FP_BCOPY/TOSSTSAVE, terminal ioctl and prctl calls remain
+unsupported; the tested non-terminal filter path tolerates those errors.
+This qualifies that application path, not general dynamic linking or terminal
+semantics. The companion suite retains all mapping/query/static regressions,
+adds paired direct/indirect probes and asa carriage-control inputs, and checks
+ordinary/effective credentials through indirect identity calls. Static
+regression version 4 updates the two former indirect/hint rejection cases;
+earlier fixture contracts remain separately reproducible.
 
 General static recognition, wider ELF layouts, further runtime syscalls,
 n32/n64, PRDA, process sharing, caught signals, and the original desktop remain
