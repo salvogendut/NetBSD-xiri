@@ -67,9 +67,9 @@
  */
 
 /*
- * Experimental Xiri-marked static o32 personality, not general IRIX support.
- * Static argument, file, and private mapping support. The ELF note and
- * constrained image layout are an explicit test contract, not IRIX branding.
+ * Experimental o32 personality, not general IRIX support. Xiri-marked static
+ * fixtures and a bounded vendor interpreter path have separate ELF contracts.
+ * File and private mapping support remains deliberately small.
  */
 #include <sys/cdefs.h>
 #include <sys/param.h>
@@ -77,6 +77,7 @@
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
 #include <sys/fcntl.h>
+#include <sys/ktrace.h>
 #include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/proc.h>
@@ -261,6 +262,17 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	CTASSERT(sizeof(register_t) == 4);
 	CTASSERT(sizeof(struct irix_o32_mmap_args) == sizeof(args));
 	KASSERT(p->p_md.md_abi == _MIPS_BSD_API_O32);
+	/* Preserve the actual trap number, including unsupported calls which
+	 * use table slot zero. Only emit records when explicitly traced. */
+	if (KTRPOINT(p, KTR_USER)) {
+		char record[160];
+		int len = snprintf(record, sizeof(record),
+		    "syscall=%u pc=%#x a0=%#x a1=%#x a2=%#x a3=%#x",
+		    number, (uint32_t)pc, (uint32_t)reg->r_regs[_R_A0],
+		    (uint32_t)reg->r_regs[_R_A1], (uint32_t)reg->r_regs[_R_A2],
+		    (uint32_t)reg->r_regs[_R_A3]);
+		ktr_kuser("irix_o32", record, len);
+	}
 	curcpu()->ci_data.cpu_nsyscall++;
 	reg->r_regs[_R_PC] = (cause & MIPS_CR_BR_DELAY) ?
 	    mips_emul_branch(tf, pc, 0, false) : pc + sizeof(uint32_t);
@@ -344,6 +356,7 @@ irix_o32_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 
 static struct emul emul_irix_o32 = {
 	.e_name = "irix_o32",
+	.e_path = "/emul/irix",
 	.e_nosys = 0,
 	.e_nsysent = __arraycount(irix_o32_sysent),
 	.e_sysent = irix_o32_sysent,
@@ -364,19 +377,186 @@ irix_o32_copyargs(struct lwp *l, struct exec_package *pack,
 	struct execsw local_exec = *pack->ep_esch;
 	const uintptr_t vectors_end = (uintptr_t)*stackp +
 	    (arginfo->ps_nargvstr + arginfo->ps_nenvstr + 3) * sizeof(uint32_t);
-	const Aux32Info terminator = { .a_type = AT_NULL, .a_v = 0 };
+	Aux32Info aux[7];
+	struct elf_args * const ap = pack->ep_emul_arg;
+	size_t count = 0;
 	int error;
 
-	/* Keep current copying/ps_strings logic; reserve only static AT_NULL and
-	 * align the first argument string as the historical IRIX loader did. */
-	local_exec.es_arglen = roundup(vectors_end + sizeof(terminator), 16) - vectors_end;
+	/* IRIX's six dynamic entries, or just AT_NULL for the static fixtures.
+	 * Use current copyargs/ps_strings and emul-argument ownership rules. */
+	if (ap != NULL) {
+		aux[count++] = (Aux32Info){ AT_PHDR, ap->arg_phaddr };
+		aux[count++] = (Aux32Info){ AT_PHENT, ap->arg_phentsize };
+		aux[count++] = (Aux32Info){ AT_PHNUM, ap->arg_phnum };
+		aux[count++] = (Aux32Info){ AT_ENTRY, ap->arg_entry };
+		aux[count++] = (Aux32Info){ AT_BASE, ap->arg_interp };
+		aux[count++] = (Aux32Info){ AT_PAGESZ, PAGE_SIZE };
+	}
+	aux[count++] = (Aux32Info){ AT_NULL, 0 };
+	const size_t size = count * sizeof(aux[0]);
+	local_exec.es_arglen = roundup(vectors_end + size, 16) - vectors_end;
 	KASSERT(local_exec.es_arglen <= pack->ep_esch->es_arglen);
 	local_pack.ep_esch = &local_exec;
 	if ((error = copyargs(l, &local_pack, arginfo, stackp, argp)) != 0)
 		return error;
-	if ((error = copyout(&terminator, *stackp, sizeof(terminator))) != 0)
+	if ((error = copyout(aux, *stackp, size)) != 0)
 		return error;
-	*stackp += sizeof(terminator);
+	*stackp += size;
+	exec_free_emul_arg(pack);
+	return 0;
+}
+
+/* Validate the bounded vendor layout before the native ELF mapper sees it.
+ * This is a separate contract from the unchanged Xiri static-note probe. */
+static int
+irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
+    const Elf32_Ehdr *eh, bool interpreter, Elf32_Phdr loads[2])
+{
+	Elf32_Phdr ph[16];
+	unsigned nload = 0, ninterp = 0, ndynamic = 0, nphdr = 0;
+	const uint32_t flags = interpreter ? 3 : 5;
+	size_t phsize;
+	int error;
+
+	if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
+	    eh->e_ident[EI_CLASS] != ELFCLASS32 ||
+	    eh->e_ident[EI_DATA] != ELFDATA2MSB ||
+	    eh->e_ident[EI_VERSION] != EV_CURRENT ||
+	    eh->e_ident[EI_OSABI] != ELFOSABI_SYSV ||
+	    eh->e_ident[EI_ABIVERSION] != 0 || eh->e_version != EV_CURRENT ||
+	    eh->e_machine != EM_MIPS ||
+	    eh->e_type != (interpreter ? ET_DYN : ET_EXEC) ||
+	    (eh->e_flags != (EF_MIPS_ARCH_2 | flags) &&
+	     eh->e_flags != (EF_MIPS_ARCH_3 | flags)) ||
+	    mips_options.mips_cpu_arch < CPU_ARCH_MIPS3 ||
+	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
+	    eh->e_phentsize != sizeof(ph[0]) ||
+	    eh->e_phnum == 0 || eh->e_phnum > __arraycount(ph))
+		return ENOEXEC;
+	phsize = eh->e_phnum * sizeof(ph[0]);
+	if (filesize < 0 || sizeof(*eh) + phsize > (uint64_t)filesize)
+		return ENOEXEC;
+	if ((error = exec_read(l, vp, eh->e_phoff, ph, phsize,
+	    IO_NODELOCKED)) != 0)
+		return error;
+	for (unsigned i = 0; i < eh->e_phnum; i++) {
+		const Elf32_Phdr *p = &ph[i];
+
+		if ((uint64_t)p->p_offset + p->p_filesz > (uint64_t)filesize)
+			return ENOEXEC;
+		switch (p->p_type) {
+		case PT_LOAD:
+			if (nload == 2 ||
+			    p->p_flags != (nload == 0 ? PF_R | PF_X : PF_R | PF_W) ||
+			    p->p_memsz == 0 || p->p_memsz > 16 * 1024 * 1024 ||
+			    p->p_filesz > p->p_memsz ||
+			    p->p_vaddr < 0x00400000 ||
+			    p->p_vaddr > 0x40000000 - p->p_memsz ||
+			    p->p_offset > INT32_MAX - p->p_filesz ||
+			    (p->p_vaddr & PAGE_MASK) != 0 ||
+			    (p->p_offset & PAGE_MASK) != 0 ||
+			    p->p_align < PAGE_SIZE || p->p_align > 1024 * 1024 ||
+			    !powerof2(p->p_align) ||
+			    p->p_vaddr % p->p_align != p->p_offset % p->p_align)
+				return ENOEXEC;
+			loads[nload++] = *p;
+			break;
+		case PT_INTERP:
+			if (interpreter || ++ninterp != 1)
+				return ENOEXEC;
+			break;
+		case PT_DYNAMIC:
+			if (++ndynamic != 1 || p->p_filesz == 0)
+				return ENOEXEC;
+			break;
+		case PT_PHDR:
+			if (++nphdr != 1 || p->p_offset != eh->e_phoff ||
+			    p->p_filesz != phsize || p->p_memsz != phsize)
+				return ENOEXEC;
+			break;
+		case 0x70000000: /* PT_MIPS_REGINFO */
+		case 0x70000001: /* PT_MIPS_RTPROC: may be outside mapped segments */
+		case 0x70000002: /* PT_MIPS_OPTIONS */
+			break;
+		default:
+			return ENOEXEC;
+		}
+	}
+	if (nload != 2 || ndynamic != 1 || ninterp != (interpreter ? 0 : 1) ||
+	    loads[0].p_offset != 0 || loads[0].p_filesz < sizeof(*eh) + phsize ||
+	    loads[0].p_memsz != loads[0].p_filesz ||
+	    loads[1].p_vaddr < round_page(loads[0].p_vaddr + loads[0].p_memsz) ||
+	    (loads[1].p_filesz != 0 &&
+	     loads[1].p_offset < round_page(loads[0].p_filesz)) ||
+	    eh->e_entry < loads[0].p_vaddr ||
+	    eh->e_entry >= loads[0].p_vaddr + loads[0].p_filesz ||
+	    (eh->e_entry & 3) != 0)
+		return ENOEXEC;
+	/* Metadata passed to userland must point into file-backed image bytes. */
+	for (unsigned i = 0; i < eh->e_phnum; i++) {
+		const Elf32_Phdr *p = &ph[i];
+		bool contained = false;
+
+		if (p->p_type != PT_PHDR && p->p_type != PT_INTERP &&
+		    p->p_type != PT_DYNAMIC)
+			continue;
+		for (unsigned j = 0; j < 2; j++) {
+			if (p->p_offset >= loads[j].p_offset &&
+			    (uint64_t)p->p_offset + p->p_filesz <=
+			    (uint64_t)loads[j].p_offset + loads[j].p_filesz &&
+			    (uint64_t)p->p_vaddr == (uint64_t)loads[j].p_vaddr +
+			    p->p_offset - loads[j].p_offset)
+				contained = true;
+		}
+		if (!contained)
+			return ENOEXEC;
+	}
+	return 0;
+}
+
+static int
+irix_o32_runtime_probe(struct lwp *l, struct exec_package *epp,
+    const Elf32_Ehdr *eh, char *interp, vaddr_t *pos)
+{
+	Elf32_Phdr main_loads[2], interp_loads[2];
+	Elf32_Ehdr ieh;
+	struct vattr va;
+	struct vnode *vp;
+	int error;
+
+	if (strcmp(interp, "/lib/libc.so.1") != 0 &&
+	    strcmp(interp, "/usr/lib/libc.so.1") != 0)
+		return ENOEXEC;
+	if ((error = irix_o32_runtime_image(l, epp->ep_vp,
+	    epp->ep_vap->va_size, eh, false, main_loads)) != 0)
+		return error;
+	if ((error = emul_find_interp(l, epp, interp)) != 0)
+		return error;
+	vp = epp->ep_interp;
+	/* Do not recursively lock an executable used as its own interpreter. */
+	if (vp == epp->ep_vp)
+		return ENOEXEC;
+	vn_lock(vp, LK_SHARED | LK_RETRY);
+	if (vp->v_type != VREG)
+		error = EACCES;
+	else if ((error = vn_marktext(vp)) == 0 &&
+	    (error = VOP_GETATTR(vp, &va, l->l_cred)) == 0 &&
+	    (error = exec_read(l, vp, 0, &ieh, sizeof(ieh), IO_NODELOCKED)) == 0)
+		error = irix_o32_runtime_image(l, vp, va.va_size, &ieh,
+		    true, interp_loads);
+	VOP_UNLOCK(vp);
+	if (error != 0)
+		return error;
+	/* The native interpreter mapper reserves gaps as well as segments. */
+	const vaddr_t lo = interp_loads[0].p_vaddr;
+	const vaddr_t hi = round_page(interp_loads[1].p_vaddr + interp_loads[1].p_memsz);
+	for (unsigned i = 0; i < 2; i++) {
+		if (main_loads[i].p_vaddr < hi &&
+		    round_page(main_loads[i].p_vaddr + main_loads[i].p_memsz) > lo)
+			return ENOEXEC;
+	}
+	/* IRIX libc's bootstrap GOT is already linked at this address. */
+	*pos = ELF32_LINK_ADDR;
 	return 0;
 }
 
@@ -396,6 +576,9 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 	};
 	uint8_t actual[sizeof(marker)];
 	int error;
+
+	if (interp != NULL)
+		return irix_o32_runtime_probe(l, epp, eh, interp, pos);
 
 	if (eh->e_ident[EI_CLASS] != ELFCLASS32 ||
 	    eh->e_ident[EI_DATA] != ELFDATA2MSB ||
@@ -467,7 +650,7 @@ static struct execsw irix_o32_execsw[] = {
 		.u = { .elf_probe_func = irix_o32_probe },
 		.es_emul = &emul_irix_o32,
 		.es_prio = EXECSW_PRIO_ANY,
-		.es_arglen = sizeof(Aux32Info) + 15,
+		.es_arglen = 7 * sizeof(Aux32Info) + 15,
 		.es_copyargs = irix_o32_copyargs,
 		.es_coredump = coredump_elf32,
 		.es_setup_stack = exec_setup_stack,

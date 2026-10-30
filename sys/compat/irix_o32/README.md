@@ -1,23 +1,24 @@
 # Experimental Xiri o32 personality
 
 `options COMPAT_IRIX_O32` builds a deliberately narrow, opt-in personality on
-big-endian o32 MIPS kernels. It is intended for Xiri's synthetic static fixtures,
-not as a restoration of `COMPAT_IRIX` or a claim of vendor-binary compatibility.
+big-endian o32 MIPS kernels. It supports Xiri's synthetic static fixtures and a
+bounded dynamic interpreter experiment, not restored `COMPAT_IRIX` or general
+vendor-application compatibility.
 
-The loader accepts ELF32/MSB MIPS III `ET_EXEC`, System V OSABI, ABI version zero,
+The static probe accepts ELF32/MSB MIPS III `ET_EXEC`, System V OSABI, ABI version zero,
 and flags `0x20000101`. It requires two or three program headers immediately
 after the ELF header, in this order: read/execute text, optional read/write
 data/BSS, and one note. Text starts at `0x00400000` and file offset zero, has
 equal file/memory sizes of at most 1 MiB, and contains both the entry point and
-note. The earlier text-only layout remains accepted. There is no interpreter,
-dynamic segment, relocation, or dynamic auxiliary-vector implementation.
+note. The earlier text-only layout remains accepted. This static path has no
+interpreter, dynamic segment, or relocation.
 
 The optional data segment has exactly R/W flags, nonzero memory size up to
 1 MiB, and file size no larger than memory size. A zero file size supplies pure
 BSS. Virtual address and file offset must be page-aligned, with congruent
 power-of-two ELF alignment from PAGE_SIZE through 1 MiB. Data must start after
 the rounded text end, and end no higher than `0x01000000`. This small synthetic
-image window is a test constraint, not general IRIX address-space policy.
+image window is a static test constraint, not general IRIX address-space policy.
 File-backed data must start after the rounded text file extent. All file
 extents are bounded by the actual file and the native signed 32-bit offset
 range before mapping; overlapping pages, wrapping ranges, and extra segment
@@ -54,14 +55,15 @@ native `off_t` and initializes the native argument padding.
 
 - Argument setup uses current `copyargs` and `ps_strings` handling, with a
   16-byte-aligned first argument string and an explicit static `AT_NULL` pair.
-  The o32 stack remains aligned to its native eight-byte requirement. There is
-  no interpreter auxv; startup register conventions beyond the earlier native
-  `setregs` behavior remain unqualified against vendor startup code.
+  The o32 stack remains aligned to its native eight-byte requirement. The
+  separate dynamic auxv contract is described below. Native `setregs` supplies
+  the entry PC, t9, and stack; this has only been observed with the selected libc.
 - Open accepts IRIX access modes 0/1/2, APPEND `0x8`, NONBLOCK `0x80`, CREAT
   `0x100`, TRUNC `0x200`, and EXCL `0x400`, translating them individually to
-  native flags. Access mode 3 or other flag bits return `EINVAL`. Paths currently
-  use the host namespace directly; no emulation-root or IRIX device adaptation
-  is provided. Native mode/umask and descriptor behavior are used.
+  native flags. Access mode 3 or other flag bits return `EINVAL`. Current NetBSD
+  emulation-root lookup uses `/emul/irix`, with its normal native-path fallback.
+  This is not a chroot. No IRIX device adaptation is provided. Native mode/umask
+  and descriptor behavior are used.
 - Mmap supports positive-length private non-fixed mappings with a null address
   hint, page-aligned nonnegative 32-bit file offsets, and basic R/W/X protection
   bits. `/dev/zero` supplies zero-filled memory through the normal host device
@@ -99,6 +101,51 @@ argument/file/memory implementation, `c9ab9ccc062650870e17006571c93e665e2133d9`.
 Its companion harness uses `--suite segments` and a version 3 fixture manifest.
 The earlier version 1/minimal and version 2/basics suites remain available.
 
-General static ELF recognition, full auxv compatibility, dynamic loading,
-IRIX libraries, n32/n64, PRDA, process sharing, caught signals, and the original
-desktop remain separate work. No vendor IRIX files are included.
+## Bounded interpreter experiment
+
+Branch `xiri/irix-o32-runtime` extends the segment commit
+`6a162a938061d16a60842fd9bb31d69e546d66dc`. A distinct dynamic probe accepts
+ELF32/MSB/System V MIPS II or III executables with exact flags `0x10000005`
+or `0x20000005` and an exact `/lib/libc.so.1` or `/usr/lib/libc.so.1` interpreter
+name. These combined traits identify the intended IRIX subset; they do not
+authenticate a file's origin. n32, arbitrary interpreter paths, and static
+unbranded files remain rejected.
+
+Both executable and interpreter must have two ordered, page-separated loads:
+RX text at file offset zero and RW data/BSS. Each is bounded to 16 MiB within
+`0x00400000..0x40000000`, with page-aligned address/offset, power-of-two alignment
+from PAGE_SIZE to 1 MiB, congruent address/offset, valid file extents, and an
+aligned entry inside file-backed text. Headers immediately follow the ELF
+header, with at most 16 entries. PHDR, INTERP, and DYNAMIC metadata must point
+into corresponding file-backed bytes; duplicates and unsupported segment types
+are rejected. MIPS OPTIONS, REGINFO, and RTPROC metadata are permitted but are
+not interpreted by the kernel. RTPROC need not be mapped.
+
+The interpreter additionally requires ET_DYN and exact flags `0x10000003` or
+`0x20000003`; it cannot have another interpreter or overlap the executable with
+its reserved span. Validation uses the interpreter vnode, marks it as text,
+and follows current exec ownership/cleanup. The native mapper still performs
+its permission and mount checks. Self-interpreter vnode recursion is rejected.
+`ELF32_LINK_ADDR` preserves libc's linked address and bootstrap GOT. Native VM
+commands supply private data and BSS zero-fill. No relocator is implemented in
+the kernel.
+
+Dynamic copyargs supplies PHDR, PHENT, PHNUM, ENTRY, BASE, PAGESZ, and NULL, using
+the current `elf_args` ownership API. Static images still receive only NULL.
+Argument strings remain 16-byte aligned and the o32 stack eight-byte aligned.
+The companion synthetic interpreter checks every auxiliary value, initialized
+data/BSS in both mappings, repeated exec, and transfer to the main entry.
+
+An explicitly enabled `ktrace -t u` records actual trap numbers, PCs and the
+first four argument registers in `irix_o32` user records. This preserves the
+number of unsupported calls routed through table slot zero; no new syscall
+semantics are added. Untraced execution emits no records.
+
+The supplied IRIX 6.5.22m asa and matching libc now pass exec and enter libc's
+bootstrap. They stop at unsupported trap 1040, `syssgi(SGI_SYSCONF, _SC_CAP)`,
+printing a diagnostic and exiting 239. This is interpreter execution, not
+successful execution of asa's filter. The corresponding rld has not executed.
+
+General static recognition, wider ELF layouts, runtime syscalls and rld loading,
+n32/n64, PRDA, process sharing, caught signals, and the original desktop remain
+separate work. No vendor IRIX files are included.
