@@ -1,4 +1,4 @@
-/*	$NetBSD: fd.c,v 1.100 2026/05/30 10:10:11 thorpej Exp $	*/
+/*	$NetBSD: fd.c,v 1.102 2026/08/14 10:46:09 andvar Exp $	*/
 
 /*
  * Copyright (c) 1995 Leo Weppelman.
@@ -44,7 +44,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.100 2026/05/30 10:10:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.102 2026/08/14 10:46:09 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -456,7 +456,7 @@ fdioctl(dev_t dev, u_long cmd, void * addr, int flag, struct lwp *l)
 /*
  * Open the device. If this is the first open on both the floppy devices,
  * initialize the controller.
- * Note that partition info on the floppy device is used to distinguise
+ * Note that partition info on the floppy device is used to distinguish
  * between 780Kb and 360Kb floppy's.
  *	partition 0: 360Kb
  *	partition 1: 780Kb
@@ -763,7 +763,7 @@ fddone(register struct fd_softc *sc)
 	}
 	fd_state = FLP_IDLE;
 #ifdef FLP_DEBUG
-	printf("fddone: Staring job on unit %d\n", sc1->unit);
+	printf("fddone: Starting job on unit %d\n", sc1->unit);
 #endif
 	st_dmagrab((dma_farg)fdcint, (dma_farg)fdstart, sc1, &lock_stat, 0,
 	    NULL);

@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs.h,v 1.219 2026/01/05 05:02:47 perseant Exp $	*/
+/*	$NetBSD: lfs.h,v 1.221 2026/10/30 01:03:04 perseant Exp $	*/
 
 /*  from NetBSD: dinode.h,v 1.25 2016/01/22 23:06:10 dholland Exp  */
 /*  from NetBSD: dir.h,v 1.25 2015/09/01 06:16:03 dholland Exp  */
@@ -1098,7 +1098,6 @@ struct lfs {
 	int lfs_sleepers;		/* # procs sleeping this fs */
 	kcondvar_t lfs_sleeperscv;	
 	int lfs_pages;			/* dirty pages blaming this fs */
-	lfs_bm_t *lfs_ino_bitmap;	/* Inuse inodes bitmap */
 	int lfs_nowrap;			/* Suspend log wrap */
 	int lfs_wrappass;		/* Allow first log wrap requester to pass */
 	int lfs_wrapstatus;		/* Wrap status */
@@ -1155,6 +1154,9 @@ struct lfs {
 
 	/* Last cleaned segment */
 	uint32_t lfs_lastcleaned;
+	kcondvar_t lfs_reclaim_cv;
+	struct lwp *lfs_reclaimd_lwp;
+
 #endif
 };
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: mbr.c,v 1.49 2026/04/06 20:34:22 andvar Exp $ */
+/*	$NetBSD: mbr.c,v 1.51 2026/09/03 02:12:15 gutteridge Exp $ */
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -1105,7 +1105,7 @@ mbr_type_from_gen_desc(const struct part_type_desc *desc)
 		if (&mbr_gen_type_desc[i].gen == desc)
 			return i;
 
-	return SIZE_T_MAX;
+	return SIZE_MAX;
 }
 
 static enum part_type
@@ -2235,7 +2235,7 @@ mbr_add_part(struct disk_partitions *arg,
 			return NO_PART;
 		}
 
-		/* walk the chain untill we find a proper insert position */
+		/* walk the chain until we find a proper insert position */
 		daddr_t e_end, e_start;
 		for (last = m, m = m->extended; m != NULL;
 		    last = m, m = m->extended) {

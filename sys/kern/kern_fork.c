@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_fork.c,v 1.234 2026/01/04 01:33:56 riastradh Exp $	*/
+/*	$NetBSD: kern_fork.c,v 1.236 2026/08/28 13:58:27 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2001, 2004, 2006, 2007, 2008, 2019
@@ -68,7 +68,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_fork.c,v 1.234 2026/01/04 01:33:56 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_fork.c,v 1.236 2026/08/28 13:58:27 riastradh Exp $");
 
 #include "opt_ktrace.h"
 #include "opt_dtrace.h"

@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_segment.c,v 1.308 2026/01/30 15:52:54 perseant Exp $	*/
+/*	$NetBSD: lfs_segment.c,v 1.318 2026/10/30 01:03:04 perseant Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001, 2002, 2003 The NetBSD Foundation, Inc.
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lfs_segment.c,v 1.308 2026/01/30 15:52:54 perseant Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lfs_segment.c,v 1.318 2026/10/30 01:03:04 perseant Exp $");
 
 #ifdef DEBUG
 # define vndebug(vp, str) do {						\
@@ -224,7 +224,7 @@ lfs_vflush(struct vnode *vp)
 	mutex_exit(vp->v_interlock);
 
 	/* Protect against deadlock in vinvalbuf() */
-	lfs_seglock(fs, SEGM_SYNC | ((error != 0) ? SEGM_RECLAIM : 0));
+	lfs_seglock(fs, ((error != 0) ? SEGM_RECLAIM : 0));
 	if (error != 0) {
 		fs->lfs_reclino = ip->i_number;
 		error = 0;
@@ -284,9 +284,10 @@ lfs_vflush(struct vnode *vp)
 
 	fs->lfs_flushvp = vp;
 	if (LFS_SHOULD_CHECKPOINT(fs, fs->lfs_sp->seg_flags)) {
-		error = lfs_segwrite(vp->v_mount, SEGM_CKP | SEGM_SYNC);
-		fs->lfs_flushvp = NULL;
+		error = lfs_segwrite(vp->v_mount, SEGM_CKP);
 		KASSERT(fs->lfs_flushvp_fakevref == 0);
+#if 0
+		fs->lfs_flushvp = NULL;
 		lfs_segunlock(fs);
 
 		/* Make sure that any pending buffers get written */
@@ -299,6 +300,7 @@ lfs_vflush(struct vnode *vp)
 		mutex_exit(vp->v_interlock);
 
 		goto out;
+#endif
 	}
 	sp = fs->lfs_sp;
 
@@ -409,6 +411,7 @@ lfs_vflush(struct vnode *vp)
 
  out:
 	lfs_writer_leave(fs);
+	fs->lfs_reclino = 0;
 	return error;
 }
 
@@ -495,7 +498,8 @@ lfs_writevnodes(struct lfs *fs, struct mount *mp, struct segment *sp, int op)
 			error = lfs_writefile(fs, sp, vp);
 			if (error) {
 				vrele(vp);
-				if (error == EAGAIN) {
+				if (error == EAGAIN
+				    && LFS_STARVED_FOR_SEGS(fs)) {
 					/*
 					 * This error from lfs_putpages
 					 * indicates we need to drop
@@ -983,9 +987,8 @@ lfs_update_iaddr(struct lfs *fs, struct inode *ip, daddr_t ndaddr)
 			   (intmax_t)newsn,
 			   (intmax_t)sup->su_nbytes + DINOSIZE(fs));
 		sup->su_nbytes += DINOSIZE(fs);
-		LFS_WRITESEGENTRY(sup, fs, oldsn, bp); /* Ifile */
+		LFS_WRITESEGENTRY(sup, fs, newsn, bp); /* Ifile */
 	}
-	
 }
 
 int
@@ -1031,14 +1034,6 @@ lfs_writeinode(struct lfs *fs, struct segment *sp, struct inode *ip)
 		mutex_enter(vp->v_interlock);
 		LIST_FOREACH(bp, &fs->lfs_ivnode->v_dirtyblkhd, b_vnbufs) {
 			if (!(bp->b_flags & B_GATHERED)) {
-				DLOG((DLOG_SU, "ifile dirty lbn 0x%lx"
-					" flags 0x%x"
-					" cflags 0x%x"
-					" oflags 0x%x\n",
-					(long)bp->b_lblkno,
-					bp->b_flags,
-					bp->b_cflags,
-					bp->b_oflags));
 				redo = 1;
 				break;
 			}
@@ -1055,24 +1050,30 @@ lfs_writeinode(struct lfs *fs, struct segment *sp, struct inode *ip)
 			lfs_sb_setidaddr(fs, 0x0);
 		}
 		++count;
-		if (count > 2) {
-			/*
-			 * XXX This is a kludge.  We are waiting on a
-			 * busy buffer.  We need to wait for whoever
-			 * has it to unbusy it; maybe for it to be
-			 * read from disk.  A one clock tick wait
-			 * should suffice.  Better would be to protect
-			 * Ifile reads with the segment lock, but the
-			 * segment lock would require some
-			 * modification to work well for that.
-			 */
-			kpause("lfsinow", false, 1, NULL);
+		/*
+		 * We might need to gather another block for each
+		 * of the Ifile's segment blocks, if each of the
+		 * Ifile blocks we're overwriting was in a different
+		 * segment before.  More than segtabsz retries, though,
+		 * and we likely will never finish.
+		 */
+		if (count > lfs_sb_getsegtabsz(fs)) {
 #ifdef DEBUG
-			log(LOG_NOTICE, "lfs_writeinode: looping count=%d\n", count);
+			LIST_FOREACH(bp, &fs->lfs_ivnode->v_dirtyblkhd, b_vnbufs) {
+				if (!(bp->b_flags & B_GATHERED)) {
+					printf("ifile dirty lbn 0x%lx"
+						" flags 0x%x"
+						" cflags 0x%x"
+						" oflags 0x%x\n",
+						(long)bp->b_lblkno,
+						bp->b_flags,
+						bp->b_cflags,
+						bp->b_oflags);
+				}
+			}
 #endif /* DEBUG */
-		}
-		if (count > 10)
 			panic("lfs_writeinode: looping");
+		}
 		/* Write the file again, to gather the blocks */
 		lfs_writefile(fs, sp, fs->lfs_ivnode);
 	}
@@ -1094,13 +1095,7 @@ lfs_writeinode(struct lfs *fs, struct segment *sp, struct inode *ip)
 		gotblk++;
 
 		/* Zero out inode numbers */
-		for (i = 0; i < LFS_INOPB(fs); ++i) {
-			union lfs_dinode *tmpdi;
-
-			tmpdi = (union lfs_dinode *)((char *)sp->ibp->b_data +
-						     DINOSIZE(fs) * i);
-			lfs_dino_setinumber(fs, tmpdi, 0);
-		}
+		memset(sp->ibp->b_data, 0, lfs_sb_getibsize(fs));
 
 		++sp->start_bpp;
 		lfs_sb_subavail(fs, lfs_btofsb(fs, lfs_sb_getibsize(fs)));
@@ -1802,7 +1797,7 @@ lfs_rewind(struct lfs *fs, int newsn)
 	for (sn = 0; sn < lfs_sb_getnseg(fs); ++sn) {
 		LFS_SEGENTRY(sup, fs, sn, bp);
 		isdirty = sup->su_flags & SEGUSE_DIRTY;
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, sn, bp);
 
 		if (!isdirty)
 			break;
@@ -1858,7 +1853,7 @@ lfs_initseg(struct lfs *fs, uint16_t flags)
 			lfs_sb_addoffset(fs, lfs_btofsb(fs, LFS_SBPAD));
 			sp->seg_bytes_left -= LFS_SBPAD;
 		}
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, sp->seg_number, bp);
 		/* Segment zero could also contain the labelpad */
 		if (lfs_sb_getversion(fs) > 1 && sp->seg_number == 0 &&
 		    lfs_sb_gets0addr(fs) < lfs_btofsb(fs, LFS_LABELPAD)) {
@@ -1944,7 +1939,7 @@ lfs_invalidate(struct lfs *fs, int sn)
 		return EBUSY;
 	}
 	sup->su_flags |= SEGUSE_INVAL;
-	VOP_BWRITE(bp->b_vp, bp);
+	LFS_WRITESEGENTRY(sup, fs, sn, bp);
 	return 0;
 }
 
@@ -2009,7 +2004,7 @@ lfs_newseg(struct lfs *fs)
 		}
 		LFS_SEGENTRY(sup, fs, sn, bp);
 		isdirty = sup->su_flags & (SEGUSE_DIRTY | (skip_inval ? SEGUSE_INVAL : 0));
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, sn, bp);
 
 		if (!isdirty)
 			break;
@@ -2044,7 +2039,9 @@ lfs_newclusterbuf(struct lfs *fs, struct vnode *vp, daddr_t addr,
 	if (fs->lfs_sp->seg_flags & SEGM_SYNC) {
 		cl->flags |= LFS_CL_SYNC;
 		cl->seg = fs->lfs_sp;
+		mutex_enter(&lfs_lock);
 		++cl->seg->seg_iocount;
+		mutex_exit(&lfs_lock);
 	}
 
 	/* Get an empty buffer header, or maybe one with something on it */
@@ -2591,6 +2588,8 @@ lfs_super_work(struct work *wk, void *arg)
 		wakeup(&fs->lfs_iocount);
 	wakeup(&fs->lfs_sbactive);
 	mutex_exit(&lfs_lock);
+
+	cv_broadcast(&fs->lfs_reclaim_cv);
 }
 
 static void
@@ -2729,15 +2728,17 @@ lfs_cluster_work(struct work *wk, void *arg)
 
 	/* Note i/o done */
 	if (cl->flags & LFS_CL_SYNC) {
+		mutex_enter(&lfs_lock);
 		if (--cl->seg->seg_iocount == 0)
 			wakeup(&cl->seg->seg_iocount);
+		mutex_exit(&lfs_lock);
 	}
 
 	pool_put(&fs->lfs_bpppool, cl->bpp);
 	cl->bpp = NULL;
 	pool_put(&fs->lfs_clpool, cl);
+
 	mutex_enter(&lfs_lock);
-	
 	KASSERTMSG((fs->lfs_iocount != 0),
 	    "lfs_cluster_aiodone: zero iocount");
 	if (--fs->lfs_iocount <= 1)

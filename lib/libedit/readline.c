@@ -1,4 +1,4 @@
-/*	$NetBSD: readline.c,v 1.184 2026/01/09 17:49:12 christos Exp $	*/
+/*	$NetBSD: readline.c,v 1.188 2026/10/03 12:54:13 christos Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include "config.h"
 #if !defined(lint) && !defined(SCCSID)
-__RCSID("$NetBSD: readline.c,v 1.184 2026/01/09 17:49:12 christos Exp $");
+__RCSID("$NetBSD: readline.c,v 1.188 2026/10/03 12:54:13 christos Exp $");
 #endif /* not lint && not SCCSID */
 
 #include <sys/types.h>
@@ -58,6 +58,7 @@ __RCSID("$NetBSD: readline.c,v 1.184 2026/01/09 17:49:12 christos Exp $");
 #include "emacs.h"
 #include "fcns.h"
 #include "filecomplete.h"
+#include "history.h"
 
 void rl_prep_terminal(int);
 void rl_deprep_terminal(void);
@@ -699,10 +700,14 @@ getfrom(const char **cmdp, char **fromp, const char *search, int delim)
 	for (; *cmd && *cmd != delim; cmd++) {
 		if (*cmd == '\\' && cmd[1] == delim)
 			cmd++;
-		if (len - 1 >= size) {
+		/* Keep room for the next byte and NUL */
+		if (len + 1 >= size) {
 			char *nwhat;
+			if (size > SIZE_MAX / 2)
+				goto out;
 			nwhat = el_realloc(what, (size <<= 1) * sizeof(*nwhat));
 			if (nwhat == NULL) {
+out:
 				el_free(what);
 				el_free(*fromp);
 				*cmdp = cmd;
@@ -1246,6 +1251,12 @@ stifle_history(int max)
 			history_base = history_length - max;
 		while (history_length > max) {
 			he = remove_history(0);
+			/*
+			 * remove history can return NULL on out of memory
+			 * conditions, so stop looping since it will not help.
+			 */
+			if (he == NULL)
+				break;
 			el_free(he->data);
 			el_free((void *)(unsigned long)he->line);
 			el_free(he);
@@ -1380,7 +1391,7 @@ history_truncate_file (const char *filename, int nlines)
 	if (ret || nlines > 0)
 		goto out3;
 
-	if (fseeko(fp, (off_t)0, SEEK_SET) == (off_t)-1) {
+	if (fseeko(fp, (off_t)hist_cookie_len, SEEK_SET) == (off_t)-1) {
 		ret = errno;
 		goto out3;
 	}

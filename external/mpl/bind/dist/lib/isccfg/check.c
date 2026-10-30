@@ -1,4 +1,4 @@
-/*	$NetBSD: check.c,v 1.6 2026/05/20 16:53:47 christos Exp $	*/
+/*	$NetBSD: check.c,v 1.9 2026/09/17 18:01:18 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -1300,6 +1300,14 @@ check_options(const cfg_obj_t *options, const cfg_obj_t *config,
 						"dns64-server", "dns64-contact",
 						NULL };
 
+#ifndef IOV_MAX
+/*
+ * FSTRM_IOTHR_INPUT_QUEUE_SIZE_MAX is defined as IOV_MAX, but IOV_MAX can be
+ * undefined.
+ */
+#define IOV_MAX 1024
+#endif /* ifndef IOV_MAX */
+
 #ifdef HAVE_DNSTAP
 	static fstrmtable fstrm[] = {
 		{ "fstrm-set-buffer-hint", FSTRM_IOTHR_BUFFER_HINT_MIN,
@@ -1458,8 +1466,8 @@ check_options(const cfg_obj_t *options, const cfg_obj_t *config,
 						    DNS_KEYSTORE_KEYDIRECTORY);
 					if (result == ISC_R_SUCCESS) {
 						result = ISC_R_FAILURE;
-						continue;
 					}
+					continue;
 				}
 
 				kopt = cfg_tuple_get(kconfig, "options");
@@ -2309,11 +2317,13 @@ check_httpserver(const cfg_obj_t *http, isc_log_t *logctx,
 	/* Check endpoints are valid */
 	tresult = cfg_map_get(http, "endpoints", &eps);
 	if (tresult == ISC_R_SUCCESS) {
+		bool empty = true;
 		for (elt = cfg_list_first(eps); elt != NULL;
 		     elt = cfg_list_next(elt))
 		{
 			const cfg_obj_t *ep = cfg_listelt_value(elt);
 			const char *path = cfg_obj_asstring(ep);
+			empty = false;
 			if (!isc_nm_http_path_isvalid(path)) {
 				cfg_obj_log(eps, logctx, ISC_LOG_ERROR,
 					    "endpoint '%s' is not a "
@@ -2322,6 +2332,13 @@ check_httpserver(const cfg_obj_t *http, isc_log_t *logctx,
 				if (result == ISC_R_SUCCESS) {
 					result = ISC_R_FAILURE;
 				}
+			}
+		}
+		if (empty) {
+			cfg_obj_log(eps, logctx, ISC_LOG_ERROR,
+				    "empty 'endpoints' entry");
+			if (result == ISC_R_SUCCESS) {
+				result = ISC_R_FAILURE;
 			}
 		}
 	}
@@ -2362,8 +2379,8 @@ done:
 #endif /* HAVE_LIBNGHTTP2 */
 
 static isc_result_t
-check_tls_defintion(const cfg_obj_t *tlsobj, const char *name,
-		    isc_log_t *logctx, isc_symtab_t *symtab) {
+check_tls_definition(const cfg_obj_t *tlsobj, const char *name,
+		     isc_log_t *logctx, isc_symtab_t *symtab) {
 	isc_result_t result, tresult;
 	const cfg_obj_t *tls_proto_list = NULL, *tls_key = NULL,
 			*tls_cert = NULL, *tls_ciphers = NULL,
@@ -2522,7 +2539,7 @@ check_tls_definitions(const cfg_obj_t *config, isc_log_t *logctx,
 		const char *name;
 		obj = cfg_listelt_value(elt);
 		name = cfg_obj_asstring(cfg_map_getname(obj));
-		tresult = check_tls_defintion(obj, name, logctx, symtab);
+		tresult = check_tls_definition(obj, name, logctx, symtab);
 		if (result == ISC_R_SUCCESS) {
 			result = tresult;
 		}
@@ -2640,9 +2657,8 @@ validate_remotes_key(const cfg_obj_t *voptions, const cfg_obj_t *config,
 		if (result != ISC_R_SUCCESS) {
 			cfg_obj_log(key, logctx, ISC_LOG_ERROR,
 				    "'%s' is not a valid name", str);
-		}
-
-		if (!lookup_key(voptions, nm)) {
+			result = ISC_R_FAILURE;
+		} else if (!lookup_key(voptions, nm)) {
 			if (!lookup_key(config, nm)) {
 				cfg_obj_log(key, logctx, ISC_LOG_ERROR,
 					    "key '%s' is not defined",

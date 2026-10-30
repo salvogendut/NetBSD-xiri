@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.43 2026/04/28 03:29:11 thorpej Exp $	*/
+/*	$NetBSD: machdep.c,v 1.45 2026/07/14 13:37:21 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,66 +39,29 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.43 2026/04/28 03:29:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.45 2026/07/14 13:37:21 thorpej Exp $");
 
-#include "opt_ddb.h"
-#include "opt_modular.h"
 #include "opt_m68k_arch.h"
 
 #define	_M68K_BUS_SPACE_PRIVATE
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/signalvar.h>
-#include <sys/kernel.h>
-#include <sys/proc.h>
-#include <sys/buf.h>
-#include <sys/reboot.h>
-#include <sys/conf.h>
-#include <sys/file.h>
-#include <sys/mbuf.h>
-#include <sys/msgbuf.h>
-#include <sys/ioctl.h>
-#include <sys/tty.h>
-#include <sys/mount.h>
-#include <sys/exec.h>
-#include <sys/core.h>
-#include <sys/kcore.h>
-#include <sys/vnode.h>
-#include <sys/syscallargs.h>
-#include <sys/ksyms.h>
-#include <sys/module.h>
-#include <sys/device.h>
+#include <sys/bus.h>
 #include <sys/cpu.h>
 #include <sys/boot_flag.h>
-
-#include "ksyms.h"
-
-#if NKSYMS || defined(DDB) || defined(MODULAR)
-#include <sys/exec_elf.h>
-#endif
 
 #include <uvm/uvm_extern.h>
 
 #include <sys/sysctl.h>
 
-#include <machine/cpu.h>
-#include <machine/bus.h>
-#include <machine/pcb.h>
 #include <machine/psl.h>
-#include <machine/vmparam.h>
-#include <m68k/cacheops.h>
 #include <m68k/linux_bootinfo.h>
-#include <m68k/seglist.h>
 #include <dev/cons.h>
 #include <dev/mm.h>
 
-#include <machine/kcore.h>	/* XXX should be pulled in by sys/kcore.h */
-
 #ifdef DDB
-#include <machine/db_machdep.h>
-#include <ddb/db_extern.h>
-#include <ddb/db_output.h>
+#include <ddb/ddb.h>
 #endif
 
 #include "gftty.h"
@@ -201,12 +164,6 @@ machine_init(paddr_t nextpa)
 void
 consinit(void)
 {
-
-	/*
-	 * The Goldfish TTY console has already been attached when
-	 * the bootinfo was parsed.
-	 */
-
 #ifdef DDB
 	if (boothowto & RB_KDB)
 		Debugger();

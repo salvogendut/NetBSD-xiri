@@ -1,4 +1,4 @@
-/*	$NetBSD: fdt_platform.h,v 1.1 2025/09/06 21:02:41 thorpej Exp $	*/
+/*	$NetBSD: fdt_platform.h,v 1.2 2026/07/12 05:00:14 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2017 Jared D. McNeill <jmcneill@invisible.ca>
@@ -31,23 +31,8 @@
 
 #include <sys/device.h>
 
-struct fdt_attach_args;
-struct pmap_devmap;
-
-struct fdt_platform {
-	const struct pmap_devmap *
-				(*fp_devmap)(void);
-	void			(*fp_bootstrap)(void);
-	int			(*fp_mpstart)(void);
-	void			(*fp_startup)(void);
-	void			(*fp_init_attach_args)(struct fdt_attach_args *);
-	void			(*fp_device_register)(device_t, void *);
-	void			(*fp_device_register_post_config)(device_t,
-				    void *);
-	void			(*fp_reset)(void);
-	void			(*fp_delay)(u_int);
-	u_int			(*fp_uart_freq)(void);
-};
+/* struct fdt_platform provided by <machine/fdt_platform.h> */
+#include <machine/fdt_platform.h>
 
 struct fdt_platform_info {
 	const char *			fpi_compat;

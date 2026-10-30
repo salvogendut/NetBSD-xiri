@@ -44,6 +44,17 @@ def generic_query(
     log_response: bool = True,
 ) -> Any:
 
+    def _safe_to_text(msg: dns.message.Message) -> str:
+        """
+        Convert a DNS message to text, tolerating dnspython's failure to render
+        RRSIG inception/expiration timestamps that overflow the platform's
+        time_t (e.g. post-2038 values on 32-bit systems).
+        """
+        try:
+            return msg.to_text()
+        except OverflowError:
+            return "<message not representable as text>"
+
     def log_querymsg(exception: Exception | None = None) -> None:
         """
         Helper for logging query message. Call this *after* query_func() has
@@ -54,7 +65,7 @@ def generic_query(
         nonlocal log_query
         if log_query:
             isctest.log.debug(
-                f"isc.query.{query_func.__name__}(): query\n{message.to_text()}"
+                f"isc.query.{query_func.__name__}(): query\n{_safe_to_text(message)}"
             )
             log_query = False  # only log query once
 
@@ -99,7 +110,7 @@ def generic_query(
         if res:
             if log_response:
                 isctest.log.debug(
-                    f"isc.query.{query_func.__name__}(): response\n{res.to_text()}"
+                    f"isc.query.{query_func.__name__}(): response\n{_safe_to_text(res)}"
                 )
             if res.rcode() == expected_rcode or expected_rcode is None:
                 return res
@@ -123,12 +134,7 @@ def tcp(*args, **kwargs) -> Any:
 
 
 def tls(*args, **kwargs) -> Any:
-    try:
-        return generic_query(dns.query.tls, *args, **kwargs)
-    except TypeError as e:
-        raise RuntimeError(
-            "dnspython 2.5.0 or newer is required for isctest.query.tls()"
-        ) from e
+    return generic_query(dns.query.tls, *args, **kwargs)
 
 
 def create(
@@ -136,13 +142,22 @@ def create(
     qtype,
     qclass=dns.rdataclass.IN,
     dnssec: bool = True,
+    use_edns: int | bool = True,
+    payload: int = 1232,
     rd: bool = True,
     cd: bool = False,
     ad: bool = True,
+    message_id: int | None = None,
 ) -> dns.message.Message:
     """Create DNS query with defaults suitable for our tests."""
     msg = dns.message.make_query(
-        qname, qtype, qclass, use_edns=True, want_dnssec=dnssec
+        qname,
+        qtype,
+        qclass,
+        use_edns=use_edns,
+        want_dnssec=dnssec,
+        payload=payload,
+        id=message_id,
     )
     msg.flags = 0
     if rd:
@@ -154,28 +169,53 @@ def create(
     return msg
 
 
-def wait_for_serial(server_ip, zone, expected_serial, timeout=30):
-    """Wait until the server has the expected SOA serial for the zone.
+def get_soa_serial(server_ip, zone, timeout=10):
+    """
+    Get the current SOA serial of a zone from a server.
 
-    Queries the server repeatedly until the SOA serial matches or the
-    timeout expires.
-
-    'server_ip' is the IP address to query (string).
-    'zone' is the zone name (string, with or without trailing dot).
-    'expected_serial' is the expected SOA serial number (int).
-    'timeout' is the maximum time to wait in seconds (default 30).
+    Queries the server repeatedly until it responds with a well-formed
+    SOA answer or the timeout expires.
     """
     query = create(zone, "SOA", dnssec=False)
+    serial = None
 
     def check():
-        res = tcp(query, server_ip)
+        nonlocal serial
+        res = tcp(
+            query,
+            server_ip,
+            timeout=3,
+            attempts=1,
+            expected_rcode=dns.rcode.NOERROR,
+        )
         soa = res.get_rrset(
             res.answer,
             dns.name.from_text(zone),
             dns.rdataclass.IN,
             dns.rdatatype.SOA,
         )
-        return soa is not None and len(soa) == 1 and soa[0].serial == expected_serial
+        assert soa is not None and len(soa) == 1
+        serial = soa[0].serial
+        return True
+
+    isctest.run.retry_with_timeout(
+        check,
+        timeout=timeout,
+        msg=f"timed out getting SOA serial of {zone} from {server_ip}",
+    )
+    return serial
+
+
+def wait_for_serial(server_ip, zone, expected_serial, timeout=30):
+    """
+    Wait until the server has the expected SOA serial for the zone.
+
+    Queries the server repeatedly until the SOA serial matches or the
+    timeout expires.
+    """
+
+    def check():
+        return get_soa_serial(server_ip, zone) == expected_serial
 
     isctest.run.retry_with_timeout(
         check,

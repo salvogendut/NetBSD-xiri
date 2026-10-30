@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.104 2026/05/23 14:02:38 skrll Exp $	*/
+/*	$NetBSD: locore.S,v 1.109 2026/09/09 07:24:52 skrll Exp $	*/
 
 /*
  * Copyright (c) 2017 Ryo Shimizu
@@ -35,10 +35,9 @@
 #include "opt_multiprocessor.h"
 
 #include <aarch64/asm.h>
-#include <aarch64/hypervisor.h>
 #include "assym.h"
 
-RCSID("$NetBSD: locore.S,v 1.104 2026/05/23 14:02:38 skrll Exp $")
+RCSID("$NetBSD: locore.S,v 1.109 2026/09/09 07:24:52 skrll Exp $")
 
 #ifdef AARCH64_DEVICE_MEM_NONPOSTED
 #define	MAIR_DEVICE_MEM		MAIR_DEVICE_nGnRnE
@@ -73,10 +72,40 @@ RCSID("$NetBSD: locore.S,v 1.104 2026/05/23 14:02:38 skrll Exp $")
 #define DPRINT(string)		PRINT(string)
 #define DPRINTREG(str, reg)	mov x19,reg; PRINT(str); mov x0,x19; bl print_x0
 #define DPRINTSREG(str, reg)	mrs x19,reg; PRINT(str); mov x0,x19; bl print_x0
-#else
+
+#define CPU_DPRINT(str)			\
+	bl	locore_lock_enter;	\
+	bl	printcpu;		\
+	DPRINT(str);			\
+	bl	locore_lock_exit
+
+/*
+ * CPU_DPRINTREG macro use x19 internally. x0-x15 may be broken.
+ * x27 for cpuindex.
+ */
+#define CPU_DPRINTREG(str,reg)		\
+	mov	x19, reg;		\
+	bl	locore_lock_enter;	\
+	bl	printcpu;		\
+	PRINT(str);			\
+	mov	x0, x19;		\
+	bl	print_x0;		\
+	bl	locore_lock_exit
+
+#define CPU_DPRINTSREG(str, reg)	\
+	mrs	x19, reg;		\
+	CPU_DPRINTREG(str, x19)
+
+#else /* DEBUG_LOCORE && EARLYCONS */
+
 #define DPRINT(string)
 #define DPRINTREG(str, reg)
 #define DPRINTSREG(str, reg)
+
+#define CPU_DPRINT(str)
+#define CPU_DPRINTREG(str,reg)
+#define CPU_DPRINTSREG(str, reg)
+
 #endif
 
 #define PRINT(string)	bl xprint; .asciz string; .align 2
@@ -133,7 +162,6 @@ ASENTRY_NP(aarch64_start)
 	lsr	x20, x20, #2
 	DPRINTREG("CurrentEL        = ", x20)
 #endif /* LOCORE_EL2 */
-
 
 	bl	mmu_disable
 	bl	init_sysregs
@@ -338,35 +366,6 @@ printcpu:
 	ldp	x0, lr, [sp], #16
 	ret
 
-#define CPU_DPRINT(str)			\
-	bl	locore_lock_enter;	\
-	bl	printcpu;		\
-	DPRINT(str);			\
-	bl	locore_lock_exit
-
-/*
- * CPU_DPRINTREG macro use x19 internally. x0-x15 may be broken.
- * x27 for cpuindex.
- */
-#define CPU_DPRINTREG(str,reg)		\
-	mov	x19, reg;		\
-	bl	locore_lock_enter;	\
-	bl	printcpu;		\
-	PRINT(str);			\
-	mov	x0, x19;		\
-	bl	print_x0;		\
-	bl	locore_lock_exit
-
-#define CPU_DPRINTSREG(str, reg)	\
-	mrs	x19, reg;		\
-	CPU_DPRINTREG(str, x19)
-
-#else /* DEBUG_LOCORE */
-
-#define CPU_DPRINT(str)
-#define CPU_DPRINTREG(str,reg)
-#define CPU_DPRINTSREG(str, reg)
-
 #endif /* DEBUG_LOCORE */
 
 ENTRY_NP(cpu_mpstart)
@@ -434,7 +433,10 @@ ENTRY_NP(cpu_mpstart)
 	bcc	1f
 	/* EL2 registers can be accessed in EL2 or higher */
 	CPU_DPRINTSREG("SCTLR_EL2        = ", sctlr_el2)
+	CPU_DPRINTSREG("TCR_EL2          = ", tcr_el2)
 	CPU_DPRINTSREG("HCR_EL2          = ", hcr_el2)
+	CPU_DPRINTSREG("VTTBR_EL2        = ", vttbr_el2)
+	CPU_DPRINTSREG("MAIR_EL2         = ", mair_el2)
 1:
 	CPU_DPRINTSREG("SPSR_EL1         = ", spsr_el1)
 	CPU_DPRINTSREG("SCTLR_EL1        = ", sctlr_el1)
@@ -465,16 +467,16 @@ ENTRY_NP(cpu_mpstart)
 mp_vstart:
 	hint	0x24		/* bti j */
 
+	/* Set SP to VA */
+	adrl	x0, kern_vtopdiff
+	ldr	x0, [x0]
+	add	sp, sp, x0
+
 	CPU_DPRINTREG("PC               = ", x20)
 	CPU_DPRINTREG("SP               = ", sp)
 
 	CPU_DPRINTSREG("TTBR0            = ", ttbr0_el1)
 	CPU_DPRINTSREG("TTBR1            = ", ttbr1_el1)
-
-	/* Set SP to VA */
-	adrl	x0, kern_vtopdiff
-	ldr	x0, [x0]
-	add	sp, sp, x0
 
 	/* disable TTBR0 - CPU_DPRINT{,REG,SREG} no longer work after this */
 	mrs	x0, tcr_el1
@@ -482,8 +484,9 @@ mp_vstart:
 	msr	tcr_el1, x0
 	isb
 
-	tlbi	vmalle1is
-	dsb	ish
+	/* Invalidate local TLB */
+	tlbi	vmalle1
+	dsb	nsh
 	isb
 
 	/* set exception vector */
@@ -806,7 +809,6 @@ load_ttbrs:
 	msr	ttbr1_el1, x1
 	ret
 
-
 init_mmutable:
 	stp	x26, lr, [sp, #-16]!
 
@@ -912,14 +914,9 @@ mmu_disable:
 mmu_enable:
 	dsb	sy
 
-	/* Invalidate all TLB */
-	dsb	ishst
-#ifdef MULTIPROCESSOR
-	tlbi	vmalle1is
-#else
+	/* Invalidate local TLB */
 	tlbi	vmalle1
-#endif
-	dsb	ish
+	dsb	nsh
 	isb
 
 	ldr	x0, mair_setting
@@ -947,7 +944,6 @@ mmu_enable:
 	isb
 
 	ret
-
 
 	.align 3
 mair_setting:
@@ -995,7 +991,6 @@ tcr_setting:
 #else
 #define SCTLR_SA_CONFIG		0
 #endif
-
 
 sctlr_set:
 	.quad ( \

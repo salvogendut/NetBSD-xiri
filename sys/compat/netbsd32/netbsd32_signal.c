@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_signal.c,v 1.55 2024/11/22 10:41:50 mlelstv Exp $	*/
+/*	$NetBSD: netbsd32_signal.c,v 1.57 2026/10/14 19:32:04 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_signal.c,v 1.55 2024/11/22 10:41:50 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_signal.c,v 1.57 2026/10/14 19:32:04 riastradh Exp $");
 
 #if defined(_KERNEL_OPT) 
 #include "opt_ktrace.h"
@@ -472,7 +472,8 @@ getucontext32(struct lwp *l, ucontext32_t *ucp)
 	 * the main context stack.
 	 */
 	if ((l->l_sigstk.ss_flags & SS_ONSTACK) == 0) {
-		ucp->uc_stack.ss_sp = USRSTACK32;
+		ucp->uc_stack.ss_sp =
+		    (uint32_t)(uintptr_t)l->l_proc->p_stackbase;
 		ucp->uc_stack.ss_size = ctob(p->p_vmspace->vm_ssize);
 		ucp->uc_stack.ss_flags = 0;	/* XXX, def. is Very Fishy */
 	} else {
@@ -614,6 +615,7 @@ netbsd32_____sigtimedwait50(struct lwp *l, const struct netbsd32_____sigtimedwai
 	} */
 	struct sys_____sigtimedwait50_args ua;
 
+	memset(&ua, 0, sizeof(ua));
 	NETBSD32TOP_UAP(set, const sigset_t);
 	NETBSD32TOP_UAP(info, siginfo_t);
 	NETBSD32TOP_UAP(timeout, struct timespec);

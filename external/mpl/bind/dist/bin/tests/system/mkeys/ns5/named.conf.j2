@@ -14,33 +14,16 @@
 // NS5
 
 options {
-	query-source address 10.53.0.5;
-	notify-source 10.53.0.5;
-	transfer-source 10.53.0.5;
-	port @PORT@;
-	pid-file "named.pid";
-	listen-on { 10.53.0.5; };
-	listen-on-v6 { none; };
-	recursion yes;
+	{% include_indented "_common/options.conf.j2" %}
 	notify no;
 	dnssec-validation auto;
 	bindkeys-file "managed.conf";
 	servfail-ttl 0;
 };
 
-key rndc_key {
-	secret "1234abcd8765";
-	algorithm @DEFAULT_HMAC@;
-};
+{% include "_common/controls.conf.j2" %}
 
-controls {
-	inet 10.53.0.5 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
-};
-
-zone "." {
-	type hint;
-	file "../../_common/root.hint";
-};
+{% include "_common/root.hint.conf" %}
 
 zone "foo" {
 	type primary;

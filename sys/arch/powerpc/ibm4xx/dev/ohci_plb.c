@@ -1,4 +1,4 @@
-/*	$NetBSD: ohci_plb.c,v 1.1 2026/06/14 00:02:35 rkujawa Exp $	*/
+/*	$NetBSD: ohci_plb.c,v 1.3 2026/09/28 20:41:01 rkujawa Exp $	*/
 
 /*
  * Copyright (c) 2026 The NetBSD Foundation, Inc.
@@ -33,7 +33,8 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ohci_plb.c,v 1.1 2026/06/14 00:02:35 rkujawa Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ohci_plb.c,v 1.3 2026/09/28 20:41:01 rkujawa Exp $");
+
 
 #include <sys/param.h>
 #include <sys/bus.h>

@@ -114,7 +114,7 @@ ZDUMPDIR = $(BINDIR)
 # The "zic" command goes in:
 ZICDIR = $(TOPDIR)/$(USRDIR)/sbin
 
-# Manual pages go in subdirectories of. . .
+# Manual pages go in subdirectories of:
 MANDIR = $(TOPDIR)/$(USRSHAREDIR)/man
 
 # Library functions are put in an archive in LIBDIR.
@@ -129,6 +129,9 @@ TIME_T_ALTERNATIVES_TAIL = int_least32_t.ck uint_least32_t.ck \
 
 # What kind of TZif data files to generate.  (TZif is the binary time
 # zone data format that zic generates; see Internet RFC 9636.)
+# Although TZif files with leap second info are rarely used and the last
+# leap second was in 2016, they are still supported for compatibility
+# with historical timestamps generated via TZif files with leap seconds.
 # If you want only POSIX time, with time values interpreted as
 # seconds since the epoch (not counting leap seconds), use
 #	REDO=		posix_only
@@ -145,20 +148,23 @@ TIME_T_ALTERNATIVES_TAIL = int_least32_t.ck uint_least32_t.ck \
 # nonnegative TZ_CHANGE_INTERVAL also assumes this, so to be compatible with
 # these, use "posix_only" or "posix_right".  Use POSIX time on systems with
 # leap smearing; this can work better than unsmeared "right" time with
-# applications that are not leap second aware, and is closer to unsmeared
+# applications that are not aware of leap seconds, and is closer to unsmeared
 # "right" time than unsmeared POSIX time is (e.g., 0.5 vs 1.0 s max error).
 
 REDO=		posix_only
 
 # Whether to put an "Expires" line in the leapseconds file.
-# Use EXPIRES_LINE=1 to put the line in, 0 to omit it.
-# The EXPIRES_LINE value matters only if REDO's value contains "right".
+# Use EXPIRES_LINE=1 to put the "Expires" line in, 0 to omit it.
+# This variable is obsolescent and should be removed in a future release.
+# It defaults to 0 because the circa 2020 effort to support it
+# became obsolete after the 2026 decision to discontinue leap seconds.
+# The EXPIRES_LINE value does not affect the contents of TZif files;
+# it affects only the leapseconds file itself, so it matters only if
+# the leapseconds file is used directly by third-party software.
 # If you change EXPIRES_LINE, remove the leapseconds file before running "make".
 # zic's support for the Expires line was introduced in tzdb 2020a,
-# and was modified in tzdb 2021b to generate version 4 TZif files.
-# EXPIRES_LINE defaults to 0 for now so that the leapseconds file
-# can be given to pre-2020a zic implementations and so that TZif files
-# built by newer zic implementations can be read by pre-2021b libraries.
+# was modified in tzdb 2021b to generate version 4 TZif files,
+# and was removed after tzdb 2026e was released.
 EXPIRES_LINE=	0
 
 # To install data in text form that has all the information of the TZif data,
@@ -172,9 +178,9 @@ EXPIRES_LINE=	0
 
 TZDATA_TEXT=	leapseconds tzdata.zi
 
-# For backward-compatibility links for old zone names, use
+# For backward-compatibility links and zones for old names, use
 #	BACKWARD=	backward
-# To omit these links, use
+# To omit these links and zones, use
 #	BACKWARD=
 
 BACKWARD=	backward
@@ -295,10 +301,10 @@ LDLIBS=
 #  -DTHREAD_SAFE to make localtime.c thread-safe, as POSIX requires;
 #	not needed by the main-program tz code, which is single-threaded.
 #	Append other compiler flags as needed, e.g., -pthread on GNU/Linux.
-#	The following options can also be used:
+#	With -DTHREAD_SAFE the following options can also be used:
 #	  -DTHREAD_PREFER_SINGLE to prefer speed in single-threaded apps,
 #	    at some cost in CPU time and energy in multi-threaded apps.
-#	    The following options can also be used:
+#	    With -DTHREAD_PREFER_SINGLE the following options can also be used:
 #	      -DHAVE___ISTHREADED=1 if there is an extern int __isthreaded
 #		variable, 0 otherwise (default is guessed)
 #	      -DHAVE_SYS_SINGLE_THREADED_H=0 if <sys/single_threaded.h> works,
@@ -317,6 +323,8 @@ LDLIBS=
 #	    It also costs CPU time and memory.
 #  -Dtime_tz=\"T\" to use T as the time_t type, rather than the system time_t
 #	This is intended for internal use only; it mangles external names.
+#  -DMIN_TRANSITION_GAP=N to reject TZif files containing transitions
+#	separated by fewer than N seconds.  See localtime.c.
 #  -DTZ_CHANGE_INTERVAL=N if functions depending on TZ should check
 #	no more often than every N seconds for TZif file changes.
 #	If N is negative (the default), no such checking is done.
@@ -377,12 +385,13 @@ GCC_DEBUG_FLAGS = -DGCC_LINT -g3 -O3 \
   -Wdeclaration-after-statement -Wdouble-promotion \
   -Wduplicated-branches -Wduplicated-cond -Wflex-array-member-not-at-end \
   -Wformat=2 -Wformat-overflow=2 -Wformat-signedness -Wformat-truncation \
-  -Wimplicit-fallthrough=5 -Winit-self -Wlogical-op \
+  -Wfree-labels -Wimplicit-fallthrough=5 -Winit-self \
+  -Wkeyword-macro -Wlogical-op \
   -Wmissing-declarations -Wmissing-prototypes \
   -Wmissing-variable-declarations -Wnested-externs \
   -Wnull-dereference \
   -Wold-style-definition -Woverlength-strings -Wpointer-arith \
-  -Wshadow -Wshift-overflow=2 -Wstrict-overflow \
+  -Wshadow -Wshift-overflow=2 \
   -Wstrict-prototypes -Wstringop-overflow=4 \
   -Wsuggest-attribute=cold \
   -Wsuggest-attribute=const -Wsuggest-attribute=format \
@@ -533,7 +542,7 @@ ZIC_INSTALL=	$(ZIC) -d '$(DESTDIR)$(TZDIR)'
 # mawk 1.3.3 and Solaris 10 /usr/bin/awk do not work.
 # Also, it is better (though not essential) if 'awk' supports UTF-8,
 # and unfortunately mawk and busybox awk do not support UTF-8.
-# Try AWK=gawk or AWK=nawk if your awk has the abovementioned problems.
+# Try AWK=gawk or AWK=nawk if your awk has the problems mentioned above.
 AWK=		awk
 
 # The full path name of a POSIX-compliant shell, preferably one that supports
@@ -573,7 +582,7 @@ SAFE_CHAR=	'[]'$(SAFE_CHARSET)'-]'
 # These non-alphabetic, non-ASCII printable characters are
 # used in commentary or in generated *.txt files
 # and are not likely to cause confusion.
-UNUSUAL_OK_CHARSET= §«°±»½¾×–‘’“”•→−≤★⟨⟩⯪
+UNUSUAL_OK_CHARSET= §«°±»½¾¿×–‘’“”•→−≤★⟨⟩⯪
 
 # Put this in a bracket expression to match spaces.
 s = [:space:]
@@ -913,7 +922,7 @@ tzselect:	tzselect.ksh version
 check: check_mild back.ck now.ck
 check_mild: check_web check_zishrink \
   character-set.ck white-space.ck links.ck mainguard.ck \
-  name-lengths.ck slashed-abbrs.ck sorted.ck \
+  name-lengths.ck news.ck slashed-abbrs.ck sorted.ck \
   tables.ck ziguard.ck tzs.ck
 
 # True if UTF8_LOCALE does not work;
@@ -921,7 +930,7 @@ check_mild: check_web check_zishrink \
 UTF8_LOCALE_MISSING = \
   { test ! '$(UTF8_LOCALE)' \
     || ! printf 'A\304\200B\n' \
-         | LC_ALL='$(UTF8_LOCALE)' grep -q '^A.B$$' >/dev/null 2>&1 \
+         | LC_ALL='$(UTF8_LOCALE)' grep -q '^A[[:alpha:]]B$$' >/dev/null 2>&1 \
     || { export LC_ALL='$(UTF8_LOCALE)'; false; }; }
 
 character-set.ck: $(ENCHILADA)
@@ -1004,11 +1013,11 @@ now.ck: checknow.awk date tzdata.zi zdump zic zone1970.tab zonenow.tab
 		now=$(CHECK_NOW_TIMESTAMP) && \
 		  future=$$(($(CHECK_NOW_FUTURE_SECS) + $$now)) && \
 		  ./zdump -i -t $$now,$$future \
-		     $$(find "$$PWD/$@d"/????*/ -type f) \
+		     $$(find "$$PWD/$@d"/????*/ -type f -o -type l) \
 		     >$@d/zdump-now.tab && \
 		  ./zdump -i -t 0,$$future \
 		     $$(find "$$PWD/$@d" -name Etc -prune \
-			  -o -type f ! -name '*.tab' -print) \
+			  -o \( -type f -o -type l \) ! -name '*.tab' -print) \
 		     >$@d/zdump-1970.tab && \
 		$(AWK) \
 		  -v now=$$now \
@@ -1016,7 +1025,12 @@ now.ck: checknow.awk date tzdata.zi zdump zic zone1970.tab zonenow.tab
 		  -v zdump_table=$@d/zdump-now.tab \
 		  -f checknow.awk zonenow.tab
 		$(AWK) \
-		  'BEGIN {print "-\t-\tUTC"} /^Zone/ {print "-\t-\t" $$2}' \
+		  'BEGIN { \
+		     SysVzone["EST5EDT"] = 1; SysVzone["CST6CDT"] = 1; \
+		     SysVzone["MST7MDT"] = 1; SysVzone["PST8PDT"] = 1; \
+		     print "-\t-\tUTC" \
+		   } \
+		   $$1 == "Zone" && !SysVzone[$$2] {print "-\t-\t" $$2}' \
 		  $(PRIMARY_YDATA) backward factory | \
 		 $(AWK) \
 		   -v zdump_table=$@d/zdump-1970.tab \
@@ -1082,6 +1096,12 @@ zishrink-posix.ck zishrink-right.ck: \
 		rm -fr $@d t-$@d shrunk-$@d
 		touch $@
 
+# Check that NEWS has data release versions and dates in reverse order.
+news.ck: NEWS
+		grep '^Release [0-9][0-9][0-9][0-9]' NEWS | LC_ALL=C sort -cru
+		sed -n '/ -0000$$/!s/^Release [^ ]*//p' NEWS|LC_ALL=C sort -cru
+		touch $@
+
 clean_misc:
 		rm -fr *.ckd *.dir
 		rm -f *.ck *.core *.o *.out *.t core core.* \
@@ -1138,7 +1158,8 @@ SET_TIMESTAMP_N = sh -c '\
 # If DEST depends on A B C ... in this Makefile, callers should use
 # $(SET_TIMESTAMP_DEP) DEST A B C ..., for the benefit of any
 # downstream 'make' that considers equal timestamps to be out of date.
-# POSIX allows this 'make' behavior, and HP-UX 'make' does it.
+# POSIX allows this 'make' behavior, although only HP-UX 'make'
+# (which is no longer supported) did things that way.
 # If all that matters is that the timestamp be reproducible
 # and plausible, use $(SET_TIMESTAMP).
 SET_TIMESTAMP = $(SET_TIMESTAMP_N) 0
@@ -1398,24 +1419,6 @@ $(ALL_ASC):
 		$(SET_TIMESTAMP) $(@:.t=) $(?:.t=)
 		touch $@
 
-TYPECHECK_CFLAGS = $(CFLAGS) -DTYPECHECK -D__time_t_defined -D_TIME_T
-typecheck: long-long.ck unsigned.ck
-long-long.ck unsigned.ck: $(VERSION_DEPS)
-		rm -fr $@d
-		mkdir $@d
-		ln $(VERSION_DEPS) $@d
-		cd $@d && \
-		  case $@ in \
-		    long-long.*) i="long long";; \
-		    unsigned.* ) i="unsigned" ;; \
-		  esac && \
-		  $(MAKE) \
-		    CFLAGS="$(TYPECHECK_CFLAGS) \"-Dtime_t=$$i\"" \
-		    TOPDIR="$$PWD" \
-		    install
-		$@d/zdump -i -c 1970,1971 Europe/Rome
-		touch $@
-
 zonenames:	tzdata.zi
 		@$(AWK) '/^Z/ { print $$2 } /^L/ { print $$3 }' tzdata.zi
 
@@ -1441,6 +1444,5 @@ zic.o:		private.h tzdir.h tzfile.h version.h
 .PHONY: traditional_signatures traditional_signatures_version
 .PHONY: traditional_tarballs traditional_tarballs_version
 .PHONY: tailored_tarballs tailored_tarballs_version
-.PHONY: typecheck
 .PHONY: zonenames zones
 .PHONY: $(ZDS)

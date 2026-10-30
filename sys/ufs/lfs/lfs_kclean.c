@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_kclean.c,v 1.4 2026/01/05 05:02:47 perseant Exp $	*/
+/*	$NetBSD: lfs_kclean.c,v 1.6 2026/09/23 17:47:52 perseant Exp $	*/
 
 /*-
  * Copyright (c) 2025 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lfs_kclean.c,v 1.4 2026/01/05 05:02:47 perseant Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lfs_kclean.c,v 1.6 2026/09/23 17:47:52 perseant Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -116,7 +116,7 @@ ino_func_setclean(struct lfs_inofuncarg *lifa)
 			/* Not ifile.  Check address against ifile. */
 			LFS_IENTRY(ifp, fs, ino, ibp);
 			true_addr = lfs_if_getdaddr(fs, ifp);
-			brelse(ibp, 0);
+			LFS_RELEASEIENTRY(ifp, fs, ino, ibp);
 		}
 		if (offset != true_addr)
 			continue;
@@ -189,7 +189,7 @@ ino_func_rewrite(struct lfs_inofuncarg *lifa)
 			/* Not ifile.  Check address against ifile. */
 			LFS_IENTRY(ifp, fs, ino, ibp);
 			true_addr = lfs_if_getdaddr(fs, ifp);
-			brelse(ibp, 0);
+			LFS_RELEASEIENTRY(ifp, fs, ino, ibp);
 		}
 		if (offset != true_addr)
 			continue;
@@ -537,7 +537,7 @@ lfs_rewrite_segments(struct lfs *fs, int *snn, int len, int *directp, int *offse
 		    || !(sup->su_flags & SEGUSE_DIRTY))
 			error = EINVAL;
 
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, snn[i], bp);
 		if (error)
 			break;
 
@@ -565,7 +565,7 @@ lfs_rewrite_segments(struct lfs *fs, int *snn, int len, int *directp, int *offse
 		    || !(sup->su_flags & SEGUSE_DIRTY))
 			error = EINVAL;
 
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, snn[i], bp);
 		if (error)
 			break;
 
@@ -616,14 +616,24 @@ ino_func_checkempty(struct lfs_inofuncarg *lifa)
 	for (i = num; i-- > 0; ) {
 		dip = DINO_IN_BLOCK(fs, dbp->b_data, i);
 		ino = lfs_dino_getinumber(fs, dip);
-		if (ino == LFS_IFILE_INUM) {
+		if (ino == 0) {
+			/* The last inode block is zero-padded. Ignore this. */
+			continue;
+		} else if (ino == LFS_IFILE_INUM) {
 			/* Check address against superblock */
 			true_addr = lfs_sb_getidaddr(fs);
+		} else if (ino >= LFS_MAXINO(fs)) {
+			/*
+			 * An inode greater than we have must be from a
+			 * previous allocation that was not rolled forward.
+			 * For our purposes, it does not exist.
+			 */
+			continue;
 		} else {
 			/* Not ifile.  Check address against ifile. */
 			LFS_IENTRY(ifp, fs, ino, ibp);
 			true_addr = lfs_if_getdaddr(fs, ifp);
-			brelse(ibp, 0);
+			LFS_RELEASEIENTRY(ifp, fs, ino, ibp);
 		}
 		if (offset == true_addr) {
 			error = EEXIST;
@@ -655,6 +665,14 @@ finfo_func_checkempty(struct lfs_finfofuncarg *lffa)
 	/* Get the inode and check its version. */
 	ino = lfs_fi_getino(fs, fip);
 	gen = lfs_fi_getversion(fs, fip);
+
+	if (lfs_fi_getnblocks(fs, fip) <= 0 || ino < LFS_IFILE_INUM)
+		return EINVAL;
+
+	/* We can safely ignore this; see comment in ino_func_checkempty. */
+	if (ino >= LFS_MAXINO(fs))
+		return 0;
+
 	error = VFS_VGET(fs->lfs_ivnode->v_mount, ino, LK_EXCLUSIVE|LK_NOWAIT, &vp);
 
 	/*
@@ -713,16 +731,16 @@ finfo_func_checkempty(struct lfs_finfofuncarg *lffa)
 int
 lfs_checkempty(struct lfs *fs, int sn, kauth_cred_t cred, struct lwp *l)
 {
-	daddr_t offset, endpseg;
+	daddr_t offset, ooffset, endpseg;
 	int error;
 
 	ASSERT_SEGLOCK(fs);
 
-	offset = lfs_sntod(fs, sn);
+	offset = ooffset = lfs_sntod(fs, sn);
 	lfs_skip_superblock(fs, &offset);
 	endpseg = lfs_sntod(fs, sn + 1);
 	
-	while (offset > 0 && offset < endpseg) {
+	while (offset >= ooffset && offset < endpseg) {
 		error = lfs_parse_pseg(fs, &offset, 0, cred, NULL, l,
 				     ino_func_checkempty,
 				     finfo_func_checkempty,
@@ -961,7 +979,7 @@ clean(struct lfs *fs)
 			maxsn = sn;
 			segflags = sup->su_flags;
 		}
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, sn, bp);
 	}
 	DLOG((DLOG_CLEAN, "%s clean=%d/%d zero=%d empty=%d ready=%d maxsn=%d maxprio=%ld/%ld segflags=0x%lx\n",
 	       (maxprio > thresh ? "YES" : "NO "),

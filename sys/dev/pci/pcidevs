@@ -1,4 +1,4 @@
-$NetBSD: pcidevs,v 1.1538 2026/03/08 19:30:20 mlelstv Exp $
+$NetBSD: pcidevs,v 1.1548 2026/10/18 18:49:20 palle Exp $
 
 /*
  * Copyright (c) 1995, 1996 Christopher G. Demetriou
@@ -612,6 +612,7 @@ vendor SAFENET		0x16ae	SafeNet
 vendor MICREL		0x16c6	Micrel
 vendor USR2		0x16ec	US Robotics
 vendor NETOCTAVE	0x170b	Netoctave
+vendor FUJITSUTECH	0x1734	Fujitsu Technology Solutions
 vendor LINKSYS		0x1737	Linksys
 vendor ALTIMA		0x173b	Altima
 vendor ANTARES		0x1754	Antares Microsystems
@@ -619,6 +620,7 @@ vendor CAVIUM		0x177d	Cavium
 vendor NSYS		0x1794	nSYS Technologies
 vendor FZJZEL		0x1796	FZ Juelich / ZEL
 vendor BELKIN		0x1799	Belkin
+vendor GENESYS		0x17a0	Genesys Logic
 vendor HAWKING		0x17b3	Hawking Technology
 vendor SANDBURST	0x17ba	Sandburst
 vendor NETCHIP		0x17cc	PLX Technology (NetChip)
@@ -2169,7 +2171,7 @@ product ATI RADEON_R9FURY	0x7300	Radeon R9 FURY / NANO Series
 product ATI RADEON_W5700X	0x7310	Radeon Pro W5700X
 product ATI RADEON_W5700	0x7312	Radeon Pro W5700
 product ATI RADEON_RX5600	0x731f	Radeon RX 5600 OEM/5600 XT / 5700/5700 XT
-product ATI RADEON_RX5500	0x7340	Radeon RX 5500/5500M / Pro 5500M
+product ATI RADEON_RX5500	0x7340	Radeon RX 5500/5500M / Pro 5300/5300M/5500M
 product ATI RADEON_W5500	0x7341	Radeon Pro W5500
 product ATI RADEON_W5500M	0x7347	Radeon Pro W5500M
 product ATI RADEON_W5300M	0x734f	Radeon Pro W5300M
@@ -3384,6 +3386,9 @@ product	FUJITSU4	PW008GE5	0x11a1	PW008GE5
 product	FUJITSU4	PW008GE4	0x11a2	PW008GE4
 product	FUJITSU4	PP250_450_LAN	0x11cc	PRIMEPOWER250/450 LAN
 
+/* Fujitsu Technology Solutions products */
+product	FUJITSUTECH IRMC_S5	0x1228	iRMC S5
+
 /* FZ Juelich / ZEL products */
 product FZJZEL	GIGALINK	0x0001	Gigabit Link / STR1100
 product FZJZEL	PLXHOTLINK	0x0002	HOTlink Interface
@@ -3572,6 +3577,8 @@ product MEDIATEK MT7922		0x0616  MT7922 Wi-Fi 6 Wireless LAN
 product MEDIATEK MT7921		0x7961  MT7921 Wi-Fi 6 Wireless LAN
 product MEDIATEK MT7925		0x7925  MT7925 Wi-Fi 7 Wireless LAN
 product MEDIATEK MT7927		0x7927	MT7927 Wi-Fi 7 Wireless LAN
+product MEDIATEK MT7996		0x7990	MT7996 Wi-Fi 7 Wireless LAN
+product MEDIATEK MT7996_2	0x7991	MT7996 Wi-Fi 7 Wireless LAN
 
 /* Micro-star International Co Ltd */
 product MSI RT3090		0x891a	MSI RT3090
@@ -3582,6 +3589,9 @@ product GLOBALSUN GL24110P02	0x1102	GL24110P PCI IEEE 802.11b
 
 /* Guillemot products */
 product GUILLEMOT MAXIRADIO	0x1001	MAXIRADIO
+
+/* Genesys Logic products */
+product GENESYS GL9755		0x9755	GL9755
 
 /* Hawking products */
 product HAWKING PN672TX		0xab08	PN672TX 10/100 Ethernet
@@ -4858,6 +4868,7 @@ product INTEL C2000_25GBE	0x1f45	C2000 Ethernet(2.5Gbe)
 product INTEL XEONSC_UBOX_0	0x2014	Xeon Scalable Ubox
 product INTEL XEONSC_UBOX_1	0x2015	Xeon Scalable Ubox
 product INTEL XEONSC_UBOX_2	0x2016	Xeon Scalable Ubox
+product INTEL XEONSC_VMD	0x201d	Xeon Scalable Volume Management Device
 product INTEL XEONSC_M2PCIR	0x2018	Xeon Scalable M2PCI
 product INTEL XEONSC_HB		0x2020	Xeon Scalable Host
 product INTEL XEONSC_CBDMAR	0x2021	Xeon Scalable CBDMA
@@ -5246,7 +5257,7 @@ product INTEL 82801H_HDA	0x284b	82801H High Definition Audio Controller
 product INTEL 82801H_THERMAL	0x284f	82801H Thermal Controller
 product INTEL 82801HBM_IDE	0x2850	82801H IDE Controller
 product INTEL SNR_DDRIO		0x2880	Snow Ridge DDRIO
-product INTEL SNR_VMD		0x28c0	Snow Ridge VMD
+product INTEL SNR_VMD		0x28c0	Snow Ridge Volume Management Device
 product INTEL 82801IH_LPC	0x2912	82801IH LPC Interface Bridge
 product INTEL 82801IO_LPC	0x2914	82801IO LPC Interface Bridge
 product INTEL 82801IR_LPC	0x2916	82801IR LPC Interface Bridge
@@ -6259,6 +6270,7 @@ product INTEL RKL_PCIE_RP_1	0x4c05	Rocket Lake PCIe Root Port 1 (x8)
 product INTEL RKL_PCIE_RP_2	0x4c07	Rocket Lake PCIe Root Port 2 (x4)
 product INTEL RKL_PCIE_RP_3	0x4c09	Rocket Lake PCIe Root Port 3 (x4)
 product INTEL RKL_GNA		0x4c11	Rocket Lake Gauss Newton Algorithm
+product INTEL RKL_VMD		0x4c3d	Rocket Lake Volume Management Device
 product INTEL RKL_8C_HOST	0x4c43	Rocket Lake (8Core) Host
 product INTEL RKL_6C_HOST	0x4c53	Rocket Lake (8Core) Host
 product INTEL RKL_IGD_1		0x4c8a	Rocket Lake UHD Graphics 750 (32EU)
@@ -6805,7 +6817,7 @@ product INTEL 6HS_H_GSPI_2	0x7afb	600 Series PCH-H GSPI 2
 product INTEL 6HS_H_I2C_4	0x7afc	600 Series PCH-H I2C 4
 product INTEL 6HS_H_I2C_5	0x7afd	600 Series PCH-H I2C 5
 product INTEL 6HS_H_UART_2	0x7afe	600 Series PCH-H UART 2
-product INTEL VMD_MTL		0x7d0b	Volume Management Device
+product INTEL VMD_MTL		0x7d0b	Meteor Lake Volume Management Device
 product INTEL NPU_MTL		0x7d1d	Meteor Lake NPU
 product INTEL LPC_MTL		0x7e02	Meteor Lake LPC/ISA Bridge
 product INTEL PCH_MTL		0x7d14	Meteor Lake PCH
@@ -7704,6 +7716,7 @@ product ITT ITT3204	0x0002	ITT3204 MPEG Decoder
 /* JMicron products */
 product JMICRON	JMC250		0x0250 JMC250 Gigabit Ethernet Controller
 product JMICRON	JMC260		0x0260 JMC260 Fast Ethernet Controller
+product JMICRON	JMB58X		0x0585 JMB58x JMB58x AHCI SATA controller
 product JMICRON	JMB360		0x2360 JMB360 SATA Controller
 product JMICRON	JMB361		0x2361 JMB361 SATA/PATA Controller
 product JMICRON	JMB362		0x2362 JMB362 SATA Controller
@@ -9426,6 +9439,7 @@ product RDC	R6061_EHCI	0x6061	R6061 USB EHCI
 /* Realtek products */
 product REALTEK E2600		0x2600	Killer E2600
 product REALTEK E3000		0x3000	Killer E3000
+product REALTEK E5000		0x5000	Killer E5000
 product REALTEK RTS5208		0x5208	RTS5208 PCI-E Card Reader
 product REALTEK RTS5209		0x5209	RTS5209 PCI-E Card Reader
 product REALTEK RTS5227		0x5227	RTS5227 PCI-E Card Reader
@@ -9450,6 +9464,8 @@ product REALTEK RT8168_2	0x8161	8161 10/100/1000 Ethernet
 product REALTEK RT8169SC	0x8167	8169SC/8110SC 10/100/1000 Ethernet
 product REALTEK RT8168		0x8168	8168/8111 10/100/1000 Ethernet
 product REALTEK RT8169		0x8169	8169/8110 10/100/1000 Ethernet
+product REALTEK RT816A		0x816A	DASH 16550-compatible serial port
+product REALTEK RT816B		0x816B	DASH 16550-compatible serial port
 product REALTEK RTL8188CE	0x8176	RTL8188CE Wireless LAN 802.11n PCI-E NIC
 product REALTEK RTL8192CE	0x8178	RTL8192CE Wireless LAN 802.11n PCI-E NIC
 product REALTEK RTL8188EE	0x8179	RTL8188EE Wireless LAN 802.11n PCI-E NIC
@@ -9461,6 +9477,10 @@ product REALTEK RTL8821CE	0xc821	RTL8821CE 802.11ac PCIe NIC
 /* Red Hat products */
 product REDHAT PPB		0x0001	Qemu PCI-PCI
 product REDHAT QXL		0x0100	QXL Video
+
+/* Rendition products */
+product RENDITION V1000		0x0001	Verite V1000
+product RENDITION V2X00		0x2000	Verite V2100/V2200
 
 /* Renesas products */
 product RENESAS SH7780		0x0002	SH7780 PCI Controller
@@ -9911,6 +9931,7 @@ product TI	PCIXX12FW	0x803a	PCIXX12 IEEE 1394 Host Controller
 product TI	PCIXX12FM	0x803b	PCIXX12 Integrated FlashMedia Controller
 product TI	PCIXX12SD	0x803c	PCIXX12 Secure Digital Host Controller
 product TI	PCIXX12SM	0x803d	PCIXX12 Smart Card
+product TI	XHCI		0x8241	xHCI
 product TI	ACX100A		0x8400	ACX100A 802.11b
 product TI	ACX100B		0x8401	ACX100B 802.11b
 product TI	ACX111		0x9066	ACX111 802.11b/g
@@ -10480,45 +10501,70 @@ product ZEINET 1221	0x0001	1221
 product ZIATECH ZT8905	0x8905 PCI-ST32 Bridge
 
 /* Zhaoxin products */
-product ZHAOXIN ZX100_PCIE		0x0708	ZX-100 PCI Express Root Port
-product ZHAOXIN ZX200_PCIE_0		0x0710	ZX-100/ZX-200 PCI Express Root Port
-product ZHAOXIN ZX200_PCIE_1		0x0711	ZX-100/ZX-200 PCI Express Root Port
-product ZHAOXIN ZX200_PCIE_2		0x0712	ZX-100/ZX-200 PCI Express Root Port
-product ZHAOXIN ZX200_PCIE_3		0x0713	ZX-100/ZX-200 PCI Express Root Port
-product ZHAOXIN ZX200_PCIE_4		0x0714	ZX-100/ZX-200 PCI Express Root Port
-product ZHAOXIN ZX200_PCIE_5		0x0715	ZX-100/ZX-200 PCI Express Root Port
-product ZHAOXIN ZXD_PCIE		0x0716	ZX-D PCI Express Root Port
-product ZHAOXIN KX_PCIE_0		0x0717	KX-5000|6000(G)|7000 / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_1		0x0718	KX-5000|6000(G)|7000 / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_2		0x0719	KX-5000|6000(G)|7000 / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_3		0x071a	KX-5000|6000(G) / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_4		0x071b	KX-5000|6000(G)|7000 / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_5		0x071c	KX-5000|6000(G)|7000 / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_6		0x071d	KX-5000|6000(G) / KH-40000 PCI Express Root Port
-product ZHAOXIN KX_PCIE_7		0x071e	KX-5000|6000(G)|7000 / KH-40000 PCI Express Root Port
-product ZHAOXIN ZX200_UP_PCIE_SWITCH	0x071f	ZX-200 Upstream Port of PCI Express Switch
-product ZHAOXIN ZX200_DP_PCIE_SWITCH	0x0721	ZX-200 Downstream Port of PCI Express Switch
+product ZHAOXIN ZX100_PCIE		0x0708	ZX-100 PCIE Root Port
+product ZHAOXIN ZX200_PCIE_0		0x0710	ZX-100/ZX-200 PCIE Root Port
+product ZHAOXIN ZX200_PCIE_1		0x0711	ZX-100/ZX-200 PCIE Root Port
+product ZHAOXIN ZX200_PCIE_2		0x0712	ZX-100/ZX-200 PCIE Root Port
+product ZHAOXIN ZX200_PCIE_3		0x0713	ZX-100/ZX-200 PCIE Root Port
+product ZHAOXIN ZX200_PCIE_4		0x0714	ZX-100/ZX-200 PCIE Root Port
+product ZHAOXIN ZX200_PCIE_5		0x0715	ZX-100/ZX-200 PCIE Root Port
+product ZHAOXIN ZXD_PCIE		0x0716	ZX-D PCIE Root Port
+product ZHAOXIN KX_PCIE_0		0x0717	KX-5000|6000(G)|7000 / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_1		0x0718	KX-5000|6000(G)|7000 / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_2		0x0719	KX-5000|6000(G)|7000 / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_3		0x071a	KX-5000|6000(G) / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_4		0x071b	KX-5000|6000(G)|7000 / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_5		0x071c	KX-5000|6000(G)|7000 / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_6		0x071d	KX-5000|6000(G) / KH-40000 PCIE Root Port
+product ZHAOXIN KX_PCIE_7		0x071e	KX-5000|6000(G)|7000 / KH-40000 PCIE Root Port
+product ZHAOXIN ZX200_UP_PCIE_SWITCH	0x071f	ZX-200 Upstream Port of PCIE Switch
+product ZHAOXIN ZX200_DP_PCIE_SWITCH	0x0721	ZX-200 Downstream Port of PCIE Switch
 product ZHAOXIN ZX200_PCIE_PC2_BRIDGE	0x0722	ZX-200 PCIE P2C bridge
+product ZHAOXIN KH40000_PCIE_0		0x0731	KH-40000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_0		0x0732	KH-40000/KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_1		0x0733	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_2		0x0734	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_3		0x0735	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_4		0x0736	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_5		0x0737	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_6		0x0738	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_7		0x0739	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_8		0x073a	KX-7000 PCIE Root Port
+product ZHAOXIN KX7000_PCIE_9		0x073b	KX-7000 PCIE Root Port
 product ZHAOXIN ZX_MISC_BUS		0x1001	ZX-D/ZX-E/KH-40000/KX-7000 Miscellaneous Bus
 product ZHAOXIN ZX_PCHB_0		0x1003	ZX-E Standard Host Bridge
+product ZHAOXIN KX6000G_PCHB_0		0x1006	KX-6000G Standard Host Bridge
+product ZHAOXIN KX7000_PCHB_0		0x1007	KX-7000 Standard Host Bridge
 product ZHAOXIN ZX_UHCI			0x3038	USB UHCI Controller
 product ZHAOXIN ZX_EHCI			0x3104	USB EHCI Controller
-product ZHAOXIN ZX_PCHB_1		0x31b0	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Standard Host Bridge
-product ZHAOXIN ZX_PCHB_2		0x31b1	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Standard Host Bridge
+product ZHAOXIN ZX_ERR_0		0x31b0	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Error Reporting
+product ZHAOXIN ZX_CPU_BC		0x31b1	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 CPU Bus Controller
 product ZHAOXIN ZX_DRAM			0x31b2	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 DRAM Controller
 product ZHAOXIN ZX_PMC			0x31b3	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Power Management Controller
 product ZHAOXIN ZX_IOAPIC		0x31b4	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 I/O APIC
 product ZHAOXIN ZX_SCRATCH		0x31b5	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Scratch Device
-product ZHAOXIN ZX_PCHB_3		0x31b7	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Standard Host Bridge
+product ZHAOXIN ZX_PCHB_1		0x31b7	ZX-100 / KX-5000|6000(G)|7000 / KH-40000 Standard Host Bridge
+product ZHAOXIN KX7000_HB		0x3200	KX-7000 Host Bridge
+product ZHAOXIN ZX_HDAUDIO		0x3288	Integrated HD Audio Controller
 product ZHAOXIN C320_GPU		0x3a02	ZX-100 C-320 GPU
-product ZHAOXIN C860_GPU		0x3a03	ZX-D C-860 Integrated Graphics
+product ZHAOXIN C860_GPU		0x3a03	KX-5000 C-860 Integrated Graphics
 product ZHAOXIN C960_GPU		0x3a04	KX-6000 C-960 Integrated Graphics
 product ZHAOXIN C1190_GPU		0x3a05	KX-7000 C-1190 Integrated Graphics
+product ZHAOXIN KX7000_DRAM		0x3c00	KH-40000/KX-7000 DRAM Controller
+product ZHAOXIN KX6000G_DRAM		0x3c02	KX-6000G DRAM Controller
+product ZHAOXIN C1080_GPU		0x3d01	KX-6000G C-1080 Integrated Graphics
+product ZHAOXIN ZX_IDE			0x9002	Integrated SATA Controller (IDE mode)
+product ZHAOXIN KX6000_IDE		0x9003	ZX-100/KX-6000(G) SATA Controller (IDE mode)
+product ZHAOXIN ZX_RAID			0x9043	Integrated SATA Controller (RAID mode)
 product ZHAOXIN ZX200_AHCI		0x9083	StorX AHCI Controller
-product ZHAOXIN ZXE_HDAUDIO		0x9144	ZX-E High Definition Audio Controller
+product ZHAOXIN C860_HDAUDIO		0x9142	C-860 HD Audio Controller
+product ZHAOXIN C960_HDAUDIO		0x9144	C-960 HD Audio Controller
+product ZHAOXIN C1080_HDAUDIO		0x9145	C-1080 HD Audio Controller
+product ZHAOXIN C1190_HDAUDIO		0x9146	C-1190 HD Audio Controller
 product ZHAOXIN ZX100_XHCI		0x9202	ZX-100 USB xHCI Controller
 product ZHAOXIN ZX200_XHCI		0x9203	ZX-200 USB xHCI Controller
-product ZHAOXIN KX_XHCI			0x9204	KX-6000(G)|7000 USB xHCI Controller
+product ZHAOXIN ZX_XHCI			0x9204	KX-6000(G)|7000 USB xHCI Controller
+product ZHAOXIN ZX_ESPI			0x9300	eSPI Host Controller
 
 /* Zoran products */
 product ZORAN ZR36057	0x6057	ZR36057 Multimedia Controller

@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.251 2026/06/04 13:58:28 jdc Exp $ */
+/*	$NetBSD: autoconf.c,v 1.258 2026/10/24 22:04:29 palle Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.251 2026/06/04 13:58:28 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.258 2026/10/24 22:04:29 palle Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -576,11 +576,6 @@ sun4v_set_soft_state(int state, const char *desc)
 void
 sun4v_interrupt_init(void)
 {
-	uint64_t minor;
-
-	if (prom_set_sun4v_api_version(HSVC_GROUP_INTERRUPT, 3, 0, &minor))
-		return;
-
 	sun4v_group_interrupt_major = 3;
 }
 
@@ -753,8 +748,10 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 
 		DPRINTF(ACDB_PROBE, ("Node: %x", node));
 		if ((OF_getprop(node, "device_type", sbuf, sizeof(sbuf)) > 0) &&
-		    strcmp(sbuf, "cpu") == 0)
+		    strcmp(sbuf, "cpu") == 0) {
+			DPRINTF(ACDB_PROBE, ("\n"));
 			continue;
+		}
 		OF_getprop(node, "name", sbuf, sizeof(sbuf));
 		DPRINTF(ACDB_PROBE, (" name %s\n", sbuf));
 		for (ssp = openboot_special; (sp = *ssp) != NULL; ssp++)
@@ -1237,7 +1234,11 @@ device_register(device_t dev, void *aux)
 		 */
 		busdev = device_parent(busdev);
 		devhandle = device_handle(busdev);
-		KASSERT(devhandle_type(devhandle) == DEVHANDLE_TYPE_OF);
+		if (devhandle_type(devhandle) != DEVHANDLE_TYPE_OF)
+{
+printf("Not OF: %d\n", devhandle_type(devhandle));
+			return;
+}
 		ofnode = devhandle_to_of(devhandle);
 
 		/*
@@ -1273,7 +1274,8 @@ device_register(device_t dev, void *aux)
 		 * e.g. "atabus".  Get the controller's devhandle.
 		 */
 		devhandle = device_handle(device_parent(busdev));
-		KASSERT(devhandle_type(devhandle) == DEVHANDLE_TYPE_OF);
+		if (devhandle_type(devhandle) != DEVHANDLE_TYPE_OF)
+			return;
 		ofnode = devhandle_to_of(devhandle);
 
 		dev_bi_unit_drive_match(dev, ofnode, adev->adev_channel*2+
@@ -1498,8 +1500,8 @@ device_register_post_config(device_t dev, void *aux)
 			 */
 			devhandle_t ctlr_devhandle = device_handle(
 			    device_parent(device_parent(dev)));
-			KASSERT(devhandle_type(ctlr_devhandle) ==
-			    DEVHANDLE_TYPE_OF);
+			if (devhandle_type(ctlr_devhandle) != DEVHANDLE_TYPE_OF)
+				return;
 			int ofnode = devhandle_to_of(ctlr_devhandle);
 
 			for (ofnode = OF_child(ofnode);

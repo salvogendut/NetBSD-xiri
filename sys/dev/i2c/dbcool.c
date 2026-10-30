@@ -1,4 +1,4 @@
-/*	$NetBSD: dbcool.c,v 1.68 2025/10/05 04:26:08 macallan Exp $ */
+/*	$NetBSD: dbcool.c,v 1.71 2026/10/18 21:08:57 joe Exp $ */
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dbcool.c,v 1.68 2025/10/05 04:26:08 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dbcool.c,v 1.71 2026/10/18 21:08:57 joe Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -73,7 +73,7 @@ static bool dbcool_islocked(struct dbcool_softc *);
 
 /* Sensor read functions */
 static void dbcool_refresh(struct sysmon_envsys *, envsys_data_t *);
-static int dbcool_read_rpm(struct dbcool_softc *, uint8_t);
+static int dbcool_read_rpm(struct dbcool_softc *, uint8_t, int);
 static int dbcool_read_temp(struct dbcool_softc *, uint8_t, bool);
 static int dbcool_read_volt(struct dbcool_softc *, uint8_t, int, bool);
 
@@ -107,8 +107,10 @@ static int sysctl_dbcool_slope(SYSCTLFN_PROTO);
 static int sysctl_dbcool_thyst(SYSCTLFN_PROTO);
 
 /* Set-up subroutines */
+static int  dbcool_set_fan_divider(struct dbcool_softc *, prop_dictionary_t,
+	int);
 static void dbcool_setup_controllers(struct dbcool_softc *);
-static int  dbcool_setup_sensors(struct dbcool_softc *);
+static int  dbcool_setup_sensors(struct dbcool_softc *, prop_dictionary_t);
 static int  dbcool_attach_sensor(struct dbcool_softc *, int);
 static int  dbcool_attach_temp_control(struct dbcool_softc *, int,
 	struct chip_id *);
@@ -732,6 +734,7 @@ CFATTACH_DECL_NEW(dbcool, sizeof(struct dbcool_softc),
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "i2c-adm1031" },
+	{ .compat = "i2c-adt7475" },
 	{ .compat = "adt7467" },
 	{ .compat = "adt7460" },
 	{ .compat = "adm1030" },
@@ -1003,7 +1006,7 @@ dbcool_read_temp(struct dbcool_softc *sc, uint8_t reg, bool extres)
 }
 
 static int
-dbcool_read_rpm(struct dbcool_softc *sc, uint8_t reg)
+dbcool_read_rpm(struct dbcool_softc *sc, uint8_t reg, int fan_div)
 {
 	int rpm;
 	uint8_t rpm_lo, rpm_hi;
@@ -1019,7 +1022,8 @@ dbcool_read_rpm(struct dbcool_softc *sc, uint8_t reg)
 		return 0;	/* 0xffff indicates stalled/failed fan */
 
 	/* don't divide by zero */
-	return (rpm == 0)? 0 : (sc->sc_dc.dc_chip->rpm_dividend / rpm);
+	return (rpm == 0)? 0 :
+	    (sc->sc_dc.dc_chip->rpm_dividend / rpm / fan_div);
 }
 
 /* Provide chip's supply voltage, in microvolts */
@@ -1535,7 +1539,7 @@ dbcool_setup(device_t self)
 
 	/* Create the sensors for this device */
 	sc->sc_sme = sysmon_envsys_create();
-	if (dbcool_setup_sensors(sc))
+	if (dbcool_setup_sensors(sc, device_properties(self)))
 		goto out;
 
 	if (sc->sc_root_sysctl_num != 0) {
@@ -1601,13 +1605,37 @@ out:
 }
 
 static int
-dbcool_setup_sensors(struct dbcool_softc *sc)
+dbcool_set_fan_divider(struct dbcool_softc *sc, prop_dictionary_t props,
+    int sensor)
+{
+	uint16_t props_fan_div, div_val;
+	int div;
+
+	div = 1;
+
+	/*
+	 * Do we have a fan divider property?
+	 * Each 4 bits contains a divider for that fan.
+	 * We only accept dividers up to 8x
+	 */
+	if (prop_dictionary_get_uint16(props,
+	    "fan_div", &props_fan_div) != 0) {
+		div_val = (props_fan_div >> (sc->sc_fan_num * 4)) & 0x0f;
+		if (div_val > 1 && div_val < 9)
+			div *= div_val;
+	}
+	return div;
+}
+
+static int
+dbcool_setup_sensors(struct dbcool_softc *sc, prop_dictionary_t props)
 {
 	int i;
 	int error = 0;
 	uint8_t	vid_reg, vid_val;
 	struct chip_id *chip = sc->sc_dc.dc_chip;
 
+	sc->sc_fan_num = 0;
 	for (i=0; chip->table[i].type != DBC_EOF; i++) {
 		if (i < DBCOOL_MAXSENSORS)
 			sc->sc_sysctl_num[i] = -1;
@@ -1641,11 +1669,15 @@ dbcool_setup_sensors(struct dbcool_softc *sc)
 			error = dbcool_attach_sensor(sc, i);
 			break;
 		case DBC_FAN:
+			sc->sc_fan_div[i] = dbcool_set_fan_divider(sc,
+			    props, i);
+
 			sc->sc_sensor[i].units = ENVSYS_SFANRPM;
 			sc->sc_sensor[i].state = ENVSYS_SINVALID;
 			sc->sc_sensor[i].flags |= ENVSYS_FMONLIMITS;
 			sc->sc_sensor[i].flags |= ENVSYS_FHAS_ENTROPY;
 			error = dbcool_attach_sensor(sc, i);
+			sc->sc_fan_num++;
 			break;
 		case DBC_VID:
 			sc->sc_sensor[i].units = ENVSYS_INTEGER;
@@ -1810,7 +1842,7 @@ static void
 dbcool_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 {
 	struct dbcool_softc *sc=sme->sme_cookie;
-	int i, nom_volt_idx, cur;
+	int i, nom_volt_idx, fan_div, cur;
 	struct reg_list *reg;
 
 	i = edata->sensor;
@@ -1828,7 +1860,8 @@ dbcool_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 						true);
 			break;
 		case ENVSYS_SFANRPM:
-			cur = dbcool_read_rpm(sc, reg->val_reg);
+			fan_div = sc->sc_fan_div[i];
+			cur = dbcool_read_rpm(sc, reg->val_reg, fan_div);
 			break;
 		case ENVSYS_INTEGER:
 			return;
@@ -1986,7 +2019,7 @@ dbcool_get_volt_limits(struct dbcool_softc *sc, int idx,
 {
 	struct reg_list *reg = sc->sc_regs[idx];
 	int64_t limit;
-	int nom;
+	int64_t nom;
 
 	nom = nominal_voltages[sc->sc_dc.dc_chip->table[idx].nom_volt_index];
 	if (nom < 0)
@@ -2014,9 +2047,10 @@ dbcool_get_fan_limits(struct dbcool_softc *sc, int idx,
 		      sysmon_envsys_lim_t *lims, uint32_t *props)
 {
 	struct reg_list *reg = sc->sc_regs[idx];
+	int fan_div = sc->sc_fan_div[idx];
 	int32_t	limit;
 
-	limit = dbcool_read_rpm(sc, reg->lo_lim_reg);
+	limit = dbcool_read_rpm(sc, reg->lo_lim_reg, fan_div);
 	if (limit) {
 		lims->sel_critmin = limit;
 		*props |= PROP_CRITMIN;
@@ -2120,7 +2154,7 @@ dbcool_set_volt_limits(struct dbcool_softc *sc, int idx,
 {
 	struct reg_list *reg = sc->sc_regs[idx];
 	int64_t limit;
-	int nom;
+	int64_t nom;
 
 	nom = nominal_voltages[sc->sc_dc.dc_chip->table[idx].nom_volt_index];
 	if (nom < 0)

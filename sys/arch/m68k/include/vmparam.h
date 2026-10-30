@@ -1,4 +1,4 @@
-/*	$NetBSD: vmparam.h,v 1.10 2026/05/05 00:48:42 thorpej Exp $	*/
+/*	$NetBSD: vmparam.h,v 1.14 2026/07/04 20:02:05 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -96,8 +96,8 @@ extern vaddr_t m68k_usrstack;
 #define	__M68K_DFLT_DFLSSIZ	(512*1024)
 #define	__M68K_DFLT_MAXSSIZ	(4*1024*1024)
 #else
-#define	__M68K_DFLT_MAXTSIZ	(32*1024*1024)
-#define	__M68K_DFLT_DFLDSIZ	(32*1024*1024)
+#define	__M68K_DFLT_MAXTSIZ	(64*1024*1024)
+#define	__M68K_DFLT_DFLDSIZ	(64*1024*1024)
 #define	__M68K_DFLT_MAXDSIZ	(256*1024*1024)
 #define	__M68K_DFLT_DFLSSIZ	(2*1024*1024)
 #define	__M68K_DFLT_MAXSSIZ	(64*1024*1024)
@@ -193,6 +193,10 @@ extern vaddr_t kernel_virtual_max;
 #else
 #define	VM_PHYS_SIZE		(1 * 1024 * 1024)
 #endif
+#endif
+
+#if defined(__mc68010__)
+#define	PAGER_MAP_DEFAULT_SIZE	(1 * 1024 * 1024)
 #endif
 
 /*

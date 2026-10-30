@@ -11,28 +11,16 @@
  * information regarding copyright ownership.
  */
 
-include "../../_common/rndc.key";
-
-controls {
-	inet 10.53.0.3 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
-};
+{% include "_common/controls.conf.j2" %}
 
 options {
-	query-source address 10.53.0.3;
-	notify-source 10.53.0.3;
-	transfer-source 10.53.0.3;
-	port @PORT@;
-	pid-file "named.pid";
-	listen-on { 10.53.0.3; };
-	listen-on-v6 { none; };
-	recursion yes;
+	{% include_indented "_common/options.conf.j2" %}
 	dnssec-validation no;
 	response-policy { zone "policy"; } nsdname-wait-recurse no
-		nsdname-enable yes;
+	nsdname-enable yes;
 
 	include "../dnsrps.conf";
 };
-
 
 zone "policy" { type primary; file "policy.db"; };
 

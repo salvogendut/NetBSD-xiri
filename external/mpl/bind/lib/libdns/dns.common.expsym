@@ -46,6 +46,7 @@ dns__rbtdb_attachnode
 dns__rbtdb_attachversion
 dns__rbtdb_bindrdataset
 dns__rbtdb_cachemethods
+dns__rbtdb_clean_stale_headers
 dns__rbtdb_closeversion
 dns__rbtdb_create
 dns__rbtdb_createiterator
@@ -79,7 +80,6 @@ dns__rbtnode_release
 dns__rdataset_clone
 dns__rdataset_disassociate
 dns__rdataset_expire
-dns__rdataset_getclosest
 dns__rdataset_getnoqname
 dns__rdatasetiter_current
 dns__rdatasetiter_destroy
@@ -315,7 +315,6 @@ dns_diff_apply_with_callbacks
 dns_diff_applysilently
 dns_diff_clear
 dns_diff_init
-dns_diff_is_boundary
 dns_diff_load
 dns_diff_print
 dns_diff_size
@@ -345,6 +344,7 @@ dns_dispatchmgr_getblackhole
 dns_dispatchmgr_ref
 dns_dispatchmgr_setavailports
 dns_dispatchmgr_setblackhole
+dns_dispatchmgr_setreusetimeout
 dns_dispatchmgr_setstats
 dns_dispatchmgr_unref
 dns_dispatchset_create
@@ -761,10 +761,10 @@ dns_nsec3param_toprivate
 dns_nsec_build
 dns_nsec_buildrdata
 dns_nsec_compressbitmap
+dns_nsec_is_legal
 dns_nsec_isset
 dns_nsec_noexistnodata
 dns_nsec_nseconly
-dns_nsec_requiredtypespresent
 dns_nsec_setbit
 dns_nsec_typepresent
 dns_ntatable_add
@@ -963,7 +963,6 @@ dns_rdataclass_fromtext
 dns_rdataclass_ismeta
 dns_rdataclass_totext
 dns_rdataclass_tounknowntext
-dns_rdatalist_addclosest
 dns_rdatalist_addnoqname
 dns_rdatalist_clone
 dns_rdatalist_count
@@ -971,14 +970,13 @@ dns_rdatalist_current
 dns_rdatalist_disassociate
 dns_rdatalist_first
 dns_rdatalist_fromrdataset
-dns_rdatalist_getclosest
 dns_rdatalist_getnoqname
 dns_rdatalist_getownercase
 dns_rdatalist_init
 dns_rdatalist_next
 dns_rdatalist_setownercase
 dns_rdatalist_tordataset
-dns_rdataset_addclosest
+dns_rdataproof_rdatasetmethods
 dns_rdataset_additionaldata
 dns_rdataset_addnoqname
 dns_rdataset_clearprefetch
@@ -1278,6 +1276,7 @@ dns_ttl_totext
 dns_update_signatures
 dns_update_signaturesinc
 dns_update_soaserial
+dns_update_state_clear
 dns_validator_attach
 dns_validator_cancel
 dns_validator_create
@@ -1661,6 +1660,8 @@ dst__openssl_toresult
 dst__opensslecdsa_init
 dst__openssleddsa_init
 dst__opensslrsa_init
+dst__opensslrsa_shutdown
+dst__privelement_is_nul_terminated
 dst__privstruct_free
 dst__privstruct_parse
 dst__privstruct_writefile

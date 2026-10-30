@@ -25,9 +25,9 @@ import dns.tsig
 import dns.update
 import pytest
 
+from isctest.algorithms import ECDSAP256SHA256, ECDSAP384SHA384, Algorithm
 from isctest.kasp import KeyProperties, KeyTimingMetadata
 from isctest.util import param
-from isctest.vars.algorithms import ECDSAP256SHA256, ECDSAP384SHA384, Algorithm
 
 import isctest
 import isctest.mark
@@ -80,6 +80,7 @@ pytestmark = pytest.mark.extra_artifacts(
         "ns*/signer.out.*",
         "ns*/zones",
         "ns*/policies/*.conf",
+        "ns1/managed-keys.*",
         "ns3/legacy-keys.*",
         "ns3/dynamic-signed-inline-signing.kasp.db.signed.signed",
         "ns4/purgekeys.conf",
@@ -87,6 +88,18 @@ pytestmark = pytest.mark.extra_artifacts(
     ]
 )
 
+default_config = {
+    "dnskey-ttl": timedelta(hours=1),
+    "ds-ttl": timedelta(days=1),
+    "max-zone-ttl": timedelta(days=1),
+    "parent-propagation-delay": timedelta(hours=1),
+    "publish-safety": timedelta(hours=1),
+    "purge-keys": timedelta(days=90),
+    "retire-safety": timedelta(hours=1),
+    "signatures-refresh": timedelta(days=5),
+    "signatures-validity": timedelta(days=14),
+    "zone-propagation-delay": timedelta(minutes=5),
+}
 
 kasp_config = {
     "dnskey-ttl": timedelta(seconds=1234),
@@ -162,7 +175,15 @@ def fips_properties(alg, bits=None):
 
 
 def check_all(
-    server, zone, policy, ksks, zsks, manual_mode=False, zsk_missing=False, tsig=None
+    server,
+    zone,
+    policy,
+    ksks,
+    zsks,
+    manual_mode=False,
+    zsk_missing=False,
+    cdss=None,
+    tsig=None,
 ):
     isctest.kasp.check_dnssecstatus(server, zone, ksks + zsks, policy=policy)
     isctest.kasp.check_apex(
@@ -170,6 +191,7 @@ def check_all(
         zone,
         ksks,
         zsks,
+        cdss=cdss,
         manual_mode=manual_mode,
         zsk_missing=zsk_missing,
         tsig=tsig,
@@ -894,7 +916,7 @@ def test_kasp_default(ns3):
 
     expected_updates = [f"a.{zone}. A 10.0.0.11", f"d.{zone}. A 10.0.0.44"]
     for update in expected_updates:
-        isctest.run.retry_with_timeout(update_is_signed, timeout=5)
+        isctest.run.retry_with_timeout(update_is_signed, timeout=10)
 
     # Move the private key file, a rekey event should not introduce
     # replacement keys.
@@ -994,7 +1016,7 @@ def test_kasp_dynamic(ns3):
     expected_updates = [f"a.{zone}. A 10.0.0.1", f"d.{zone}. A 10.0.0.44"]
 
     for update in expected_updates:
-        isctest.run.retry_with_timeout(update_is_signed, timeout=5)
+        isctest.run.retry_with_timeout(update_is_signed, timeout=10)
 
     # Dynamic, and inline-signing.
     zone = "dynamic-inline-signing.kasp"
@@ -1030,7 +1052,7 @@ def test_kasp_dynamic(ns3):
 
     expected_updates = [f"a.{zone}. A 10.0.0.11", f"d.{zone}. A 10.0.0.44"]
     for update in expected_updates:
-        isctest.run.retry_with_timeout(update_is_signed, timeout=5)
+        isctest.run.retry_with_timeout(update_is_signed, timeout=10)
 
     # Dynamic, signed, and inline-signing.
     isctest.log.info("check dynamic signed, and inline-signed zone")
@@ -1052,6 +1074,44 @@ def test_kasp_dynamic(ns3):
     check_all(ns3, zone, policy, keys, [])
     # Ensure no zone_resigninc for the unsigned version of the zone is triggered.
     assert f"zone_resigninc: zone {zone}/IN (unsigned): enter" not in "ns3/named.run"
+
+
+def test_kasp_cds_cdnskey(ns3, default_algorithm):
+    # Zone: cds-cdnskey.kasp.
+    zone = "cds-cdnskey.kasp"
+    policy = "cds-cdnskey"
+    policy_keys = [
+        f"ksk unlimited {default_algorithm.number} {default_algorithm.bits} goal:omnipresent dnskey:omnipresent krrsig:omnipresent ds:rumoured",
+        f"zsk unlimited {default_algorithm.number} {default_algorithm.bits} goal:omnipresent dnskey:omnipresent zrrsig:omnipresent",
+    ]
+
+    isctest.kasp.wait_keymgr_done(ns3, zone)
+
+    expected = isctest.kasp.policy_to_properties(ttl=3600, keys=policy_keys)
+    keys = isctest.kasp.keydir_to_keylist(zone, "ns3")
+    ksks = [k for k in keys if k.is_ksk()]
+    zsks = [k for k in keys if k.is_zsk()]
+    isctest.kasp.check_dnssec_verify(ns3, zone)
+    isctest.kasp.check_keys(zone, keys, expected)
+    check_all(ns3, zone, policy, ksks, zsks)
+
+    # Reconfig
+    shutil.copyfile("ns3/named-reconfig2.conf", "ns3/named-reconfig.conf")
+    with ns3.watch_log_from_here() as watcher:
+        ns3.rndc("reconfig")
+        watcher.wait_for_line(f"keymgr: {zone} done")
+
+    policy = "cds-cdnskey-no"
+    check_all(ns3, zone, policy, ksks, zsks, cdss=[])
+
+    # Reconfig, put CDS, CDNSKEY back
+    shutil.copyfile("ns3/named-reconfig3.conf", "ns3/named-reconfig.conf")
+    with ns3.watch_log_from_here() as watcher:
+        ns3.rndc("reconfig")
+        watcher.wait_for_line(f"keymgr: {zone} done")
+
+    policy = "cds-cdnskey-alt"
+    check_all(ns3, zone, policy, ksks, zsks, cdss=["CDNSKEY", "CDS (SHA-384)"])
 
 
 def test_kasp_checkds(ns3, default_algorithm):
@@ -1768,3 +1828,28 @@ def test_kasp_manual_mode(ns3, default_algorithm):
     isctest.kasp.check_keys(zone, keys, expected)
     check_all(ns3, zone, policy, ksks, zsks, manual_mode=True)
     isctest.kasp.check_dnssec_verify(ns3, zone)
+
+
+def test_root_case(ns1):
+    keydir = ns1.identifier
+
+    # Get test parameters.
+    zone = ""
+    policy = "default"
+    ttl = 3600
+
+    isctest.kasp.wait_keymgr_done(ns1, ".")
+
+    # Test case.
+    isctest.log.info(f"check root zone with policy {policy}")
+
+    # First make sure the zone is signed.
+    isctest.kasp.check_dnssec_verify(ns1, zone)
+
+    # Check key properties. DS is expected to go to rumoured, so checkds kicks in.
+    keyprops = [
+        "csk 0 13 256 goal:omnipresent dnskey:omnipresent krrsig:omnipresent zrrsig:omnipresent ds:rumoured",
+    ]
+    expected = isctest.kasp.policy_to_properties(ttl=ttl, keys=keyprops)
+    keys = isctest.kasp.keydir_to_keylist(zone, keydir)
+    isctest.kasp.check_keys(zone, keys, expected)

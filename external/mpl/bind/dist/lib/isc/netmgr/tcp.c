@@ -1,4 +1,4 @@
-/*	$NetBSD: tcp.c,v 1.14 2026/04/08 00:16:16 christos Exp $	*/
+/*	$NetBSD: tcp.c,v 1.16 2026/08/29 14:55:19 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -764,7 +764,10 @@ isc__nm_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 		goto free;
 	}
 
-	if (nread < 0) {
+	if (nread == 0) {
+		/* EAGAIN/EWOULDBLOCK: no data yet, not an error on libuv. */
+		goto free;
+	} else if (nread < 0) {
 		if (nread != UV_EOF) {
 			isc__nm_incstats(sock, STATID_RECVFAIL);
 		}
@@ -823,7 +826,7 @@ isc__nm_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
 	}
 
 free:
-	if (nread < 0) {
+	if (nread <= 0) {
 		/*
 		 * The buffer may be a null buffer on error.
 		 */
@@ -905,7 +908,7 @@ accept_connection(isc_nmsocket_t *csock) {
 
 	/*
 	 * We need to initialize the tcp and timer before failing because
-	 * isc__nm_tcp_close() can't handle uninitalized TCP nmsocket.
+	 * isc__nm_tcp_close() can't handle uninitialized TCP nmsocket.
 	 */
 	if (isc__nmsocket_closing(csock)) {
 		result = ISC_R_CANCELED;

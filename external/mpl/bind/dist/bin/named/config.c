@@ -1,4 +1,4 @@
-/*	$NetBSD: config.c,v 1.20 2026/01/29 18:36:27 christos Exp $	*/
+/*	$NetBSD: config.c,v 1.22 2026/09/17 18:00:59 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -124,6 +124,7 @@ options {\n\
 	tcp-keepalive-timeout 300;\n\
 	tcp-listen-queue 10;\n\
 	tcp-receive-buffer 0;\n\
+	tcp-reuse-timeout 50;\n\
 	tcp-send-buffer 0;\n\
 #	tkey-gssapi-credential <none>\n\
 	transfer-message-size 20480;\n\
@@ -672,7 +673,6 @@ getipandkeylist(in_port_t defport, in_port_t deftlsport,
 		const cfg_obj_t *key;
 		const cfg_obj_t *tls;
 
-	skiplist:
 		addr = cfg_tuple_get(cfg_listelt_value(element),
 				     "remoteselement");
 		key = cfg_tuple_get(cfg_listelt_value(element), "key");
@@ -697,14 +697,13 @@ getipandkeylist(in_port_t defport, in_port_t deftlsport,
 
 			for (size_t i = 0; i < s->seencount; i++) {
 				if (strcasecmp(s->seen[i], listname) == 0) {
-					element = cfg_list_next(element);
 					goto skiplist;
 				}
 			}
 
 			grow_array(mctx, s->seen, s->seencount,
 				   s->seenallocated);
-			s->seen[s->seencount] = listname;
+			s->seen[s->seencount++] = listname;
 
 			for (size_t i = 0; i < ARRAY_SIZE(remotesnames); i++) {
 				tresult = named_config_getremotesdef(
@@ -719,12 +718,17 @@ getipandkeylist(in_port_t defport, in_port_t deftlsport,
 				cfg_obj_log(addr, named_g_lctx, ISC_LOG_ERROR,
 					    "remote-servers \"%s\" not found",
 					    listname);
+				/* Pop the list from the active recursion stack.
+				 */
+				s->seencount--;
 				return tresult;
 			}
 
 			result = getipandkeylist(defport, deftlsport, config,
 						 nestedlist, port, key, tls,
 						 mctx, s);
+			/* Pop the list from the active recursion stack. */
+			s->seencount--;
 			if (result != ISC_R_SUCCESS) {
 				goto out;
 			}
@@ -800,6 +804,8 @@ getipandkeylist(in_port_t defport, in_port_t deftlsport,
 		}
 
 		s->count++;
+	skiplist:
+		continue;
 	}
 
 out:

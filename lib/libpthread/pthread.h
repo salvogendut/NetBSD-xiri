@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread.h,v 1.46 2026/05/01 11:00:21 wiz Exp $	*/
+/*	$NetBSD: pthread.h,v 1.48 2026/09/24 18:38:39 christos Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -391,6 +391,10 @@ __END_DECLS
 #define	pthread_mutexattr_destroy	__libc_mutexattr_destroy
 
 __BEGIN_DECLS
+int	__libc_condattr_init(pthread_condattr_t *);
+int	__libc_condattr_setclock(pthread_condattr_t *, clockid_t);
+int	__libc_condattr_destroy(pthread_condattr_t *);
+
 int	__libc_cond_init(pthread_cond_t * __restrict,
 	    const pthread_condattr_t * __restrict);
 int	__libc_cond_signal(pthread_cond_t *);
@@ -403,6 +407,10 @@ int	__libc_cond_timedwait(pthread_cond_t * __restrict,
 #endif
 int	__libc_cond_destroy(pthread_cond_t *);
 __END_DECLS
+
+#define	pthread_condattr_init		__libc_condattr_init
+#define	pthread_condattr_setclock	__libc_condattr_setclock
+#define	pthread_condattr_destroy	__libc_condattr_destroy
 
 #define	pthread_cond_init	     	__libc_cond_init
 #define	pthread_cond_signal		__libc_cond_signal

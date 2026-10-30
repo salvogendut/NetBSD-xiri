@@ -1,4 +1,4 @@
-# $NetBSD: mi,v 1.513 2026/05/10 14:19:10 tls Exp $
+# $NetBSD: mi,v 1.522 2026/10/26 07:52:38 nia Exp $
 #
 ./etc/mtree/set.debug                           comp-sys-root
 ./usr/lib					comp-sys-usr		compatdir
@@ -329,11 +329,11 @@
 ./usr/libdata/debug/libexec/lfs_cleanerd.debug	comp-sysutil-debug	lfs,debug
 ./usr/libdata/debug/netbsd			comp-sysutil-debug	debug,kernel_dir
 ./usr/libdata/debug/netbsd-@CONFIG@.debug	comp-sysutil-debug	debugkernel
-./usr/libdata/debug/sbin/amrctl.debug		comp-sysutil-debug	debug
+./usr/libdata/debug/sbin/amrctl.debug		comp-sysutil-debug	raid,debug
 ./usr/libdata/debug/sbin/apmlabel.debug		comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/atactl.debug		comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/badsect.debug		comp-sysutil-debug	debug
-./usr/libdata/debug/sbin/bioctl.debug		comp-sysutil-debug	debug
+./usr/libdata/debug/sbin/bioctl.debug		comp-sysutil-debug	raid,debug
 ./usr/libdata/debug/sbin/blacklistctl.debug	comp-obsolete		obsolete
 ./usr/libdata/debug/sbin/blacklistd.debug	comp-obsolete		obsolete
 ./usr/libdata/debug/sbin/blkdiscard.debug	comp-sysutil-debug	debug
@@ -341,7 +341,7 @@
 ./usr/libdata/debug/sbin/blocklistd.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/brconfig.debug		comp-netutil-debug	debug
 ./usr/libdata/debug/sbin/canconfig.debug	comp-netutil-debug	debug
-./usr/libdata/debug/sbin/ccdconfig.debug	comp-sysutil-debug	debug
+./usr/libdata/debug/sbin/ccdconfig.debug	comp-sysutil-debug	raid,debug
 ./usr/libdata/debug/sbin/cgdconfig.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/chown.debug		comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/clri.debug		comp-sysutil-debug	debug
@@ -428,7 +428,7 @@
 ./usr/libdata/debug/sbin/ping.debug		comp-netutil-debug	debug
 ./usr/libdata/debug/sbin/ping6.debug		comp-netutil-debug	use_inet6,debug
 ./usr/libdata/debug/sbin/pppoectl.debug		comp-netutil-debug	debug
-./usr/libdata/debug/sbin/raidctl.debug		comp-sysutil-debug	debug
+./usr/libdata/debug/sbin/raidctl.debug		comp-sysutil-debug	raid,debug
 ./usr/libdata/debug/sbin/rcorder.debug		comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/reboot.debug		comp-sysutil-debug	debug
 ./usr/libdata/debug/sbin/resize_ffs.debug	comp-sysutil-debug	debug
@@ -489,6 +489,7 @@
 ./usr/libdata/debug/usr/bin/atf-sh.debug	comp-atf-debug		atf,debug
 ./usr/libdata/debug/usr/bin/atf-version.debug	comp-atf-debug		atf,!kyua,debug
 ./usr/libdata/debug/usr/bin/atf-version.debug	comp-obsolete		obsolete,kyua,debug
+./usr/libdata/debug/usr/bin/atto.debug		comp-util-debug		debug
 ./usr/libdata/debug/usr/bin/audiocfg.debug	comp-audio-debug	audio,debug
 ./usr/libdata/debug/usr/bin/audioctl.debug	comp-audio-debug	audio,debug
 ./usr/libdata/debug/usr/bin/audioplay.debug	comp-audio-debug	audio,debug
@@ -1146,7 +1147,7 @@
 ./usr/libdata/debug/usr/sbin/inetd.debug	comp-netutil-debug	debug
 ./usr/libdata/debug/usr/sbin/installboot.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/usr/sbin/intrctl.debug	comp-sysutil-debug	debug
-./usr/libdata/debug/usr/sbin/iopctl.debug	comp-sysutil-debug	debug
+./usr/libdata/debug/usr/sbin/iopctl.debug	comp-sysutil-debug	raid,debug
 ./usr/libdata/debug/usr/sbin/iostat.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/usr/sbin/ip6addrctl.debug	comp-netutil-debug	inet6,debug
 ./usr/libdata/debug/usr/sbin/ipfs.debug		comp-ipf-debug		ipfilter,debug
@@ -1197,7 +1198,7 @@
 ./usr/libdata/debug/usr/sbin/mkalias.debug	comp-nis-debug		yp,debug
 ./usr/libdata/debug/usr/sbin/mknetid.debug	comp-nis-debug		yp,debug
 ./usr/libdata/debug/usr/sbin/mld6query.debug	comp-netutil-debug	use_inet6,debug
-./usr/libdata/debug/usr/sbin/mlxctl.debug	comp-sysutil-debug	debug
+./usr/libdata/debug/usr/sbin/mlxctl.debug	comp-sysutil-debug	raid,debug
 ./usr/libdata/debug/usr/sbin/mmcformat.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/usr/sbin/mopchk.debug	comp-bootserver-debug	debug
 ./usr/libdata/debug/usr/sbin/mopcopy.debug	comp-bootserver-debug	debug
@@ -1792,6 +1793,7 @@
 ./usr/libdata/debug/usr/tests/kernel/h_fexecve.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/h_fpufork.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/h_getprocpath.debug		tests-kernel-tests	debug,atf,compattestfile
+./usr/libdata/debug/usr/tests/kernel/h_getstack.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/h_ps_strings1.debug		tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/h_ps_strings2.debug		tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/h_segv.debug			tests-kernel-tests	debug,atf,compattestfile
@@ -1827,12 +1829,14 @@
 ./usr/libdata/debug/usr/tests/kernel/t_extattrctl.debug			tests-kernel-tests	debug,atf,rump
 ./usr/libdata/debug/usr/tests/kernel/t_extent.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_fcntl.debug			tests-kernel-tests	debug,atf
+./usr/libdata/debug/usr/tests/kernel/t_fdpass.debug			tests-kernel-tests	debug,atf,rump
 ./usr/libdata/debug/usr/tests/kernel/t_fdrestart.debug			tests-kernel-tests	debug,atf,rump
 ./usr/libdata/debug/usr/tests/kernel/t_filedesc.debug			tests-kernel-tests	debug,atf,rump
 ./usr/libdata/debug/usr/tests/kernel/t_kauth_pr_47598.debug		tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_ksem.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_lock.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_lockf.debug			tests-kernel-tests	debug,atf,compattestfile
+./usr/libdata/debug/usr/tests/kernel/t_lua.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_lwpctl.debug			tests-obsolete		obsolete,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_memfd_create.debug		tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_mkdir.debug			tests-obsolete		obsolete,compattestfile
@@ -1855,6 +1859,7 @@
 ./usr/libdata/debug/usr/tests/kernel/t_rnd.debug			tests-kernel-tests	debug,atf,rump
 ./usr/libdata/debug/usr/tests/kernel/t_semtimedop.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_sigaction.debug			tests-obsolete		obsolete,compattestfile
+./usr/libdata/debug/usr/tests/kernel/t_signal_and_fpu.debug		tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_signal_and_sp.debug		tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_subr_prf.debug			tests-kernel-tests	debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/kernel/t_sysctl.debug			tests-kernel-tests	debug,atf,compattestfile
@@ -2108,6 +2113,7 @@
 ./usr/libdata/debug/usr/tests/lib/libc/locale/t_ctype2.debug		tests-obsolete		obsolete,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/locale/t_digittoint.debug	tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/locale/t_ducet.debug		tests-lib-debug		debug,atf,compattestfile
+./usr/libdata/debug/usr/tests/lib/libc/locale/t_iconv.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/locale/t_io.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/locale/t_mbrtoc16.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/locale/t_mbrtoc32.debug		tests-lib-debug		debug,atf,compattestfile
@@ -2308,6 +2314,7 @@
 ./usr/libdata/debug/usr/tests/lib/libc/sys/t_setuid.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/sys/t_sigaction.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/sys/t_sigaltstack.debug		tests-lib-debug		debug,atf,compattestfile
+./usr/libdata/debug/usr/tests/lib/libc/sys/t_sigio.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/sys/t_sigqueue.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/sys/t_sigtimedwait.debug		tests-lib-debug		debug,atf,compattestfile
 ./usr/libdata/debug/usr/tests/lib/libc/sys/t_sigtimedwait_pr_47625.debug	tests-obsolete		obsolete,compattestfile
@@ -2525,6 +2532,7 @@
 ./usr/libdata/debug/usr/tests/net/inpcb/broadcast_bind.debug	tests-net-debug		debug,atf,rump,compattestfile
 ./usr/libdata/debug/usr/tests/net/inpcb/inpcb_bind.debug	tests-net-debug		debug,atf,rump,compattestfile
 ./usr/libdata/debug/usr/tests/net/ipsec/natt_terminator.debug	tests-net-debug		debug,atf,rump
+./usr/libdata/debug/usr/tests/net/ipsec/t_ipsec_policy.debug	tests-net-debug		debug,atf,rump
 ./usr/libdata/debug/usr/tests/net/mcast/mcast.debug		tests-net-debug		debug,atf,rump
 ./usr/libdata/debug/usr/tests/net/mcast/t_mcast.debug		tests-obsolete		debug,atf,rump,obsolete
 ./usr/libdata/debug/usr/tests/net/net/t_bind.debug		tests-net-debug		debug,atf,compattestfile

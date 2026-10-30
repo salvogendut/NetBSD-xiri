@@ -2635,6 +2635,14 @@ Boolean Options
    owner name indicates that it is a reverse lookup of a hostname (the
    owner name ends in IN-ADDR.ARPA, IP6.ARPA, or IP6.INT).
 
+   Owner names of A and AAAA records starting with the Active
+   Directory Forest prefix labels ``gc._msdcs`` are excluded if the
+   remainder of the name meets the check-names rules.
+
+   Owner names of A records meeting the :rfc:`7208` rules for the
+   labels ``_spf``, ``_spf_verify`` and ``_spf_rate`` are also
+   excluded.
+
 .. namedconf:statement:: check-dup-records
    :tags: dnssec, query
    :short: Checks primary zones for records that are treated as different by DNSSEC but are semantically equal in plain DNS.
@@ -4030,6 +4038,20 @@ system.
    option are expected to use TCP connections for more than one message.
    This value can be updated at runtime by using :option:`rndc tcp-timeouts`.
 
+.. namedconf:statement:: tcp-reuse-timeout
+   :tags: query
+   :short: Sets the amount of time (in milliseconds) that an idle outgoing TCP connection is kept open for reuse.
+
+   This sets the amount of time, in units of 100 milliseconds, that an idle
+   outgoing TCP or TLS connection opened by :iscman:`named` (for example, to a
+   forwarder or an authoritative server) is kept open after its last outstanding
+   response has completed, so that it can be reused by a later query instead of
+   being closed and reopened. The default is 50 (5 seconds), and the maximum is
+   1200 (two minutes). A value of 0 disables keeping idle outgoing TCP or TLS
+   connections open for reuse; it does not affect sharing of a connection while
+   queries are still outstanding. Values above the maximum are adjusted with a
+   logged warning.
+
 .. namedconf:statement:: tcp-advertised-timeout
    :tags: query
    :short: Sets the timeout value (in milliseconds) that the server sends in responses containing the EDNS TCP keepalive option.
@@ -5241,8 +5263,8 @@ rewriting in the following order:
    response-policy option.
 2. Prefer CLIENT-IP to QNAME to IP to NSDNAME to NSIP triggers in a
    single zone.
-3. Among NSDNAME triggers, prefer the trigger that matches the smallest
-   name under the DNSSEC ordering.
+3. Among NSDNAME triggers, prefer the trigger whose matched name server
+   domain name appears last in the DNSSEC canonical ordering.
 4. Among IP or NSIP triggers, prefer the trigger with the longest
    prefix.
 5. Among triggers with the same prefix length, prefer the IP or NSIP

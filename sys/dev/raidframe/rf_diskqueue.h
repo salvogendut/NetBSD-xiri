@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_diskqueue.h,v 1.30 2023/09/17 20:07:39 oster Exp $	*/
+/*	$NetBSD: rf_diskqueue.h,v 1.32 2026/10/18 14:56:32 tls Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.

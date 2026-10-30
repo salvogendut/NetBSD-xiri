@@ -1,4 +1,4 @@
-.\"	$NetBSD: sh.1,v 1.277 2026/05/28 10:07:58 kre Exp $
+.\"	$NetBSD: sh.1,v 1.284 2026/10/13 20:47:01 andvar Exp $
 .\" Copyright (c) 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
 .\"
@@ -31,7 +31,7 @@
 .\"
 .\"	@(#)sh.1	8.6 (Berkeley) 5/4/95
 .\"
-.Dd May 28, 2026
+.Dd August 15, 2026
 .Dt SH 1
 .\" everything except c o and s (keep them ordered)
 .ds flags abCEeFfhIiLlmnpqruVvXx
@@ -412,7 +412,9 @@ Ignore EOFs from input when interactive.
 (After a large number of consecutive EOFs the shell will exit anyway.)
 .It Fl i Em interactive
 Force the shell to behave interactively.
-If not set on the command line,
+If not cleared
+.Pq Cm \&+i
+on the command line,
 this option is set automatically at shell startup if
 the shell is reading from standard input (no
 .Fl c ,
@@ -422,6 +424,15 @@ given at invocation of
 .Nm ) ,
 and standard input and standard error refer to
 terminal type devices.
+Attempting to force set the
+.Fl i
+flag from the command line will usually be ignored.
+Altering the value of this flag after initialisation
+using the
+.Ic set
+built-in command is non-standard,
+and can have negative effects upon the operation of the shell.
+It should normally be avoided.
 .It Fl L Em local_lineno
 When set, before a function is defined,
 causes the variable
@@ -607,6 +618,37 @@ However,
 .Em cdprint
 is an extension to POSIX, so these two options should
 rarely be set at the same time.
+.It "\ \ " Em dotglob
+When matching filenames, either for filename expansion,
+or if both input line editing
+.Pq Fl E No or Fl V
+and the
+.Ic tabcomplete
+option are enabled, for filename completion,
+match files that begin with a
+.Sq \&.
+.Pq sometimes called hidden files
+other than
+.Dq \&.
+and
+.Dq \&.. ,
+even if the pattern does not begin with a
+.Sq \&. .
+In other than filename matching,
+.Sq \&.
+is just any other ordinary character,
+and this option is irrelevant.
+When matching filenames, the file names
+.Dq \&.
+and
+.Dq \&..
+only ever match patterns starting with a
+.Sq \&. ,
+regardless of the value of
+.Ic dotglob .
+The
+.Ic dotglob
+option does not exist in SMALL shells.
 .It "\ \ " Em nolog
 Prevent the entry of function definitions into the command history (see
 .Ic fc
@@ -1049,29 +1091,53 @@ command or some other special construct may have been recognized.
 .Ss Simple Commands
 .\"
 If a simple command has been recognized, the shell performs
-the following actions:
+the following actions, though not precisely in the order suggested:
 .Bl -enum -offset indent
 .It
 Leading words of the form
-.Dq Ar name Ns Li = Ns Ar value
-are stripped off, the value is expanded, as described below,
-and the results are assigned to the environment of the simple command.
+.Dq Ar name Ns Li = Ns Ar value ,
+where no part of
+.Ar name Ns Li =
+is quoted,
+are set aside.
+The
+.Ar value
+is then expanded, as described below, by performing
+tilde, parameter, and arithmetic expansions, and command substitutions.
+No pathname expansion or field splitting is performed.
+The result has quotes removed and is then assigned to the environment of
+the simple command.
 Redirection operators and their arguments (as described below) are
 stripped off and saved for processing in step 3 below.
 .It
 The remaining words are expanded as described in the
 .Sx Word Expansions
 section below.
+All expansions are applied.
 The first remaining word is considered the command name and the
 command is located.
-Any remaining words are considered the arguments of the command.
+Any more remaining words are considered the arguments of the command.
 If no command name resulted, then the
 .Dq Ar name Ns Li = Ns Ar value
 variable assignments recognized in item 1 affect the current shell,
-but are not automatically added to the environment (are not exported).
+but are not automatically added to the environment (are not exported),
+unless the variable
+.Ar name
+was previously exported, or the
+.Fl a
+option is enabled.
+This also occurs in this
+.Nm
+if the command being invoked is one of the special-built-in commands.
 .It
 Redirections are performed, from first to last, in the order given,
 as described in the next section.
+In the case where no command name results from the expansions of the
+argument words (if any), once performed, the redirections are undone.
+To have redirections apply to the current shell environment, specify
+them with the
+.Ic exec
+special-built-in command, with no other arguments (no command to execute).
 .El
 .\"
 .\"
@@ -3734,7 +3800,7 @@ the program will use
 and the built-in uses a separately cached value.
 .\"
 .Pp
-.It Ic read Oo Fl br Oc Oo Fl d Ar delim Oc Oo Fl n Ar max Oc Oo Fl p Ar prompt Oc Ar variable Op Ar ...
+.It Ic read Oo Fl bcr Oc Oo Fl d Ar delim Oc Oo Fl n Ar max Oc Oo Fl p Ar prompt Oc Ar variable Op Ar ...
 .Pp
 The
 .Ic read
@@ -3756,6 +3822,17 @@ utility actually processes,
 causing some data from standard input to be unavailable
 to any subsequent utility that expects to obtain them,
 though this will be avoided wherever possible.
+.It Fl c
+Continue the
+.Ic read
+if a trapped signal
+.Pq other than Dv SIGINT in an interactive shell
+is received while waiting for input.
+In interactive shells, a
+.Dv SIGINT ,
+trapped or not,
+received while waiting for input, always aborts the
+.Ic read .
 .It Fl d Ar delim
 End the read when the first byte of
 .Ar delim
@@ -3860,8 +3937,7 @@ If the
 .Fl r
 option was not given,
 and the two character sequence
-.Sq \&\e
-.Sq \en
+.So \&\e Sc Ns \&\  Ns Sq \en
 is encountered,
 those two characters are simply deleted,
 and provided that
@@ -3886,7 +3962,7 @@ flag was not given, the
 .Aq backslash
 character
 .Pq Sq \e
-character is then treated as an escape character,
+is then treated as an escape character,
 the character following it, if not
 .Sq \e0 ,
 is always treated as a normal,
@@ -3899,8 +3975,7 @@ but before data has been
 assigned to any variables,
 all escape characters are removed.
 Note that the two character sequence
-.Sq \&\e
-.Sq \&\e
+.So \&\e Sc Ns \&\  Ns Sq \e
 can be used to enter the escape character as data,
 the first acts as the escape character, the second
 becomes just a normal data character.
@@ -3930,7 +4005,12 @@ is encountered on input, before encountering the delimiter,
 or having read
 .Ar max
 bytes.
-In this case any data previously read will be assigned to
+If a read error occurred,
+.Ic read
+will immediately exit with a status larger than 1.
+In case of EOF, or
+.Ar max
+bytes having been read, any data previously read will be assigned to
 the variables, as if the delimiter had been located at that
 point, and
 .Ic read
@@ -3940,12 +4020,28 @@ no variables will be altered,
 .Ic read
 will issue a diagnostic to standard error,
 and exit with a status greater than 1.
+If the
+.Ic read
+was interrupted by a trapped signal, and the
+.Fl c
+flag was not given, or the signal was
+.Dv SIGINT
+in an interactive shell,
+the exit status will be 130, and variables might have been altered,
+as described, or not.
 .Pp
-The
-.Fl b
+In SMALL shells, the
+.Fl b ,
+.Fl c
 and
 .Fl n
-options are not available in SMALL shells.
+options are not available,
+an input I/O error is treated as if it were EOF,
+trapped signals interrupt the read,
+act similarly to receiving EOF,
+and the trap will not be executed until after the
+.Ic read
+has completed.
 .\"
 .Pp
 .It Ic readonly Ar name Ns Oo =value Oc ...
@@ -4502,11 +4598,10 @@ Interpret each
 .Ar name
 as a command and print the resolution of the command search.
 Possible resolutions are:
-shell keyword, alias, shell built-in,
-command, tracked alias and not found.
-For aliases the alias expansion is
-printed; for commands and tracked aliases the complete pathname of the
-command is printed.
+shell keyword, alias, shell built-in, function,
+command, and not found.
+For aliases the alias expansion is printed;
+for commands the complete pathname of the command is printed.
 .\"
 .Pp
 .It Ic ulimit Oo Fl H Ns \*(Ba Ns Fl S Oc Op Fl a \*(Ba Fl btfdscmlrpnv Op Ar value

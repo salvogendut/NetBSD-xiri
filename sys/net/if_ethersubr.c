@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ethersubr.c,v 1.333 2025/10/12 23:41:09 thorpej Exp $	*/
+/*	$NetBSD: if_ethersubr.c,v 1.336 2026/06/29 06:07:21 yamaguchi Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.333 2025/10/12 23:41:09 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.336 2026/06/29 06:07:21 yamaguchi Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -454,7 +454,7 @@ ether_output(struct ifnet * const ifp0, struct mbuf * const m0,
 	if (hdrcmplt) {
 		memcpy(eh->ether_shost, esrc, sizeof(eh->ether_shost));
 	} else {
-	 	memcpy(eh->ether_shost, CLLADDR(ifp->if_sadl),
+		memcpy(eh->ether_shost, CLLADDR(ifp->if_sadl),
 		    sizeof(eh->ether_shost));
 	}
 
@@ -1161,8 +1161,8 @@ ether_ifdetachhook_establish(struct ifnet *ifp,
 	struct ethercom *ec;
 	khook_t *hk;
 
-	if (ifp->if_type != IFT_ETHER)
-		return NULL;
+	KASSERT(ifp->if_type == IFT_ETHER ||
+	    ifp->if_type == IFT_L2TP);
 
 	ec = (struct ethercom *)ifp;
 	hk = simplehook_establish(ec->ec_ifdetach_hooks,
@@ -1707,7 +1707,7 @@ ether_disable_vlan_mtu(struct ifnet *ifp)
 	if (ec->ec_nvlans != 0)
 		return 0;
 
-	/* Parent does not support VLAB's, nothing to do. */
+	/* Parent does not have or never had VLANs enabled, nothing to do */
 	if ((ec->ec_capenable & ETHERCAP_VLAN_MTU) == 0)
 		return -1;
 

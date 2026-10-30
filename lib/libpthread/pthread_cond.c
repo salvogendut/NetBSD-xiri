@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread_cond.c,v 1.79 2026/05/06 09:03:49 yamt Exp $	*/
+/*	$NetBSD: pthread_cond.c,v 1.81 2026/09/25 23:43:03 christos Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: pthread_cond.c,v 1.79 2026/05/06 09:03:49 yamt Exp $");
+__RCSID("$NetBSD: pthread_cond.c,v 1.81 2026/09/25 23:43:03 christos Exp $");
 
 /* Need to use libc-private names for atomic operations. */
 #include "../../common/lib/libc/atomic/atomic_op_namespace.h"
@@ -54,6 +54,10 @@ int	_pthread_cond_has_waiters_np(pthread_cond_t *);
 
 __weak_alias(pthread_cond_has_waiters_np,_pthread_cond_has_waiters_np)
 
+__strong_alias(__libc_condattr_init,pthread_condattr_init)
+__strong_alias(__libc_condattr_destroy,pthread_condattr_destroy)
+__strong_alias(__libc_condattr_setclock,pthread_condattr_setclock)
+
 __strong_alias(__libc_cond_init,pthread_cond_init)
 __strong_alias(__libc_cond_signal,pthread_cond_signal)
 __strong_alias(__libc_cond_broadcast,pthread_cond_broadcast)
@@ -75,8 +79,7 @@ pthread_cond_getclock(const pthread_cond_t *cond)
 	pthread__error(EINVAL, "Invalid condition variable",
 	    cond->ptc_magic == _PT_COND_MAGIC);
 
-	return cond->ptc_private ?
-	    *(clockid_t *)cond->ptc_private : CLOCK_REALTIME;
+	return (clockid_t)(intptr_t)cond->ptc_private;
 }
 
 int
@@ -91,14 +94,10 @@ pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
 	cond->ptc_magic = _PT_COND_MAGIC;
 	cond->ptc_waiters = NULL;
 	cond->ptc_mutex = NULL;
-	if (attr && attr->ptca_private) {
-		cond->ptc_private = malloc(sizeof(clockid_t));
-		if (cond->ptc_private == NULL)
-			return errno;
-		*(clockid_t *)cond->ptc_private =
-		    *(clockid_t *)attr->ptca_private;
-	} else
-		cond->ptc_private = NULL;
+	if (attr)
+		cond->ptc_private = attr->ptca_private;
+	else
+		cond->ptc_private = (void *)CLOCK_REALTIME;
 
 	return 0;
 }
@@ -116,7 +115,6 @@ pthread_cond_destroy(pthread_cond_t *cond)
 	    cond->ptc_waiters == NULL);
 
 	cond->ptc_magic = _PT_COND_DEAD;
-	free(cond->ptc_private);
 
 	return 0;
 }
@@ -331,7 +329,7 @@ pthread_condattr_init(pthread_condattr_t *attr)
 {
 
 	attr->ptca_magic = _PT_CONDATTR_MAGIC;
-	attr->ptca_private = NULL;
+	attr->ptca_private = (void *)CLOCK_REALTIME;
 
 	return 0;
 }
@@ -346,11 +344,7 @@ pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clck)
 	switch (clck) {
 	case CLOCK_MONOTONIC:
 	case CLOCK_REALTIME:
-		if (attr->ptca_private == NULL)
-			attr->ptca_private = malloc(sizeof(clockid_t));
-		if (attr->ptca_private == NULL)
-			return errno;
-		*(clockid_t *)attr->ptca_private = clck;
+		attr->ptca_private = (void *)(intptr_t)clck;
 		return 0;
 	default:
 		return EINVAL;
@@ -365,9 +359,9 @@ pthread_condattr_getclock(const pthread_condattr_t *__restrict attr,
 	pthread__error(EINVAL, "Invalid condition variable attribute",
 	    attr->ptca_magic == _PT_CONDATTR_MAGIC);
 
-	if (attr == NULL || attr->ptca_private == NULL)
+	if (attr == NULL)
 		return EINVAL;
-	*clock_id = *(clockid_t *)attr->ptca_private;
+	*clock_id = (clockid_t)(intptr_t)attr->ptca_private;
 	return 0;
 }
 
@@ -379,7 +373,6 @@ pthread_condattr_destroy(pthread_condattr_t *attr)
 	    attr->ptca_magic == _PT_CONDATTR_MAGIC);
 
 	attr->ptca_magic = _PT_CONDATTR_DEAD;
-	free(attr->ptca_private);
 
 	return 0;
 }

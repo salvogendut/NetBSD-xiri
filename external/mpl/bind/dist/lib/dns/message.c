@@ -1,4 +1,4 @@
-/*	$NetBSD: message.c,v 1.23 2026/05/20 16:53:45 christos Exp $	*/
+/*	$NetBSD: message.c,v 1.26 2026/09/17 18:01:15 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -27,7 +27,6 @@
 #include <isc/buffer.h>
 #include <isc/hash.h>
 #include <isc/hashmap.h>
-#include <isc/helper.h>
 #include <isc/log.h>
 #include <isc/mem.h>
 #include <isc/result.h>
@@ -203,7 +202,6 @@ typedef struct checksig_ctx {
 	dns_view_t *view;
 	dns_message_cb_t cb;
 	void *cbarg;
-	isc_result_t result;
 } checksig_ctx_t;
 
 /*
@@ -1417,7 +1415,10 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t dctx,
 		rdata->rdclass = rdclass;
 		if (rdtype == dns_rdatatype_rrsig && rdata->flags == 0) {
 			covers = dns_rdata_covers(rdata);
-			if (covers == 0) {
+			/* A signature can only cover a real rdata type */
+			if (covers == dns_rdatatype_none ||
+			    dns_rdatatype_ismeta(covers))
+			{
 				DO_ERROR(DNS_R_FORMERR);
 			}
 		} else if (rdtype == dns_rdatatype_sig /* SIG(0) */ &&
@@ -1598,6 +1599,10 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t dctx,
 				if (dns_rdata_compare(rdata, first) != 0) {
 					DO_ERROR(DNS_R_FORMERR);
 				}
+				if (!best_effort) {
+					dns_rdata_reset(rdata);
+					dns_message_puttemprdata(msg, &rdata);
+				}
 				break;
 			case ISC_R_SUCCESS:
 				ISC_LIST_APPEND(name->list, rdataset, link);
@@ -1623,8 +1628,10 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t dctx,
 		}
 
 		/* Append this rdata to the rdataset. */
-		dns_rdatalist_fromrdataset(rdataset, &rdatalist);
-		ISC_LIST_APPEND(rdatalist->rdata, rdata, link);
+		if (rdata != NULL) {
+			dns_rdatalist_fromrdataset(rdataset, &rdatalist);
+			ISC_LIST_APPEND(rdatalist->rdata, rdata, link);
+		}
 
 		/*
 		 * If this is an OPT, SIG(0) or TSIG record, remember it.
@@ -3180,23 +3187,21 @@ dns_message_dumpsig(dns_message_t *msg, char *txt1) {
 #endif /* ifdef SKAN_MSG_DEBUG */
 
 static void
-checksig_done(void *arg);
+checksig_done(void *arg, isc_result_t result);
 
-static void
+static isc_result_t
 checksig_run(void *arg) {
 	checksig_ctx_t *chsigctx = arg;
 
-	chsigctx->result = dns_message_checksig(chsigctx->msg, chsigctx->view);
-
-	isc_async_run(chsigctx->loop, checksig_done, chsigctx);
+	return dns_message_checksig(chsigctx->msg, chsigctx->view);
 }
 
 static void
-checksig_done(void *arg) {
+checksig_done(void *arg, isc_result_t result) {
 	checksig_ctx_t *chsigctx = arg;
 	dns_message_t *msg = chsigctx->msg;
 
-	chsigctx->cb(chsigctx->cbarg, chsigctx->result);
+	chsigctx->cb(chsigctx->cbarg, result);
 
 	dns_view_detach(&chsigctx->view);
 	isc_loop_detach(&chsigctx->loop);
@@ -3216,14 +3221,14 @@ dns_message_checksig_async(dns_message_t *msg, dns_view_t *view,
 	*chsigctx = (checksig_ctx_t){
 		.cb = cb,
 		.cbarg = cbarg,
-		.result = ISC_R_UNSET,
 		.loop = isc_loop_ref(loop),
 	};
 	dns_message_attach(msg, &chsigctx->msg);
 	dns_view_attach(view, &chsigctx->view);
 
 	dns_message_clonebuffer(msg);
-	isc_helper_run(loop, checksig_run, chsigctx);
+	isc_work_enqueue(loop, ISC_WORKLANE_FAST, checksig_run, checksig_done,
+			 chsigctx);
 
 	return DNS_R_WAIT;
 }

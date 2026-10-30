@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.155 2026/01/18 19:19:09 jmcneill Exp $
+#	$NetBSD: Makefile,v 1.157 2026/09/16 18:46:23 uwe Exp $
 #
 # NOTE: when changing ld.so, ensure that ldd still compiles.
 #
@@ -60,12 +60,10 @@ COPTS+=		-fvisibility=hidden
 .include "$M/Makefile.inc"
 .endif
 
-# Support compat ld.elf_so.
+# Support compat ld.elf_so (compat32 or alternative ABI).
 .if defined(MLIBDIR)
 PROG=		ld.elf_so-${MLIBDIR}
 CPPFLAGS+=	-DRTLD_ARCH_SUBDIR=\"${MLIBDIR}\"
-.	if ${MLIBDIR} == "o32"
-.	endif
 .else
 PROG=		ld.elf_so
 .endif
@@ -122,7 +120,7 @@ CPPFLAGS+=	-DHAVE_INITFINI_ARRAY
 .if ${LDELFSO_MACHINE_ARCH} == "powerpc"
 CPPFLAGS+=	-DRTLD_MAP_OBJECT_FIXUP
 .endif
-#CPPFLAGS+=	-DDEBUG
+CPPFLAGS+=	-DDEBUG
 #CPPFLAGS+=	-DRTLD_DEBUG
 #CPPFLAGS+=	-DRTLD_DEBUG_RELOC
 #CPPFLAGS+=	-DMALLOC_DEBUG

@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_syscalls.c,v 1.180 2026/01/05 05:02:47 perseant Exp $	*/
+/*	$NetBSD: lfs_syscalls.c,v 1.184 2026/10/30 01:03:04 perseant Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001, 2002, 2003, 2007, 2007, 2008
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lfs_syscalls.c,v 1.180 2026/01/05 05:02:47 perseant Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lfs_syscalls.c,v 1.184 2026/10/30 01:03:04 perseant Exp $");
 
 #ifndef LFS
 # define LFS		/* for prototypes in syscallargs.h */
@@ -384,7 +384,7 @@ lfs_markv(struct lwp *l, fsid_t *fsidp, BLOCK_INFO *blkiov,
 				if (lfs_if_getdaddr(fs, ifp) == blkp->bi_daddr) {
 					lfs_setclean(fs, vp);
 				}
-				brelse(bp, 0);
+				LFS_RELEASEIENTRY(ifp, fs, blkp->bi_inode, bp);
 			}
 			continue;
 		}
@@ -571,8 +571,8 @@ sys_lfs_bmapv(struct lwp *l, const struct sys_lfs_bmapv_args *uap, register_t *r
 	fs = VFSTOULFS(mntp)->um_lfs;
 
 	blkcnt = SCARG(uap, blkcnt);
-#if SIZE_T_MAX <= UINT_MAX
-	if ((u_int) blkcnt > SIZE_T_MAX / sizeof(BLOCK_INFO))
+#if SIZE_MAX <= UINT_MAX
+	if ((u_int) blkcnt > SIZE_MAX / sizeof(BLOCK_INFO))
 		return (EINVAL);
 #endif
 	KERNEL_LOCK(1, NULL);
@@ -613,7 +613,7 @@ sys_lfs_bmapv(struct lwp *l, const struct sys_lfs_bmapv_args *uap, register_t *r
 	fs = VFSTOULFS(mntp)->um_lfs;
 
 	blkcnt = SCARG(uap, blkcnt);
-	if ((size_t) blkcnt > SIZE_T_MAX / sizeof(BLOCK_INFO))
+	if ((size_t) blkcnt > SIZE_MAX / sizeof(BLOCK_INFO))
 		return (EINVAL);
 	KERNEL_LOCK(1, NULL);
 	blkiov = lfs_malloc(fs, blkcnt * sizeof(BLOCK_INFO), LFS_NB_BLKIOV);
@@ -720,7 +720,7 @@ lfs_bmapv(struct lwp *l, fsid_t *fsidp, BLOCK_INFO *blkiov, int blkcnt)
 			else {
 				LFS_IENTRY(ifp, fs, blkp->bi_inode, bp);
 				v_daddr = lfs_if_getdaddr(fs, ifp);
-				brelse(bp, 0);
+				LFS_RELEASEIENTRY(ifp, fs, blkp->bi_inode, bp);
 			}
 			if (v_daddr == LFS_UNUSED_DADDR) {
 				blkp->bi_daddr = LFS_UNUSED_DADDR;
@@ -862,23 +862,23 @@ lfs_do_segclean(struct lfs *fs, unsigned long segnum, kauth_cred_t cred, struct 
 	if (sup->su_nbytes) {
 		DLOG((DLOG_CLEAN, "lfs_segclean: not cleaning segment %lu:"
 		      " %d live bytes\n", segnum, sup->su_nbytes));
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, segnum, bp);
 		return (EBUSY);
 	}
 	if (sup->su_flags & SEGUSE_ACTIVE) {
 		DLOG((DLOG_CLEAN, "lfs_segclean: not cleaning segment %lu:"
 		      " segment is active\n", segnum));
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, segnum, bp);
 		return (EBUSY);
 	}
 	if (!(sup->su_flags & SEGUSE_DIRTY)) {
 		DLOG((DLOG_CLEAN, "lfs_segclean: not cleaning segment %lu:"
 		      " segment is already clean\n", segnum));
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, segnum, bp);
 		return (EALREADY);
 	}
 
-	lfs_markclean(fs, segnum, sup, cred, l);
+	lfs_markclean(fs, segnum, sup, 1, cred, l);
 	LFS_WRITESEGENTRY(sup, fs, segnum, bp);
 
 	return 0;
@@ -886,17 +886,26 @@ lfs_do_segclean(struct lfs *fs, unsigned long segnum, kauth_cred_t cred, struct 
 
 int
 lfs_markclean(struct lfs *fs, unsigned long segnum, SEGUSE *sup,
-	      kauth_cred_t cred, struct lwp *l)
+    int do_wakeup, kauth_cred_t cred, struct lwp *l)
 {
 	extern int lfs_dostats;
 	struct buf *bp;
 	CLEANERINFO *cip;
+	int error;
 
 	ASSERT_SEGLOCK(fs);
-	
-#ifdef DEBUG
-	if (lfs_checkempty(fs, segnum, cred, l) == EEXIST)
+
+#ifndef DEBUG
+	error = 0;
+#else /* DEBUG */
+	error = lfs_checkempty(fs, segnum, cred, l);
+	if (error == EEXIST)
 		panic("Live data in cleaned segment %jd\n", (intmax_t)segnum);
+	if (error) {
+		sup->su_flags &= ~(SEGUSE_EMPTY | SEGUSE_READY);
+		sup->su_flags |= SEGUSE_ERROR;
+		return error;
+	}
 #endif /* DEBUG */
 
 	lfs_sb_addavail(fs, lfs_segtod(fs, 1));
@@ -920,18 +929,14 @@ lfs_markclean(struct lfs *fs, unsigned long segnum, SEGUSE *sup,
 	LFS_CLEANERINFO(cip, fs, bp);
 	lfs_ci_shiftdirtytoclean(fs, cip, 1);
 	lfs_sb_setnclean(fs, lfs_ci_getclean(fs, cip));
-	mutex_enter(&lfs_lock);
-	lfs_ci_setbfree(fs, cip, lfs_sb_getbfree(fs));
-	lfs_ci_setavail(fs, cip, lfs_sb_getavail(fs)
-			- fs->lfs_ravail - fs->lfs_favail);
-	wakeup(&fs->lfs_availsleep);
-	mutex_exit(&lfs_lock);
-	(void) LFS_BWRITE_LOG(bp);
+	if (do_wakeup)
+		wakeup(&fs->lfs_availsleep);
+	LFS_SYNC_CLEANERINFO(cip, fs, bp, 1);
 
 	if (lfs_dostats)
 		++lfs_stats.segs_reclaimed;
 
-	return (0);
+	return error;
 }
 
 /*

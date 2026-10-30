@@ -1,4 +1,4 @@
-#	$NetBSD: NetBSD.dist.base,v 1.264 2026/06/11 19:51:15 rumble Exp $
+#	$NetBSD: NetBSD.dist.base,v 1.266 2026/10/28 16:29:30 kre Exp $
 #	@(#)4.4BSD.dist	8.1 (Berkeley) 6/13/93
 
 # Do not customize this file as it may be overwritten on upgrades.
@@ -39,6 +39,9 @@
 ./etc/mail
 ./etc/mtree
 ./etc/namedb
+./etc/namedb/cache	mode=0775 uname=named gname=named
+./etc/namedb/keys	type=dir mode=0775 uname=named gname=named
+./etc/namedb/nta	type=dir mode=0775 uname=named gname=named
 ./etc/nsd
 ./etc/openldap
 ./etc/openssl
@@ -966,6 +969,12 @@
 ./usr/share/locale/uk_UA.KOI8-U/LC_MESSAGES
 ./usr/share/locale/uk_UA.UTF-8
 ./usr/share/locale/uk_UA.UTF-8/LC_MESSAGES
+./usr/share/locale/x1_X1.UTF-8
+./usr/share/locale/x1_X1.UTF-8/LC_MESSAGES
+./usr/share/locale/x1_X2.UTF-8
+./usr/share/locale/x1_X2.UTF-8/LC_MESSAGES
+./usr/share/locale/x1_X3.UTF-8
+./usr/share/locale/x1_X3.UTF-8/LC_MESSAGES
 ./usr/share/locale/zh_CN
 ./usr/share/locale/zh_CN.GB18030
 ./usr/share/locale/zh_CN.GB18030/LC_MESSAGES

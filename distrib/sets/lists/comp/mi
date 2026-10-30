@@ -1,4 +1,4 @@
-#	$NetBSD: mi,v 1.2526 2026/06/09 19:21:20 christos Exp $
+#	$NetBSD: mi,v 1.2530 2026/08/04 21:31:06 andvar Exp $
 # Note: don't delete entries from here - mark them as "obsolete" instead.
 ./etc/mtree/set.comp				comp-sys-root
 ./usr/bin/addr2line				comp-debug-bin		binutils
@@ -3148,6 +3148,7 @@
 ./usr/include/openssl/asn1.h			comp-c-include
 ./usr/include/openssl/asn1_mac.h		comp-c-include		openssl=11
 ./usr/include/openssl/asn1_mac.h		comp-c-include		openssl=30
+./usr/include/openssl/asn1_mac.h		comp-obsolete		obsolete,openssl=35
 ./usr/include/openssl/asn1err.h			comp-c-include
 ./usr/include/openssl/asn1t.h			comp-c-include
 ./usr/include/openssl/async.h			comp-c-include
@@ -3159,6 +3160,7 @@
 ./usr/include/openssl/bnerr.h			comp-c-include
 ./usr/include/openssl/buffer.h			comp-c-include
 ./usr/include/openssl/buffererr.h		comp-c-include
+./usr/include/openssl/byteorder.h		comp-c-include		openssl=35
 ./usr/include/openssl/camellia.h		comp-c-include
 ./usr/include/openssl/cast.h			comp-c-include
 ./usr/include/openssl/cmac.h			comp-c-include
@@ -3236,6 +3238,7 @@
 ./usr/include/openssl/fipskey.h			comp-c-include		openssl=30
 ./usr/include/openssl/fipskey.h			comp-c-include		openssl=35
 ./usr/include/openssl/hmac.h			comp-c-include
+./usr/include/openssl/hpke.h			comp-c-include		openssl=35
 ./usr/include/openssl/http.h			comp-c-include		openssl=30
 ./usr/include/openssl/http.h			comp-c-include		openssl=35
 ./usr/include/openssl/httperr.h			comp-c-include		openssl=30
@@ -3253,6 +3256,7 @@
 ./usr/include/openssl/md4.h			comp-c-include
 ./usr/include/openssl/md5.h			comp-c-include
 ./usr/include/openssl/mdc2.h			comp-c-include
+./usr/include/openssl/ml_kem.h			comp-c-include		openssl=35
 ./usr/include/openssl/modes.h			comp-c-include
 ./usr/include/openssl/obj_mac.h			comp-c-include
 ./usr/include/openssl/objects.h			comp-c-include
@@ -4061,8 +4065,8 @@
 ./usr/lib/libdevmapper_p.a			comp-lvm-proflib	compatfile,lvm,profile
 ./usr/lib/libdm.a				comp-c-lib		compatfile
 ./usr/lib/libdm_p.a				comp-c-proflib		compatfile,profile
-./usr/lib/libdns.a				comp-bind-lib		compatfile
-./usr/lib/libdns_p.a				comp-bind-proflib	compatfile,profile
+./usr/lib/libdns.a				comp-bind-lib		compatfile,bind
+./usr/lib/libdns_p.a				comp-bind-proflib	compatfile,bind,profile
 ./usr/lib/libdns_sd.a				comp-mdns-lib		compatfile,mdns
 ./usr/lib/libdns_sd_p.a				comp-mdns-proflib	compatfile,mdns,profile
 ./usr/lib/libdtrace.a				comp-c-lib		compatfile,dtrace
@@ -4126,12 +4130,12 @@
 ./usr/lib/libipsec_p.a				comp-c-proflib		ipsec,compatfile,profile
 ./usr/lib/libirs.a				comp-obsolete		obsolete
 ./usr/lib/libirs_p.a				comp-obsolete		obsolete,profile
-./usr/lib/libisc.a				comp-bind-lib		compatfile
-./usr/lib/libisc_p.a				comp-bind-lib		compatfile,profile
-./usr/lib/libisccc.a				comp-bind-lib		compatfile
-./usr/lib/libisccc_p.a				comp-bind-proflib	compatfile,profile
-./usr/lib/libisccfg.a				comp-bind-lib		compatfile
-./usr/lib/libisccfg_p.a				comp-bind-proflib	compatfile,profile
+./usr/lib/libisc.a				comp-bind-lib		compatfile,bind
+./usr/lib/libisc_p.a				comp-bind-lib		compatfile,bind,profile
+./usr/lib/libisccc.a				comp-bind-lib		compatfile,bind
+./usr/lib/libisccc_p.a				comp-bind-proflib	compatfile,bind,profile
+./usr/lib/libisccfg.a				comp-bind-lib		compatfile,bind
+./usr/lib/libisccfg_p.a				comp-bind-proflib	compatfile,bind,profile
 ./usr/lib/libiscsi.a				comp-iscsi-lib		compatfile,iscsi
 ./usr/lib/libiscsi_p.a				comp-iscsi-proflib	compatfile,iscsi,profile
 ./usr/lib/libisns.a				comp-isns-lib		compatfile
@@ -4204,8 +4208,8 @@
 ./usr/lib/libnetpgpverify_p.a			comp-c-proflib		compatfile,profile
 ./usr/lib/libnpf.a				comp-npf-lib		compatfile,npf
 ./usr/lib/libnpf_p.a				comp-npf-proflib	compatfile,npf,profile
-./usr/lib/libns.a				comp-bind-lib		compatfile
-./usr/lib/libns_p.a				comp-bind-proflib	compatfile,profile
+./usr/lib/libns.a				comp-bind-lib		compatfile,bind
+./usr/lib/libns_p.a				comp-bind-proflib	compatfile,bind,profile
 ./usr/lib/libntp.a				comp-obsolete		obsolete
 ./usr/lib/libntp_p.a				comp-obsolete		obsolete
 ./usr/lib/libnvmm.a				comp-c-lib		nvmm
@@ -11786,6 +11790,7 @@
 ./usr/share/man/cat3/werase.0			comp-c-catman		.cat
 ./usr/share/man/cat3/wgetch.0			comp-c-catman		.cat
 ./usr/share/man/cat3/wgetnstr.0			comp-c-catman		.cat
+./usr/share/man/cat3/wgetscrreg.0		comp-c-catman		.cat
 ./usr/share/man/cat3/wgetstr.0			comp-c-catman		.cat
 ./usr/share/man/cat3/whline.0			comp-c-catman		.cat
 ./usr/share/man/cat3/winch.0			comp-c-catman		.cat
@@ -20730,6 +20735,7 @@
 ./usr/share/man/html3/werase.html		comp-c-htmlman		html
 ./usr/share/man/html3/wgetch.html		comp-c-htmlman		html
 ./usr/share/man/html3/wgetnstr.html		comp-c-htmlman		html
+./usr/share/man/html3/wgetscrreg.html		comp-c-htmlman		html
 ./usr/share/man/html3/wgetstr.html		comp-c-htmlman		html
 ./usr/share/man/html3/whline.html		comp-c-htmlman		html
 ./usr/share/man/html3/winch.html		comp-c-htmlman		html
@@ -29744,6 +29750,7 @@
 ./usr/share/man/man3/werase.3			comp-c-man		.man
 ./usr/share/man/man3/wgetch.3			comp-c-man		.man
 ./usr/share/man/man3/wgetnstr.3			comp-c-man		.man
+./usr/share/man/man3/wgetscrreg.3		comp-c-man		.man
 ./usr/share/man/man3/wgetstr.3			comp-c-man		.man
 ./usr/share/man/man3/whline.3			comp-c-man		.man
 ./usr/share/man/man3/winch.3			comp-c-man		.man

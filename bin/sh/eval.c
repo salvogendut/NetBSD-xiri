@@ -1,4 +1,4 @@
-/*	$NetBSD: eval.c,v 1.199 2026/05/20 00:50:00 kre Exp $	*/
+/*	$NetBSD: eval.c,v 1.201 2026/08/23 10:26:45 nia Exp $	*/
 
 /*-
  * Copyright (c) 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)eval.c	8.9 (Berkeley) 6/8/95";
 #else
-__RCSID("$NetBSD: eval.c,v 1.199 2026/05/20 00:50:00 kre Exp $");
+__RCSID("$NetBSD: eval.c,v 1.201 2026/08/23 10:26:45 nia Exp $");
 #endif
 #endif /* not lint */
 
@@ -49,7 +49,7 @@ __RCSID("$NetBSD: eval.c,v 1.199 2026/05/20 00:50:00 kre Exp $");
 #include <errno.h>
 #include <limits.h>
 #include <unistd.h>
-#include <sys/fcntl.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/times.h>
 #include <sys/param.h>
@@ -794,7 +794,7 @@ evalbackcmd(union node *n, struct backcmd *result)
 		INTOFF;
 		if (sh_pipe(pip) < 0)
 			error("Pipe call failed");
-		jp = makejob(n, 1);
+		jp = makejob(n, 0);   /* 0 --> leave jobs_invalid, no jobctl */
 		if (forkshell(jp, n, FORK_NOJOB) == 0) {
 			FORCEINTON;
 			close(pip[0]);

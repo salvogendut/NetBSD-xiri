@@ -31,9 +31,9 @@
  * NPF route extension.
  */
 
- #ifdef _KERNEL
+#ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: npf_ext_route.c,v 1.1 2026/04/08 00:33:07 joe Exp $");
+__KERNEL_RCSID(0, "$NetBSD: npf_ext_route.c,v 1.18 2026/10/23 04:19:13 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -78,7 +78,10 @@ NPF_EXT_MODULE(npf_ext_route, "");
 static void *          npf_ext_route_id;
 
 typedef struct {
-    char            ifname[IFNAMSIZ];
+    char ifname[IFNAMSIZ];
+	struct sockaddr_in v4_gateway;
+	struct sockaddr_in6 v6_gateway;
+	bool dup_to;
 } npf_ext_route_t;
 
 static int
@@ -86,15 +89,27 @@ npf_route_ctor(npf_rproc_t *rp, const nvlist_t* params)
 {
 	npf_ext_route_t *meta;
 	const char *ifname;
+	const void *v4_gw, *v6_gw;
+	size_t alen;
 
-	meta = kmem_zalloc(sizeof(*meta), KM_SLEEP);
-	ifname = nvlist_get_string(params, "route-interface");
-
+	ifname = dnvlist_get_string(params, "route-interface", NULL);
 	if (!ifname)
 		return EINVAL;
 
-	/* XXX use something like npf_ifmap */
+	v4_gw = dnvlist_get_binary(params, "via", &alen, NULL, 0);
+	v6_gw = dnvlist_get_binary(params, "via6", &alen, NULL, 0);
+
+	meta = kmem_zalloc(sizeof(*meta), KM_SLEEP);
+	if (v4_gw) {
+		sockaddr_in_init(&meta->v4_gateway, v4_gw, 0);
+	}
+	if (v6_gw) {
+		sockaddr_in6_init(&meta->v6_gateway, v6_gw, 0, 0, 0);
+	}
+
 	strlcpy(meta->ifname, ifname, IFNAMSIZ);
+	meta->dup_to = dnvlist_get_bool(params, "dup-to", false);
+
 	npf_rproc_assign(rp, meta);
 	return 0;
 }
@@ -106,10 +121,9 @@ npf_route_dtor(npf_rproc_t *rp, void *meta)
 }
 
 static void
-npf_chcksum(struct ifnet *ifp1, struct mbuf *m0, struct ip *ip1, int *sw_csum)
+npf_chcksum(struct ifnet *ifp1, struct mbuf *m, struct ip *ip1, int *sw_csum)
 {
 	int hlen;
-	struct mbuf *m = m0;
 	struct ip *ip = ip1;
 	struct ifnet *ifp = ifp1;
 	int csum;
@@ -155,7 +169,7 @@ npf_chcksum(struct ifnet *ifp1, struct mbuf *m0, struct ip *ip1, int *sw_csum)
 
 static int
 npf_fragment(npf_t *npf, struct ifnet *ifp, struct ip *ip1,
-    struct mbuf **m0, struct sockaddr_in *dst)
+    struct mbuf **m0, const struct sockaddr *edst, struct rtentry *rt)
 {
 	int error;
 	struct ip *ip = ip1;
@@ -172,10 +186,10 @@ npf_fragment(npf_t *npf, struct ifnet *ifp, struct ip *ip1,
 		return EINVAL;
 	}
 	/*
-		* We can't use HW checksumming if we're about to fragment the packet.
-		*
-		* XXX Some hardware can do this.
-		*/
+	 * We can't use HW checksumming if we're about to fragment the packet.
+	 *
+	 * XXX Some hardware can do this.
+	 */
 	if (m->m_pkthdr.csum_flags & (M_CSUM_TCPv4|M_CSUM_UDPv4)) {
 		if (IN_NEED_CHECKSUM(ifp,
 			m->m_pkthdr.csum_flags & (M_CSUM_TCPv4|M_CSUM_UDPv4))) {
@@ -200,7 +214,7 @@ npf_fragment(npf_t *npf, struct ifnet *ifp, struct ip *ip1,
 
 		KASSERT((m->m_pkthdr.csum_flags &
 			(M_CSUM_UDPv4 | M_CSUM_TCPv4)) == 0);
-		error = ip_if_output(ifp, m, sintocsa(dst), NULL);
+		error = ip_if_output(ifp, m, edst, rt);
 	}
 
 	if (error == 0) {
@@ -273,10 +287,9 @@ npf_validate_saddr(npf_t * npf, struct ip *ip, struct ifnet* ifp)
 #if defined(INET6)
 /* this code is copied from ip6_output*/
 static void
-npf_validate_s6addr(struct mbuf *m0, struct ifnet *ifp1, int *sw_csum)
+npf_validate_s6addr(struct mbuf *m, struct ifnet *ifp1, int *sw_csum)
 {
 	struct in6_ifaddr *ia6;
-	struct mbuf *m = m0;
 	struct ifnet *ifp = ifp1;
 	struct ip6_hdr *ip6;
 	int csum;
@@ -307,42 +320,60 @@ npf_validate_s6addr(struct mbuf *m0, struct ifnet *ifp1, int *sw_csum)
 
 /* main routing function for kernel module */
 static bool
-npf_route(npf_cache_t *npc, void *meta, const npf_match_info_t __unused *mi, int *decision)
+npf_route(npf_cache_t *npc, void *meta, const npf_match_info_t __unused *mi,
+    int *decision)
 {
-	struct mbuf *m0 = nbuf_head_mbuf(npc->npc_nbuf);
+	struct mbuf *m = nbuf_head_mbuf(npc->npc_nbuf);
+	struct mbuf *m0 = NULL;
 	const npf_ext_route_t *route = meta;
 	npf_t *npf = npf_getkernctx();
 	struct ifnet *ifp;
-	int error;
-	int sw_csum;
-
+	int error, sw_csum;
+	bool consumed = false, dup_to = route->dup_to;
+	bool rv;
+	int stats;
+	const struct sockaddr *edst;
 	union {
 		struct sockaddr_in v4;
 		struct sockaddr_in6 v6;
 	} dst;
+
+	stats = NPF_STAT_REROUTE;
 
 	/* Skip, if already blocking.
 	 * also when routing is applied to a stateful rule, incoming packets
 	 * are routed since the procedure becomes attached to the connection
 	 * and hence will not be desirable
 	 */
-	if (*decision == NPF_DECISION_BLOCK ||
-    (mi->mi_di == PFIL_IN)) {
-			return true;
+	if (*decision == NPF_DECISION_BLOCK || mi->mi_di == PFIL_IN) {
+		return true;
 	}
 
 	/* global lock for interface lookup */
 	KERNEL_LOCK(1, NULL);
 	ifp = ifunit(route->ifname);
 	if (ifp == NULL) {
-			/* XXX: oops */
+		/* XXX: oops */
+		goto bad;
+	}
+
+	/* duplicate(if using dup-to) packet and send our version */
+	if (dup_to) {
+		if ((m0 = m_dup(m, 0, M_COPYALL, M_NOWAIT)) == NULL) {
 			goto bad;
+		}
+	} else {
+		m0 = m;
 	}
 
 	if (npf_iscached(npc, NPC_IP6)) {
 #if defined(INET6)
 		struct ip6_hdr *ip6 = npc->npc_ip.v6;
-		sockaddr_in6_init(&dst.v6, &ip6->ip6_dst, 0, 0, 0);
+		dst.v6 = route->v6_gateway;
+
+		/* if no gateway is specified or this is mutlicast, use dst addr */
+		if (IN6_IS_ADDR_UNSPECIFIED(&dst.v6.sin6_addr) || IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst))
+			sockaddr_in6_init(&dst.v6, &ip6->ip6_dst, 0, 0, 0);
 
 		if (IN6_IS_SCOPE_EMBEDDABLE(&dst.v6.sin6_addr)) {
 			error = in6_setscope(&dst.v6.sin6_addr, ifp, NULL);
@@ -353,38 +384,39 @@ npf_route(npf_cache_t *npc, void *meta, const npf_match_info_t __unused *mi, int
 
 		npf_validate_s6addr(m0, ifp, &sw_csum);
 
-		if (m0->m_pkthdr.len <= ifp->if_mtu) {
-			if (__predict_false(sw_csum & M_CSUM_TSOv6)) {
-				/*
-				 * TSO6 is required by a packet, but disabled for
-				 * the interface.
-				 */
-				error = ip6_tso_output(ifp, ifp, m0, &dst.v6, NULL);
-			} else
-				error = ip6_if_output(ifp, ifp, m0, &dst.v6, NULL);
-
-			if (error) {
-				goto bad;
-			}
-
-		} else {
-			/* router not allowed to fragmenrt */
+		if (m->m_pkthdr.len > ifp->if_mtu) {
+			/* router not allowed to fragment */
 			npf_stats_inc(npf, NPF_STAT_NOFRAGMENT);
-			icmp6_error(m0, ICMP6_PACKET_TOO_BIG, 0, ifp->if_mtu);
+			goto bad;
+		}
+
+		if (__predict_false(sw_csum & M_CSUM_TSOv6)) {
+			/*
+			 * TSO6 is required by a packet, but disabled for
+			 * the interface.
+			*/
+			error = ip6_tso_output(ifp, ifp, m0, &dst.v6, NULL);
+		} else
+			error = ip6_if_output(ifp, ifp, m0, &dst.v6, NULL);
+		consumed = true;
+		if (!error) {
+			goto done;
 		}
 #endif
 	} else if (npf_iscached(npc, NPC_IP4)) {
 		struct ip *ip = npc->npc_ip.v4;
-		struct mbuf *m = m0;
+		sockaddr_in_init(&dst.v4, &ip->ip_dst, 0);
 
-		KASSERT(ip != NULL);
-		KASSERT(m != NULL);
+		edst = sintocsa(&route->v4_gateway);
+
+		/* if no gateway is specified or if this is multicast, use dst address */
+		if (edst == NULL || m0->m_flags & M_MCAST)
+			edst = sintocsa(&dst.v4);
 
 		/*
 		 * NB: This code is copied from ip_output and re-arranged
 		 * checks fragmentation, checksum and source address validity
 		 */
-		sockaddr_in_init(&dst.v4, &ip->ip_dst, 0);
 
 		error = npf_validate_saddr(npf, ip, ifp);
 		if (error)
@@ -393,7 +425,7 @@ npf_route(npf_cache_t *npc, void *meta, const npf_match_info_t __unused *mi, int
 		if (ntohs(ip->ip_len) > ifp->if_mtu)
 			goto fragment;
 
-		npf_chcksum(ifp, m, ip, &sw_csum);
+		npf_chcksum(ifp, m0, ip, &sw_csum);
 
 		/* Send it */
 		if (__predict_false(sw_csum & M_CSUM_TSOv4)) {
@@ -401,39 +433,46 @@ npf_route(npf_cache_t *npc, void *meta, const npf_match_info_t __unused *mi, int
 			 * TSO4 is required by a packet, but disabled for
 			 * the interface.
 			 */
-			error = ip_tso_output(ifp, m, sintocsa(&dst.v4), NULL);
+			error = ip_tso_output(ifp, m0, edst, NULL);
 		} else
-			error = ip_if_output(ifp, m, sintocsa(&dst.v4), NULL);
-
+			error = ip_if_output(ifp, m0, edst, NULL);
+		consumed = true;
 		if (error) {
 			goto bad;
 		}
 		goto done;
 
 fragment:
-		error = npf_fragment(npf, ifp, ip, &m0, &dst.v4);
-		if (error) {
-			goto bad;
+		error = npf_fragment(npf, ifp, ip, &m0, edst, NULL);
+		consumed = true;
+		if (!error) {
+			goto done;
 		}
 	}
 
 /*
- * for routing procedures, we reverse the returns
- * because we need the kernel to stop processing the mbuf
- * after we leave the filtering context
+ * for routing procedures, when we dup-to, we need original packet to
+ * continue its normal routing and copied packet go through our route.
+ * if we don't dup-to, we need processing of the moving mbuf stopped either in a failure or success path
+ * since we now care about the copied which is to be sent.
+ * just return false and handle the freeing of the moving mbuf,
+ * in a dup-to, where both packets leave successfully, we don't free any of them.
  */
-done:
-	npf_stats_inc(npf, NPF_STAT_REROUTE);
-	m0 = NULL;
-	KERNEL_UNLOCK_ONE(NULL);
-	return false;
-
 bad:
-	npf_stats_inc(npf, NPF_STAT_NOREROUTE);
-	m_freem(m0);
-	m0 = NULL;
+	if (!consumed)
+		m_freem(m0);
+	stats = NPF_STAT_NOREROUTE;
+done:
+	rv = true;
+	npf_stats_inc(npf, stats);
+
+	if (!dup_to) {
+		rv = false;
+		m = NULL;
+	}
+
 	KERNEL_UNLOCK_ONE(NULL);
-	return true;
+	return rv;
 }
 
 __dso_public int

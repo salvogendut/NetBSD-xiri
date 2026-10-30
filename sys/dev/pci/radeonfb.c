@@ -1,4 +1,4 @@
-/*	$NetBSD: radeonfb.c,v 1.123 2026/06/13 17:20:33 jdc Exp $ */
+/*	$NetBSD: radeonfb.c,v 1.125 2026/07/24 07:40:47 macallan Exp $ */
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radeonfb.c,v 1.123 2026/06/13 17:20:33 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radeonfb.c,v 1.125 2026/07/24 07:40:47 macallan Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -601,6 +601,16 @@ radeonfb_attach(device_t parent, device_t dev, void *aux)
 		PRINTREG(RADEON_CRTC2_H_SYNC_STRT_WID);
 		PRINTREG(RADEON_FP_H2_SYNC_STRT_WID);
 	}
+	radeonfb_i2c_init(sc);
+
+	radeonfb_loadbios(sc, pa);
+
+#ifdef	RADEONFB_BIOS_INIT
+	if (radeonfb_bios_init(sc)) {
+		aprint_error("%s: BIOS initialization failed\n", XNAME(sc));
+	}
+#endif
+
 /*
  * XXX
  * This was if (IS_RV100()), which is set for all pre-R3xx chips.
@@ -612,6 +622,10 @@ radeonfb_attach(device_t parent, device_t dev, void *aux)
 
 	/* XXX
 	 * according to xf86-video-radeon R3xx has this bit backwards
+	 *
+	 * this must happen after radeonfb_bios_init(): the BIOS init
+	 * tables rewrite TMDS_TRANSMITTER_CNTL and would disable the
+	 * transmitter PLL again
 	 */
 	if (IS_R300(sc)) {
 		PATCH32(sc, RADEON_TMDS_TRANSMITTER_CNTL,
@@ -622,16 +636,6 @@ radeonfb_attach(device_t parent, device_t dev, void *aux)
 		    RADEON_TMDS_TRANSMITTER_PLLEN,
 		    ~(RADEON_TMDS_TRANSMITTER_PLLEN | RADEON_TMDS_TRANSMITTER_PLLRST));
 	}
-
-	radeonfb_i2c_init(sc);
-
-	radeonfb_loadbios(sc, pa);
-
-#ifdef	RADEONFB_BIOS_INIT
-	if (radeonfb_bios_init(sc)) {
-		aprint_error("%s: BIOS initialization failed\n", XNAME(sc));
-	}
-#endif
 
 	if (radeonfb_getclocks(sc)) {
 		aprint_error("%s: Unable to get reference clocks from BIOS\n",
@@ -778,11 +782,17 @@ radeonfb_attach(device_t parent, device_t dev, void *aux)
 	 * TODO:
 	 * see if this is still necessary now that CRTCs, DACs and outputs are
 	 * getting wired up in a halfway sane way
+	 *
+	 * Only do this when we have no BIOS connector table to go by (Mac
+	 * and Sun firmware-initialized cards). On cards never POSTed by
+	 * firmware sc_fp_gen_cntl holds meaningless reset defaults, duh.
 	 */
-	if (sc->sc_fp_gen_cntl & RADEON_FP_SEL_CRTC2) {
-		SET32(sc, RADEON_FP_GEN_CNTL, RADEON_FP_SEL_CRTC2);
-	} else {
-		CLR32(sc, RADEON_FP_GEN_CNTL, RADEON_FP_SEL_CRTC2);
+	if (sc->sc_biossz == 0) {
+		if (sc->sc_fp_gen_cntl & RADEON_FP_SEL_CRTC2) {
+			SET32(sc, RADEON_FP_GEN_CNTL, RADEON_FP_SEL_CRTC2);
+		} else {
+			CLR32(sc, RADEON_FP_GEN_CNTL, RADEON_FP_SEL_CRTC2);
+		}
 	}
 
 	/*
@@ -840,13 +850,28 @@ radeonfb_attach(device_t parent, device_t dev, void *aux)
 		 */
 		if (HAS_CRTC2(sc) && (sc->sc_ndisplays == 1)) {
 			DPRINTF(("dual crtcs!\n"));
-			dp->rd_ncrtcs = 2;
-			dp->rd_crtcs[0].rc_port =
-			    &sc->sc_ports[0];
-			dp->rd_crtcs[0].rc_number = sc->sc_ports[0].rp_number;
-			dp->rd_crtcs[1].rc_port =
-			    &sc->sc_ports[1];
-			dp->rd_crtcs[1].rc_number = sc->sc_ports[1].rp_number;
+			/*
+			 * Only wire up CRTCs for ports that have a physical
+			 * connector.
+			 */
+			dp->rd_ncrtcs = 0;
+			for (j = 0; j < 2; j++) {
+				if (sc->sc_ports[j].rp_conn_type ==
+				    RADEON_CONN_NONE)
+					continue;
+				dp->rd_crtcs[dp->rd_ncrtcs].rc_port =
+				    &sc->sc_ports[j];
+				dp->rd_crtcs[dp->rd_ncrtcs].rc_number =
+				    sc->sc_ports[j].rp_number;
+				dp->rd_ncrtcs++;
+			}
+			if (dp->rd_ncrtcs == 0) {
+				/* no connector info at all, be safe */
+				dp->rd_ncrtcs = 1;
+				dp->rd_crtcs[0].rc_port = &sc->sc_ports[0];
+				dp->rd_crtcs[0].rc_number =
+				    sc->sc_ports[0].rp_number;
+			}
 		} else {
 			dp->rd_ncrtcs = 1;
 			dp->rd_crtcs[0].rc_port =
@@ -1204,13 +1229,13 @@ radeonfb_ioctl(void *v, void *vs,
 			return radeonfb_getcmap(dp,
 			    (struct wsdisplay_cmap *)d);
 		return EINVAL;
-		
+
 	case WSDISPLAYIO_PUTCMAP:
 		if (dp->rd_bpp == 8)
 			return radeonfb_putcmap(dp,
 			    (struct wsdisplay_cmap *)d);
 		return EINVAL;
-		
+
 	case WSDISPLAYIO_LINEBYTES:
 		*(unsigned *)d = dp->rd_stride;
 		return 0;
@@ -1221,7 +1246,7 @@ radeonfb_ioctl(void *v, void *vs,
 			if ((dp->rd_wsmode == WSDISPLAYIO_MODE_EMUL) ||
 			    (dp->rd_wsmode == WSDISPLAYIO_MODE_DUMBFB))
 				radeonfb_map(sc);
-			
+
 			if ((dp->rd_wsmode == WSDISPLAYIO_MODE_EMUL) &&
 			    (dp->rd_vd.active)) {
 				radeonfb_engine_init(dp);
@@ -2238,6 +2263,14 @@ radeonfb_program_vclk(struct radeonfb_softc *sc, int dotclock, int crtc, int fla
 		    RADEON_VCLK_SRC_SEL_PPLLCLK,
 		    ~RADEON_VCLK_SRC_SEL_MASK);
 
+		/*
+		 * Ungate the CRTC1 pixel clocks
+		 */
+		SETPLL(sc, RADEON_VCLK_ECP_CNTL,
+		    RADEON_PIXCLK_ALWAYS_ONb |
+		    RADEON_PIXCLK_DAC_ALWAYS_ONb);
+		PRINTPLL(RADEON_VCLK_ECP_CNTL);
+
 	} else {
 
 		PATCHPLL(sc, RADEON_PIXCLKS_CNTL,
@@ -2287,6 +2320,18 @@ radeonfb_program_vclk(struct radeonfb_softc *sc, int dotclock, int crtc, int fla
 		PATCHPLL(sc, RADEON_PIXCLKS_CNTL,
 		    RADEON_PIX2CLK_SRC_SEL_P2PLLCLK,
 		    ~RADEON_PIX2CLK_SRC_SEL_MASK);
+
+		/*
+		 * Ungate the CRTC2 and digital-output pixel clocks
+		 */
+		SETPLL(sc, RADEON_PIXCLKS_CNTL,
+		    RADEON_PIX2CLK_ALWAYS_ONb |
+		    RADEON_PIX2CLK_DAC_ALWAYS_ONb |
+		    RADEON_PIXCLK_BLEND_ALWAYS_ONb |
+		    RADEON_PIXCLK_GV_ALWAYS_ONb |
+		    RADEON_PIXCLK_DIG_TMDS_ALWAYS_ONb |
+		    RADEON_PIXCLK_TMDS_ALWAYS_ONb);
+		PRINTPLL(RADEON_PIXCLKS_CNTL);
 	}
 	PRINTREG(RADEON_CRTC_MORE_CNTL);
 }
@@ -2453,12 +2498,15 @@ radeonfb_setcrtc(struct radeonfb_display *dp, int index)
 	DPRINTF(("CRTC%s_GEN_CNTL = %08x\n", crtc ? "2" : "", v));
 
 	/*
-	 * CRTC_EXT_CNTL - preserve disable flags, set ATI linear and EXT_CNT
+	 * CRTC_EXT_CNTL - set ATI linear and EXT_CNT. Do NOT preserve
+	 * HSYNC_DIS/VSYNC_DIS: on cards not POSTed by system firmware
+	 * (RADEONFB_BIOS_INIT) the BIOS init tables may leave the syncs
+	 * disabled, and nothing else along the modeswitch path would
+	 * re-enable them... (Would result in black screen)
 	 */
 	v = GET32(sc, RADEON_CRTC_EXT_CNTL);
 	if (crtc == 0) {
-		v &= (RADEON_CRTC_VSYNC_DIS | RADEON_CRTC_HSYNC_DIS |
-		    RADEON_CRTC_DISPLAY_DIS);
+		v &= RADEON_CRTC_DISPLAY_DIS;
 		v |= RADEON_XCRT_CNT_EN | RADEON_VGA_ATI_LINEAR;
 		if (mode->flags & VID_CSYNC)
 			v |= RADEON_CRTC_VSYNC_TRISTAT;
@@ -2553,9 +2601,35 @@ radeonfb_setcrtc(struct radeonfb_display *dp, int index)
 		CLR32(sc, RADEON_CRTC2_GEN_CNTL,
 		    RADEON_CRTC2_VSYNC_DIS |
 		    RADEON_CRTC2_HSYNC_DIS |
-		    RADEON_CRTC2_DISP_DIS | RADEON_CRTC2_DISP_REQ_EN_B); 
+		    RADEON_CRTC2_DISP_DIS | RADEON_CRTC2_DISP_REQ_EN_B);
 		PRINTREG(RADEON_CRTC2_GEN_CNTL);
 		break;
+	}
+
+	/*
+	 * Program the TMDS PLL for this dot clock - handle cards that 
+	 * never POSTed.
+	 */
+	if (sc->sc_ports[index].rp_tmds_type == RADEON_TMDS_INT) {
+		int	i;
+
+		for (i = 0; i < 4; i++) {
+			if ((uint32_t)(mode->dot_clock / 10) <=
+			    sc->sc_tmds_pll[i].rtp_freq) {
+				uint32_t tpll = sc->sc_tmds_pll[i].rtp_pll;
+
+				/*
+				 * RV280 wants bit 22 set here, the bit
+				 * reads back inverted, DON'T trust the
+				 * readback!
+				 */
+				if (sc->sc_family == RADEON_RV280)
+					tpll |= (1 << 22);
+				PUT32(sc, RADEON_TMDS_PLL_CNTL, tpll);
+				PRINTREG(RADEON_TMDS_PLL_CNTL);
+				break;
+			}
+		}
 	}
 }
 
@@ -2599,7 +2673,7 @@ radeonfb_blank(struct radeonfb_display *dp, int blank)
 
 		/*
 		 * XXX
-		 * I don't know how to turn the sunc outputs off for DPMS
+		 * I don't know how to turn the sync outputs off for DPMS
 		 * power control, so for now just turn the entire CRTC off
 		 */
 		if (blank) {
@@ -2616,12 +2690,14 @@ radeonfb_blank(struct radeonfb_display *dp, int blank)
 
 		if (dp->rd_crtcs[i].rc_number) {
 			reg = RADEON_CRTC2_GEN_CNTL;
-			mask = RADEON_CRTC2_DISP_DIS;
+			mask = RADEON_CRTC2_DISP_DIS | RADEON_CRTC2_HSYNC_DIS | 
+			       RADEON_CRTC2_VSYNC_DIS;
 			fpreg = RADEON_FP2_GEN_CNTL;
 			fpval = RADEON_FP2_ON;
 		} else {
 			reg = RADEON_CRTC_EXT_CNTL;
-			mask = RADEON_CRTC_DISPLAY_DIS;
+			mask = RADEON_CRTC_DISPLAY_DIS | RADEON_CRTC_HSYNC_DIS |
+			       RADEON_CRTC_VSYNC_DIS;
 			fpreg = RADEON_FP_GEN_CNTL;
 			fpval = RADEON_FP_FPON;
 		}
@@ -4297,7 +4373,6 @@ radeonfb_cursor_visible(struct radeonfb_display *dp)
 			CLR32(dp->rd_softc, gencntl, bit);
 		if (IS_AVIVO(sc))
 			CLR32(sc, AVIVO_D1CUR_UPDATE, AVIVO_D1CURSOR_UPDATE_LOCK);
-		
 	}
 }
 
@@ -4329,7 +4404,7 @@ radeonfb_cursor_update(struct radeonfb_display *dp, unsigned which)
 	int		i;
 
 	sc = dp->rd_softc;
-	
+
 	for (i = 0; i < dp->rd_ncrtcs; i++) {
 		if (dp->rd_crtcs[i].rc_number) {
 			if (IS_AVIVO(sc)) {

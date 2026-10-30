@@ -18,23 +18,13 @@
 # startup/reconfiguration was known to cause timeout issues in the CI
 # system, where many tests run in parallel.
 
-include "../../_common/rndc.key";
-
-controls {
-	inet 10.53.0.5 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
-};
+{% include "_common/controls.conf.j2" %}
 
 options {
-	query-source address 10.53.0.5;
-	notify-source 10.53.0.5;
-	transfer-source 10.53.0.5;
-	port @PORT@;
+	{% include_indented "_common/options.conf.j2" %}
 	tls-port @TLSPORT@;
 	https-port @HTTPSPORT@;
 	http-port @HTTPPORT@;
-	pid-file "named.pid";
-	listen-on { 10.53.0.5; };
-	listen-on-v6 { none; };
 	recursion no;
 	notify no;
 	ixfr-from-differences yes;
@@ -44,10 +34,7 @@ options {
 };
 
 
-zone "." {
-	type hint;
-	file "../../_common/root.hint";
-};
+{% include "_common/root.hint.conf" %}
 
 # Let's reuse the same entry multiple times to see if transfers will succeed
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.62 2026/05/22 01:01:55 kre Exp $	*/
+/*	$NetBSD: trap.c,v 1.65 2026/08/05 15:43:15 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)trap.c	8.5 (Berkeley) 6/5/95";
 #else
-__RCSID("$NetBSD: trap.c,v 1.62 2026/05/22 01:01:55 kre Exp $");
+__RCSID("$NetBSD: trap.c,v 1.65 2026/08/05 15:43:15 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -436,16 +436,20 @@ trapcmd(int argc, char **argv)
 /*
  * Clear traps on a fork or vfork.
  * Takes one arg vfork, to tell it to not be destructive of
- * the parents variables.
+ * the parents variables (or if set to 2, to be immediately
+ * destructive, reinitialise everything, called during init).
  */
 void
 clear_traps(int vforked)
 {
 	char * volatile *tp;
+	int already_invalid  = 0;
 
 	VTRACE(DBG_TRAP, ("clear_traps(%d)\n", vforked));
-	if (!vforked)
+	if (!vforked) {
+		already_invalid = traps_invalid;
 		traps_invalid = 1;
+	}
 
 	for (tp = &trap[1] ; tp < &trap[NSIG] ; tp++) {
 		if (*tp && **tp) {	/* trap not NULL or SIG_IGN */
@@ -454,7 +458,7 @@ clear_traps(int vforked)
 			INTON;
 		}
 	}
-	if (vforked == 2)
+	if (already_invalid || vforked == 2)
 		free_traps();
 }
 
@@ -804,9 +808,11 @@ void
 dotrap(void)
 {
 	int i;
-	char *tr;
+	char * volatile tr;
 	int savestatus;
 	struct skipsave saveskip;
+	struct jmploc jmploc;
+	struct jmploc * const savehandler = handler;
 
 	CTRACE(DBG_TRAP|DBG_SIG, ("dotrap[%d]: %d pending, traps %sinvalid\n",
 	    in_dotrap, pendingsigs, traps_invalid ? "" : "not "));
@@ -838,9 +844,17 @@ dotrap(void)
 			last_trapsig = i;
 			save_skipstate(&saveskip);
 			savestatus = exitstatus;
-
 			tr = savestr(tr);	/* trap code may free trap[i] */
-			evalstring(tr, 0);
+
+			if (setjmp(jmploc.loc)) {
+				ckfree(tr);
+				handler = savehandler;
+				longjmp(handler->loc, 1);
+			} else {
+				handler = &jmploc;
+				evalstring(tr, 0);
+			}
+			handler = savehandler;
 			ckfree(tr);
 
 			if (current_skipstate() == SKIPNONE ||
@@ -851,6 +865,32 @@ dotrap(void)
 		}
 	}
 }
+
+#ifndef SMALL
+/* dotrap() in an environment where the stack is in use */
+void
+run_traps(int string_growing)
+{
+	struct stackmark smark;
+	struct jmploc jmploc;
+	struct jmploc * const savehandler = handler;
+
+	setstackmark(&smark);
+	if (string_growing)
+		grabstackstr(stackblock() + STSTRLEN());
+
+	if (setjmp(jmploc.loc)) {
+		popstackmark(&smark);
+		handler = savehandler;
+		longjmp(handler->loc, 1);
+	} else {
+		handler = &jmploc;
+		dotrap();
+	}
+	handler = savehandler;
+	popstackmark(&smark);
+}
+#endif
 
 int
 lastsig(void)

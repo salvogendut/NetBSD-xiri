@@ -1,4 +1,4 @@
-/*	$NetBSD: dcr4xx.h,v 1.5 2026/06/13 19:45:50 rkujawa Exp $	*/
+/*	$NetBSD: dcr4xx.h,v 1.9 2026/09/28 20:41:01 rkujawa Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -63,10 +63,20 @@
 #define	DCR_PLB0_BEAR		0x086	/* PLB Bus Error Address Register */
 #define	DCR_PLB0_ACR		0x087	/* PLB Arbiter Control Register (4xx) */
 /*
- * 460EX has a PLB4 with two arbiter segments
+ * 460EX has a PLB4 with two arbiter segment and a different layout.
  */
+#define	DCR_PLB4A0_REVID	0x080	/* PLB4 arbiter 0 revision */
 #define	DCR_PLB4A0_ACR		0x081	/* PLB4 arbiter 0 control */
+#define	DCR_PLB4A0_BESRL	0x082	/* PLB4 arbiter 0 error status low */
+#define	DCR_PLB4A0_BESRH	0x083	/* ... high */
+#define	DCR_PLB4A0_BEARL	0x084	/* PLB4 arbiter 0 error address low */
+#define	DCR_PLB4A0_BEARH	0x085	/* ... high (ERPN) */
+#define	DCR_PLB4A1_REVID	0x088	/* PLB4 arbiter 1 revision */
 #define	DCR_PLB4A1_ACR		0x089	/* PLB4 arbiter 1 control */
+#define	DCR_PLB4A1_BESRL	0x08a	/* PLB4 arbiter 1 error status low */
+#define	DCR_PLB4A1_BESRH	0x08b	/* ... high */
+#define	DCR_PLB4A1_BEARL	0x08c	/* PLB4 arbiter 1 error address low */
+#define	DCR_PLB4A1_BEARH	0x08d	/* ... high (ERPN) */
 #define	  PLB4Ax_ACR_RDP_MASK	  0x06000000	/* read pipeline depth */
 #define	  PLB4Ax_ACR_RDP_4DEEP	  0x06000000
 #define	  PLB4Ax_ACR_WRP_MASK	  0x01000000	/* write pipeline depth */
@@ -248,12 +258,23 @@
 /* Indirectly accessed Clocking Controller DCRs */
 
 /*
- * AHB-to-PLB bridge configuration (460EX/460GT).  
+ * PLL straps (460EX/460GT).
+ */
+#define	DCR_SDR0_SDSTP0		0x0020	/* Strap 0 (PLL divisors) */
+#define	  SDR0_SDSTP0_FWDVA	  0x000000f0	/* Forward divisor A */
+#define	  SDR0_SDSTP0_FBDV	  0x0000ff00	/* Feedback divisor */
+#define	  SDR0_SDSTP0_SEL	  0x18000000	/* Feedback source, 0 = PLL */
+
+/*
+ * AHB-to-PLB bridge configuration (460EX/460GT).
  */
 #define	DCR_SDR0_AHB_CFG	0x0370	/* AHB-to-PLB bridge config */
 #define	  SDR0_AHB_CFG_A2P_INCR4	  0x00000080	/* IBM bit 24 */
 #define	  SDR0_AHB_CFG_A2P_PROT2	  0x00000040	/* IBM bit 25 */
 #define	DCR_SDR0_USB2HOST_CFG	0x0371	/* USB 2.0 host config */
+#define	DCR_SDR0_SRST1		0x0201	/* Soft Reset 1 (SATA etc., 460EX) */
+#define	  SDR0_SRST1_SATA_RESET	  0x00020001	/* SATA core+sub in reset */
+#define	  SDR0_SRST1_USBHOST	  0x00000008	/* USB 2.0 host controller */
 
 #define	DCR_SDR0_SRST0		0x0200	/* Soft Reset */
 #define	  SDR0_SRST0_BGO	  (1 << 31)	/* PLB4 to OPB bridge */

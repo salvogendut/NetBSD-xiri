@@ -1,4 +1,4 @@
-#	$NetBSD: t_cxxruntime.sh,v 1.9 2026/03/09 20:29:25 skrll Exp $
+#	$NetBSD: t_cxxruntime.sh,v 1.11 2026/06/25 00:35:41 riastradh Exp $
 #
 # Copyright (c) 2017 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -105,6 +105,11 @@ cxxruntime_profile_body() {
 int main(void) {std::cout << "hello world" << std::endl;exit(0);}
 EOF
 	atf_check -s exit:0 -o ignore -e ignore c++ -static -pg -o hello test.cpp
+	case $(uname -p) in
+	mips*|riscv*)
+		atf_expect_fail "PR toolchain/59710: various pic profile tests are failing and/or broken"
+		;;
+	esac
 	atf_check -s exit:0 -o inline:"hello world\n" ./hello
 }
 
@@ -208,6 +213,12 @@ EOF
 	atf_check -s exit:0 -o ignore -e ignore \
 	    c++ -pg -o hello test.cpp -L. -ltest
 
+	case $(uname -p) in
+	*arm*|i?86|mips*|powerpc*|sparc|vax)
+		atf_expect_fail "PR toolchain/59710: various pic profile tests are failing and/or broken"
+		;;
+	esac
+
 	export LD_LIBRARY_PATH=.
 	atf_check -s exit:0 -o inline:"hello world\n" ./hello
 }
@@ -239,6 +250,12 @@ EOF
 	    c++ -m32 -pg -fPIC -shared -o libtest.so pic.cpp
 	atf_check -s exit:0 -o ignore -e ignore \
 	    c++ -m32 -pg -o hello test.cpp -L. -ltest
+
+	case $(uname -p) in
+	x86_64)
+		atf_expect_fail "PR toolchain/59710: various pic profile tests are failing and/or broken"
+		;;
+	esac
 
 	export LD_LIBRARY_PATH=.
 	atf_check -s exit:0 -o inline:"hello world\n" ./hello

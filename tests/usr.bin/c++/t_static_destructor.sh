@@ -1,4 +1,4 @@
-#	$NetBSD: t_static_destructor.sh,v 1.12 2026/03/09 20:29:25 skrll Exp $
+#	$NetBSD: t_static_destructor.sh,v 1.14 2026/06/25 00:35:41 riastradh Exp $
 #
 # Copyright (c) 2017 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -153,6 +153,11 @@ static_destructor_body() {
 
 static_destructor_profile_body() {
 	mktest main
+	case $(uname -p) in
+	riscv*)
+		atf_expect_fail "PR toolchain/59710: various pic profile tests are failing and/or broken"
+		;;
+	esac
 	ccmain -static -pg
 }
 
@@ -188,6 +193,11 @@ static_destructor_pic_profile_body() {
 	mktest pic
 	mkmain pic
 	cclib -pg 
+	case $(uname -p) in
+	i?86|powerpc*|sparc|vax)
+		atf_expect_fail "PR toolchain/59710: various pic profile tests are failing and/or broken"
+		;;
+	esac
 	ccmain -pg -L${PWD} -Wl,-R${PWD} -lpic
 }
 
@@ -197,6 +207,11 @@ static_destructor_pic_profile_32_body() {
 	mktest pic
 	mkmain pic
 	cclib -m32 -pg 
+	case $(uname -p) in
+	x86_64)
+		atf_expect_fail "PR toolchain/59710: various pic profile tests are failing and/or broken"
+		;;
+	esac
 	ccmain -m32 -pg -L${PWD} -Wl,-R${PWD} -lpic
 }
 

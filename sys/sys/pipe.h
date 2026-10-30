@@ -1,4 +1,4 @@
-/* $NetBSD: pipe.h,v 1.43 2026/03/11 21:54:22 andvar Exp $ */
+/* $NetBSD: pipe.h,v 1.45 2026/10/05 21:01:22 riastradh Exp $ */
 
 /*
  * Copyright (c) 1996 John S. Dyson

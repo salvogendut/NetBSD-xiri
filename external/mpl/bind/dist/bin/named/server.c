@@ -1,4 +1,4 @@
-/*	$NetBSD: server.c,v 1.28 2026/05/20 16:53:43 christos Exp $	*/
+/*	$NetBSD: server.c,v 1.31 2026/09/17 18:00:59 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -180,6 +180,7 @@
 #define MAX_KEEPALIVE_TIMEOUT  UINT32_C(UINT16_MAX * 100)
 #define MIN_ADVERTISED_TIMEOUT UINT32_C(0) /* No minimum */
 #define MAX_ADVERTISED_TIMEOUT UINT32_C(UINT16_MAX * 100)
+#define MAX_REUSE_TIMEOUT      UINT32_C(120000) /* 2 minutes */
 
 /*%
  * Check an operation for failure.  Assumes that the function
@@ -8428,7 +8429,7 @@ load_configuration(const char *filename, named_server_t *server,
 	ns_altsecretlist_t altsecrets, tmpaltsecrets;
 	uint32_t softquota = 0;
 	uint32_t max;
-	uint64_t initial, idle, keepalive, advertised;
+	uint64_t initial, idle, keepalive, advertised, reuse;
 	bool loadbalancesockets;
 	bool exclusive = true;
 	dns_aclenv_t *env =
@@ -8769,6 +8770,20 @@ load_configuration(const char *filename, named_server_t *server,
 
 	isc_nm_settimeouts(named_g_netmgr, initial, idle, keepalive,
 			   advertised);
+
+	obj = NULL;
+	result = named_config_get(maps, "tcp-reuse-timeout", &obj);
+	INSIST(result == ISC_R_SUCCESS);
+	reuse = cfg_obj_asuint32(obj) * 100;
+	if (reuse > MAX_REUSE_TIMEOUT) {
+		cfg_obj_log(obj, named_g_lctx, ISC_LOG_WARNING,
+			    "tcp-reuse-timeout value is out of range: "
+			    "lowering to %" PRIu32,
+			    MAX_REUSE_TIMEOUT / 100);
+		reuse = MAX_REUSE_TIMEOUT;
+	}
+
+	dns_dispatchmgr_setreusetimeout(named_g_dispatchmgr, reuse);
 
 #define CAP_IF_NOT_ZERO(v, min, max) \
 	if (v > 0 && v < min) {      \
@@ -9461,23 +9476,20 @@ load_configuration(const char *filename, named_server_t *server,
 	cachelist = tmpcachelist;
 
 	/* Load the TKEY information from the configuration. */
-	if (options != NULL) {
-		dns_tkeyctx_t *tkeyctx = NULL;
+	dns_tkeyctx_t *tkeyctx = NULL;
 
-		result = named_tkeyctx_fromconfig(options, named_g_mctx,
-						  &tkeyctx);
-		if (result != ISC_R_SUCCESS) {
-			isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
-				      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
-				      "configuring TKEY: %s",
-				      isc_result_totext(result));
-			goto cleanup_cachelist;
-		}
-		if (server->sctx->tkeyctx != NULL) {
-			dns_tkeyctx_destroy(&server->sctx->tkeyctx);
-		}
-		server->sctx->tkeyctx = tkeyctx;
+	result = named_tkeyctx_fromconfig(options, named_g_mctx, &tkeyctx);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
+			      NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
+			      "configuring TKEY: %s",
+			      isc_result_totext(result));
+		goto cleanup_cachelist;
 	}
+	if (server->sctx->tkeyctx != NULL) {
+		dns_tkeyctx_destroy(&server->sctx->tkeyctx);
+	}
+	server->sctx->tkeyctx = tkeyctx;
 
 #ifdef HAVE_LMDB
 	/*
@@ -12560,7 +12572,11 @@ named_server_flushnode(named_server_t *server, isc_lex_t *lex, bool tree) {
 		 * if some of the views share a single cache.  But since the
 		 * operation is lightweight we prefer simplicity here.
 		 */
-		result = dns_view_flushnode(view, name, tree);
+		if (dns_name_equal(name, dns_rootname)) {
+			result = dns_view_flushcache(view, false);
+		} else {
+			result = dns_view_flushnode(view, name, tree);
+		}
 		if (result != ISC_R_SUCCESS) {
 			flushed = false;
 			isc_log_write(named_g_lctx, NAMED_LOGCATEGORY_GENERAL,
@@ -12915,7 +12931,7 @@ named_server_sync(named_server_t *server, isc_lex_t *lex, isc_buffer_t **text) {
 			      NAMED_LOGMODULE_SERVER, ISC_LOG_INFO,
 			      "dumping all zones%s: %s",
 			      cleanup ? ", removing journal files" : "",
-			      isc_result_totext(result));
+			      isc_result_totext(tresult));
 		return tresult;
 	}
 
@@ -13080,9 +13096,16 @@ named_server_freeze(named_server_t *server, bool freeze, isc_lex_t *lex,
  */
 isc_result_t
 named_smf_add_message(isc_buffer_t **text) {
+	isc_result_t result;
+
 	REQUIRE(text != NULL);
 
-	return putstr(text, "use svcadm(1M) to manage named");
+	CHECK(putstr(text, "use svcadm(1M) to manage named"));
+	CHECK(putnull(text));
+
+	return ISC_R_SUCCESS;
+cleanup:
+	return result;
 }
 #endif /* HAVE_LIBSCF */
 

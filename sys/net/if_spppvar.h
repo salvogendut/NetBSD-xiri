@@ -1,4 +1,4 @@
-/*	$NetBSD: if_spppvar.h,v 1.47 2026/06/05 02:51:03 yamaguchi Exp $	*/
+/*	$NetBSD: if_spppvar.h,v 1.56 2026/07/28 07:10:43 yamaguchi Exp $	*/
 
 #ifndef _NET_IF_SPPPVAR_H_
 #define _NET_IF_SPPPVAR_H_
@@ -139,11 +139,12 @@ struct sppp {
 	struct  ifqueue pp_fastq; /* fast output queue */
 	struct	ifqueue pp_cpq;	/* PPP control protocol queue */
 	struct  sppp *pp_next;  /* next interface in keepalive list */
+	struct  sysctllog *pp_sysctl_log;
 
 #define PP_DEVF_KEEPALIVE	__BIT(0)	/* use keepalive protocol */
 #define PP_DEVF_NOFRAMING	__BIT(1)	/* do not add/expect encapsulation
-						   around PPP frames (i.e. the serial
-						   HDLC like encapsulation, RFC1662) */
+						 * around PPP frames (i.e. the serial
+						 * HDLC like encapsulation, RFC1662) */
 	uint32_t	pp_dev_flags; /* immutable device flags after attach*/
 	size_t		pp_framebytes; /* number of bytes added by (hardware) framing */
 
@@ -154,15 +155,21 @@ struct sppp {
 	u_int   pp_loopcnt;     /* loopback detection counter */
 	u_int	pp_maxalive;	/* number or echo req. w/o reply */
 	uint64_t	pp_saved_mtu;	/* saved MTU value */
-	time_t	pp_last_receive;	/* peer's last "sign of life" */
-	time_t	pp_max_noreceive;	/* seconds since last receive before
+	volatile uint32_t pp_last_receive;
+					/* peer's last "sign of life" */
+	uint32_t	pp_max_noreceive;
+					/* seconds since last receive before
 					   we start to worry and send echo
 					   requests */
-	time_t	pp_last_activity;	/* second of last payload data s/r */
-	time_t	pp_idle_timeout;	/* idle seconds before auto-disconnect,
+	volatile uint32_t pp_last_activity;
+					/* second of last payload data s/r */
+	uint32_t	pp_idle_timeout;
+					/* idle seconds before auto-disconnect,
 					 * 0 = disabled */
 	int	pp_auth_failures;	/* authorization failures */
 	int	pp_max_auth_fail;	/* max. allowed authorization failures */
+	bool	pp_connecting;		/* MP-safe IFF_RUNNING flag */
+	bool	pp_ondemand;		/* MP-safe IFF_AUTO (= IFF_LINK1) flag */
 	int	pp_phase;	/* phase we're currently in */
 	krwlock_t	pp_lock;	/* lock for sppp structure */
 	int	query_dns;	/* 1 if we want to know the dns addresses */
@@ -198,18 +205,34 @@ struct sppp {
 	 */
 	void	(*pp_tls)(struct sppp *);
 	void	(*pp_tlf)(struct sppp *);
+
+#ifdef SPPP_FILTER
+	/*
+	 * Filter for trigger packets of on-demand dialing,
+	 * protected by pp_lock (SPPP_LOCK()).
+	 */
+	struct	bpf_program	 pp_dial_filt;
+
+	/*
+	 * Filter for idle-timeout packets,
+	 * protected by pserialize and psref.
+	 */
+	pserialize_t		 pp_psz;
+	bool			 pp_active_filt_enabled;
+	struct sppp_bpf {
+		struct psref_target	sb_psref;
+		size_t			sb_len;
+		struct bpf_insn		sb_insns[];
+	} *pp_active_filt_in, *pp_active_filt_out;
+#endif
 };
 
-					/* 0x01 was PP_KEEPALIVE */
-					/* 0x02 was PP_CISCO */
-					/* 0x04 was PP_TIMO */
-#define PP_CALLIN		0x08	/* we are being called */
-#define PP_NEEDAUTH		0x10	/* remote requested authentication */
-					/* 0x20 was PP_NOFRAMING */
-					/* 0x40 was PP_LOOPBACK */
-#define PP_LOOPBACK_IFDOWN	0x80	/* if_down() when loopback detected */
-#define PP_KEEPALIVE_IFDOWN	0x100	/* if_down() when no ECHO_REPLY received */
-
+#define PP_IFDOWN	0x01	/* if_down() when no ECHO_REPLY received
+				   or loopback detected */
+				/* 0x02 was PP_CISCO */
+				/* 0x04 was PP_TIMO */
+				/* 0x08 was PP_CALLIN */
+#define PP_NEEDAUTH	0x10	/* remote requested authentication */
 
 #define PP_MTU          1500    /* default/minimal MRU */
 #define PP_MAX_MRU	2048	/* maximal MRU we want to negotiate */
@@ -222,6 +245,48 @@ int sppp_ioctl(struct ifnet *, u_long, void *);
 struct mbuf *sppp_dequeue (struct ifnet *);
 int sppp_isempty (struct ifnet *);
 void sppp_flush (struct ifnet *);
+void sppp_abort_connect(struct ifnet *);
+
+/*
+ * An interface to read pp_connecting for layer-violation
+ * optimization.
+ *
+ * If pp_connecting is false when read by a lower layer, a Close event
+ * for LCP has been scheduled but pp_tlf() has not yet been called.
+ * This allows the lower layer to abort connection retries during a Down
+ * (This-Layer-Down) before pp_tlf() is invoked.
+ *
+ * Since pp_tlf() is guaranteed to be called eventually, this check is
+ * purely optional for optimization; therefore, acquiring pp_lock
+ * (SPPP_LOCK()) is not required.
+ */
+static inline bool
+sppp_is_connecting(struct ifnet *ifp)
+{
+	struct sppp *sp = (struct sppp *)ifp;
+
+	return atomic_load_relaxed(&sp->pp_connecting);
+}
+
+/*
+ * An interface to check if Dial-on-Demand is enabled.
+ *
+ * If Dial-on-Demand is enabled, the lower layer can abort connection
+ * retries asynchronously with the sppp layer. On aborting, the lower
+ * layer is expected to invoke sppp_abort_connect(), which evaluates
+ * pp_ondemand while holding pp_lock.
+ *
+ * Since this function serves as the initial unlocked check for a
+ * Double-checked locking pattern, acquiring pp_lock (SPPP_LOCK())
+ * is not required.
+ */
+static inline bool
+sppp_ondemand_enabled(struct ifnet *ifp)
+{
+	struct sppp *sp = (struct sppp *)ifp;
+
+	return atomic_load_relaxed(&sp->pp_ondemand);
+}
 #endif
 
 /*

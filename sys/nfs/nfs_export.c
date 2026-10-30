@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_export.c,v 1.63 2021/06/04 10:44:58 hannken Exp $	*/
+/*	$NetBSD: nfs_export.c,v 1.65 2026/08/26 13:28:37 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 2004, 2005, 2008, 2019 The NetBSD Foundation, Inc.
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_export.c,v 1.63 2021/06/04 10:44:58 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_export.c,v 1.65 2026/08/26 13:28:37 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>

@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.mi.de,v 1.55 2026/04/26 13:31:47 martin Exp $	*/
+/*	$NetBSD: msg.mi.de,v 1.60 2026/07/12 20:07:45 martin Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -291,6 +291,7 @@ message endoutsidedisk
 Festplatte.
 Die Größe Ihrer Partition wurde verringert.}
 
+.if HAVE_DISKSIZE_CHECKS
 /* Called with:				Example
  *  $0 = device name			wd0
  *  $1 = partitioning scheme name	Master Boot Record (MBR)
@@ -311,6 +312,7 @@ message cvtscheme_convert	{in ein anderes Schema konvertieren}
 message cvtscheme_abort		{abbrechen}
 message cvtscheme_error
 {Nicht alle Partitionen konnten übernommen werden}
+.endif
 
 /* Called with:				Example
  *  $0 = device name			wd0
@@ -719,6 +721,29 @@ message delete_xfer_file
  */
 message notarfile
 {Das Release-Paket $0 existiert nicht.}
+
+.if HAVE_DVD_IMAGE
+/* Called with: 			Example
+ *  $0 = set name			base
+ */
+message opt_set_not_found
+{Das Paket "$0" ist optional und auf diesem Medium
+nicht vorhanden. 
+
+Das ist kein Problem und die Installation wird forgesetzt. 
+Das Paket kann nachträglich installiert werden, z.B. durch
+download via https von der NetBSD CDN. 
+
+Optionale Pakete sind: 
+ debug/debug32 mit debug Informationen 
+ base32 mit Unterstützung um 32bit Applikationen auf 64bit Architekturen zu verwenden 
+ test mit automatischen Testprogrammen
+ manhtml mit Anleitung im html Format
+
+Für einige Architekturen stehen unterschiedliche ISO Dateien für CD und DVD Laufwerke
+zur verfügung, auf der DVD Version sind alle Installations-Pakete enthalten. 
+}
+.endif
 
 message endtarok
 {Alle Distributionspakete wurden erfolgreich entpackt.}
@@ -1551,8 +1576,10 @@ message	ptn_instflag_desc	{(I)nstalllieren, }
 message clone_flag	{C}
 message clone_flag_desc	{, (C) für Klonen}
 
+.if HAVE_GPT
 message parttype_gpt {Guid Partition Table (GPT)}
 message parttype_gpt_short {GPT}
+.endif
 
 message	ptn_label	{Label}
 message ptn_uuid	{UUID}
@@ -1566,8 +1593,10 @@ message	ptn_boot	{Start}
 message use_partitions_anyway
 {Diese Partitionierung dennoch verwenden}
 
+.if HAVE_GPT
 message	gpt_flags	{S}
 message	gpt_flag_desc	{, (S)tart}
+.endif
 
 /* Called with:				Example
  *  $0 = file system type		FFSv2
@@ -1576,6 +1605,7 @@ message size_ptn_not_mounted		{(Sonstige: $0)}
 
 message running_system			{aktuelles System}
 
+.if HAVE_CLONES
 message clone_from_elsewhere		{Externe Partition(en) duplizieren}
 message select_foreign_part		{Wählen Sie eine Quellpartition:}
 message select_source_hdr
@@ -1588,6 +1618,7 @@ message clone_target_hdr
 message clone_target_disp		{duplizierte Partition(en)}
 message clone_src_done
 {Quellauswahl OK, weiter mit der Zielauswahl}
+.endif
 
 message network_ok
 {Ihr Netzwerk scheint bereits zu funktionieren. 
@@ -1623,3 +1654,8 @@ message month {Monat (1-12)}
 message day {Tag (1-31)}
 message hour {Stunde (0-23)}
 message minute {Minute (0-59)}
+
+.if HAVE_GPT
+message resize_gpt
+{Die Festplatte ist größer als der GPT angibt, soll das korrigiert werden?}
+.endif

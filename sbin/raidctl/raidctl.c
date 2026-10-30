@@ -1,4 +1,4 @@
-/*      $NetBSD: raidctl.c,v 1.89 2026/02/18 19:45:51 joe Exp $   */
+/*      $NetBSD: raidctl.c,v 1.91 2026/10/28 21:33:13 tls Exp $   */
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -39,7 +39,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: raidctl.c,v 1.89 2026/02/18 19:45:51 joe Exp $");
+__RCSID("$NetBSD: raidctl.c,v 1.91 2026/10/28 21:33:13 tls Exp $");
 #endif
 
 
@@ -476,6 +476,8 @@ device_status(RF_DiskStatus_t status)
 		return ("spare");
 	case rf_ds_used_spare:
 		return ("used_spare");
+	case rf_ds_rebuilding_spare:
+		return ("rebuilding_spare");
 	default:
 		return ("UNKNOWN");
 	}
@@ -681,9 +683,15 @@ rf_output_configuration(int fd, const char *name)
 	nspares = MIN(device_config.nspares,
 	                __arraycount(device_config.spares));
 
+	int active_spares = 0;
+	for (i = 0; i < nspares; i++) {
+		if (device_config.spares[i].status == rf_ds_spare)
+			active_spares++;
+	}
+
 	printf("START array\n");
 	printf("# numCol numSpare\n");
-	printf("%d %d\n", device_config.cols, device_config.nspares);
+	printf("%d %d\n", device_config.cols, active_spares);
 	printf("\n");
 
 	printf("START disks\n");
@@ -692,10 +700,13 @@ rf_output_configuration(int fd, const char *name)
 		    rf_output_devname(device_config.devs[i].devname));
 	printf("\n");
 
-	if (nspares > 0) {
+	if (active_spares > 0) {
 		printf("START spare\n");
-		for(i=0; i < nspares; i++)
-			printf("%s\n", device_config.spares[i].devname);
+		for(i=0; i < nspares; i++) {
+			if (device_config.spares[i].status == rf_ds_spare)
+				printf("%s\n",
+				    device_config.spares[i].devname);
+		}
 		printf("\n");
 	}
 
@@ -1342,7 +1353,7 @@ rf_simple_create(int fd, int argc, char *argv[])
 	cfg.SUsPerRU = 1;
 	cfg.parityConfig = '0' + level;
 	strlcpy(cfg.diskQueueType, "fifo", sizeof(cfg.diskQueueType));
-	cfg.maxOutstandingDiskReqs = 1;
+	cfg.maxOutstandingDiskReqs = RF_DEFAULT_QUEUE_DEPTH;
 	cfg.force = 1;
 
 	/* configure... */

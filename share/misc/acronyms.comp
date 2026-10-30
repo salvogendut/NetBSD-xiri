@@ -1,4 +1,4 @@
-$NetBSD: acronyms.comp,v 1.424 2026/05/13 15:00:46 jschauma Exp $
+$NetBSD: acronyms.comp,v 1.429 2026/09/08 13:13:43 jschauma Exp $
 3WHS	three-way handshake
 8VSB	8-state vestigial side band modulation
 AA	anti-aliasing
@@ -382,6 +382,7 @@ DBA	database administrator
 DBA	dynamic bandwidth allocation
 DBB	data bus buffer
 DBC	design by contract
+DBCS	double-byte character set
 DBL	dynamic buffer limiting
 DBMS	database management system
 DBS	database server
@@ -900,6 +901,7 @@ KDF	key derivation function
 KEK	key encryption key
 KEM	key encapsulation mechanism
 KLOC	thousand lines of code
+KMIP	Key Management Interoperability Protocol
 KMS	kernel-mode setting
 KPI	kernel programming interface
 KSK	key signing key
@@ -1007,6 +1009,7 @@ MADT	multiple APIC descriptor table
 MAMR	microwave-assisted magnetic recording
 MB	megabyte
 MBA	multi-boot agent
+MBCS	multi-byte character set
 MBR	master boot record
 MBS	megabits per second
 MC	memory controller
@@ -1445,6 +1448,7 @@ RDF	Resource Description Framework
 RDM	relational data model
 RDMA	remote direct memory access
 RDP	remote desktop protocol
+RDS	Reliable Datagram Sockets
 RDRAM	Rambus DRAM
 RE	regular expression
 REPL	read, evaluate, print, loop
@@ -1546,6 +1550,8 @@ SASL	simple authentication [and] security layer
 SATA	serial advanced technology attachment
 SAX	simple API for XML
 SB	sound blaster
+SBC	single-board computer
+SBCS	single-byte character set
 SBI	supervisor binary interface
 SBOM	Software Bill of Materials
 SBSA	server base system architecture
@@ -1999,6 +2005,7 @@ YP	Yellow Pages
 YTD	year to date
 ZAP	ZFS attribute processor
 ZBR	zone bit recording
+ZDR	Zero Data Retention
 ZFOD	zero-filled on demand
 ZFS	zettabyte file system
 ZIF	zero insertion force

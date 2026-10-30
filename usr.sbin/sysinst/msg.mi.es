@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.mi.es,v 1.46 2026/04/26 13:31:47 martin Exp $	*/
+/*	$NetBSD: msg.mi.es,v 1.52 2026/07/12 20:07:45 martin Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -281,6 +281,7 @@ message endoutsidedisk
 {Con este valor, el final de la partición está mas allá del final del disco.
 El tamaño de la partición se ha truncado.}
 
+.if HAVE_DISKSIZE_CHECKS
 /* Called with:				Example
  *  $0 = device name			wd0
  *  $1 = partitioning scheme name	Master Boot Record (MBR)
@@ -301,6 +302,7 @@ message cvtscheme_convert	{convert to another partitioning method}
 message cvtscheme_abort		{abort}
 message cvtscheme_error
 {Could not convert all partitions}
+.endif
 
 /* Called with:				Example
  *  $0 = device name			wd0
@@ -701,6 +703,29 @@ message delete_xfer_file
  */
 message notarfile
 {El conjunto $0 no existe.}
+
+.if HAVE_DVD_IMAGE
+/* Called with: 			Example
+ *  $0 = set name			base
+ */
+message opt_set_not_found
+{The set "$0" is optional and not included on this
+distribution medium. 
+
+This is not critical and installation will continue. 
+You can add this set later, e.g. by downloading it via
+https from the NetBSD CDN. 
+
+Optional sets are: 
+ debug/debug32 containing debug information 
+ base32 containing support for running 32bit code on 64bit architectures 
+ test containing automatic test programs
+ manhtml containing man pages in html format
+
+Some architectures offer different CD vs. DVD ISO images, the DVD images
+are complete and contain all sets. 
+}
+.endif
 
 message endtarok
 {Todos los conjuntos de distribución han sido desempaquetados
@@ -1529,8 +1554,10 @@ message ptn_instflag_desc	{(I)nstalar, }
 message clone_flag	{C}
 message clone_flag_desc	{, (C)lone}
 
+.if HAVE_GPT
 message parttype_gpt {Guid Partition Table (GPT)}
 message parttype_gpt_short {GPT}
+.endif
 
 message	ptn_label	{Label}
 message ptn_uuid	{UUID}
@@ -1544,8 +1571,10 @@ message	ptn_boot	{Boot}
 message use_partitions_anyway
 {Use this partitions anyway}
 
+.if HAVE_GPT
 message	gpt_flags	{B}
 message	gpt_flag_desc	{, (B)ootable}
+.endif
 
 /* Called with:				Example
  *  $0 = file system type		FFSv2
@@ -1554,6 +1583,7 @@ message size_ptn_not_mounted		{(Other: $0)}
 
 message running_system			{current system}
 
+.if HAVE_CLONES
 message clone_from_elsewhere		{Clone external partition(s)}
 message select_foreign_part
 {Please select an external source partition:}
@@ -1567,6 +1597,7 @@ message clone_target_hdr
 message clone_target_disp		{cloned partition(s)}
 message clone_src_done
 {Source selection OK, proceed to target selection}
+.endif
 
 message network_ok
 {Your network seems to work fine. 
@@ -1601,3 +1632,8 @@ message month {Month (1-12)}
 message day {Day (1-31)}
 message hour {Hour (0-23)}
 message minute {Minute (0-59)}
+
+.if HAVE_GPT
+message resize_gpt
+{The disk size is larger than the GPT shows, fix this?}
+.endif

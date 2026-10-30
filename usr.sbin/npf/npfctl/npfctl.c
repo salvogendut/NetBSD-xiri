@@ -1,3 +1,5 @@
+/*	$NetBSD: npfctl.c,v 1.71 2026/09/21 02:39:08 gutteridge Exp $	*/
+
 /*-
  * Copyright (c) 2009-2025 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -28,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: npfctl.c,v 1.68 2026/04/08 00:33:07 joe Exp $");
+__RCSID("$NetBSD: npfctl.c,v 1.71 2026/09/21 02:39:08 gutteridge Exp $");
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -93,7 +95,10 @@ usage(void)
 	const char *progname = getprogname();
 
 	fprintf(stderr,
-	    "Usage:\t%s start | stop | flush | show | stats\n",
+	    "Usage:\t%s start | stop | flush | show\n",
+	    progname);
+	fprintf(stderr,
+	    "\t%s stats [reset]\n",
 	    progname);
 	fprintf(stderr,
 	    "\t%s validate | reload [<rule-file>]\n",
@@ -128,6 +133,15 @@ usage(void)
 	    "[ -o <outfile> ]\n",
 	    progname);
 	exit(EXIT_FAILURE);
+}
+
+static int
+npfctl_stats_reset(int fd)
+{
+	if (ioctl(fd, IOC_NPF_STATS_RESET, NULL) != 0) {
+		err(EXIT_FAILURE, "ioctl(IOC_NPF_STATS_RESET)");
+	}
+	return 0;
 }
 
 static int
@@ -527,6 +541,16 @@ npfctl(int action, int argc, char **argv)
 		fun = "npfctl_config_save";
 		break;
 	case NPFCTL_STATS:
+		if (argc > 2) {
+			argv += 2;
+			if (strcmp(argv[0], "reset") == 0) {
+				ret = npfctl_stats_reset(fd);
+			} else
+				usage();
+			fun = "npfctl_stats_reset";
+			break;
+		}
+
 		ret = npfctl_print_stats(fd);
 		fun = "npfctl_print_stats";
 		break;

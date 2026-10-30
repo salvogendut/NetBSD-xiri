@@ -1,4 +1,4 @@
-# $NetBSD: files.fdt,v 1.79 2026/01/17 05:45:17 skrll Exp $
+# $NetBSD: files.fdt,v 1.83 2026/09/20 11:00:34 skrll Exp $
 
 include	"external/bsd/libfdt/conf/files.libfdt"
 
@@ -152,6 +152,11 @@ device	syscon: fdt, fdt_syscon
 attach	syscon at fdt
 file	dev/fdt/syscon.c			syscon
 
+# Generic PCI host controller
+device	pcihost: pcibus
+attach	pcihost at fdt with pcihost_fdt
+file	dev/fdt/pcihost_fdt.c			pcihost_fdt
+
 device	pinctrl: fdt_pinctrl
 attach	pinctrl at fdt with pinctrl_single
 file	dev/fdt/pinctrl_single.c		pinctrl_single
@@ -212,6 +217,10 @@ file	dev/fdt/dwcmmc_fdt.c			dwcmmc_fdt
 attach	dwcwdt at fdt with dwcwdt_fdt: fdt_clock, fdt_reset
 file	dev/fdt/dwcwdt_fdt.c			dwcwdt_fdt
 
+# Designware Ethernet
+define	dwc_gmac_fdt_subr
+file	dev/fdt/dwc_gmac_fdt_subr.c		dwc_gmac_fdt_subr
+
 # Virtio virtio,mmio
 attach	virtio at fdt with virtio_mmio_fdt:	virtio_mmio
 file	dev/fdt/virtio_mmio_fdt.c		virtio_mmio_fdt
@@ -266,3 +275,11 @@ file	dev/fdt/genet_fdt.c			genet_fdt
 # Google Goldfish RTC
 attach	gfrtc at fdt with gfrtc_fdt
 file	dev/fdt/gfrtc_fdt.c			gfrtc_fdt
+
+# Generic ATA disk interface
+attach	wdc at fdt with wdc_fdt
+file	dev/fdt/wdc_fdt.c			wdc_fdt
+
+# PCF8584 I2C controller
+attach	pcfiic at fdt with pcfiic_fdt: fdt_i2c
+file	dev/fdt/pcfiic_fdt.c			pcfiic_fdt

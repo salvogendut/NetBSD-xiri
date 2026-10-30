@@ -1,4 +1,4 @@
-#      $NetBSD: bsd.own.mk,v 1.1482 2026/05/10 14:19:10 tls Exp $
+#      $NetBSD: bsd.own.mk,v 1.1491 2026/10/19 18:33:40 riastradh Exp $
 
 # This needs to be before bsd.init.mk
 .if defined(BSD_MK_COMPAT_FILE)
@@ -90,12 +90,6 @@ TOOLCHAIN_MISSING?=	no
 #
 # What GCC is used?
 #
-.if \
-    ${MACHINE} == "alpha" || \
-    ${MACHINE_CPU} == "m68k"
-HAVE_GCC?=	12
-.endif
-
 HAVE_GCC?=	14
 
 #
@@ -266,14 +260,12 @@ HAVE_LIBGCC_EH?=	yes
 # Coverity does not like SSP
 .if defined(COVERITY_TOP_CONFIG) || \
     ${MACHINE} == "alpha" || \
-    ${MACHINE} == "hppa" || \
     ${MACHINE} == "ia64"
 HAVE_SSP?=	no
 .else
 HAVE_SSP?=	yes
-.if !defined(NOFORT) && ${USE_FORT:Uno} != "no"
-USE_SSP?=	yes
-.endif
+USE_SSP_DEFAULT?=	no
+USE_SSP?=	${!defined(NOFORT) && ${USE_FORT:Uno} != "no":?yes:${USE_SSP_DEFAULT}}
 .endif
 
 #
@@ -281,16 +273,16 @@ USE_SSP?=	yes
 # built-in to libc from 2005 (pre version 3).
 #
 .if \
-    ${MACHINE} == "sun2" || \
+    ${MACHINE_ARCH} == "m68000" || \
     ${MACHINE_ARCH} == "vax"
 HAVE_JEMALLOC?=		100
 .else
-HAVE_JEMALLOC?=		531
+HAVE_JEMALLOC?=		540
 .endif
 
-.if ${HAVE_JEMALLOC} == 531 || ${HAVE_JEMALLOC} == 100
+.if ${HAVE_JEMALLOC} == 540 || ${HAVE_JEMALLOC} == 100
 EXTERNAL_JEMALLOC_SUBDIR = jemalloc
-.elif ${HAVE_JEMALLOC} == 530
+.elif ${HAVE_JEMALLOC} == 531
 EXTERNAL_JEMALLOC_SUBDIR = jemalloc.old
 .else
 EXTERNAL_JEMALLOC_SUBDIR = /does/not/exist
@@ -733,7 +725,7 @@ TOOL_ZIC=		zic
 .if defined(BINDIR) && ${BINDIR} == "/usr/mdec"
 NOCTF=			# defined
 NOPIE=			# defined
-.elif ${MACHINE} == "sun2"
+.elif ${MACHINE_ARCH} == "m68000"
 NOPIE=			# we don't have PIC, so no PIE
 .endif
 
@@ -808,7 +800,7 @@ MACHINES.coldfire=	evbcf
 MACHINES.hppa=		hppa
 MACHINES.i386=		i386
 MACHINES.ia64=		ia64
-MACHINES.m68000=	sun2
+MACHINES.m68000=	sun2 hb68k
 MACHINES.m68k=		amiga atari cesfic hp300 luna68k mac68k \
 			mvme68k news68k next68k sun3 virt68k x68k
 MACHINES.m68ksf=	mac68k
@@ -1364,6 +1356,7 @@ _MKVARS.yes= \
 	MKPROFILE \
 	MKPTYFS \
 	MKQEMUFWCFG \
+	MKRAID \
 	MKRUMP \
 	MKSHARE \
 	MKSKEY \
@@ -1422,6 +1415,7 @@ MKPF.m68000?=		no
 MKPOSTFIX.m68000?=	no
 MKPROCFS.m68000?=	no
 MKQEMUFWCFG.m68000?=	no
+MKRAID.m68000?=		no
 MKRUMP.m68000?=		no
 MKSSH.m68000?=		no
 MKSYSVBFS.m68000?=	no

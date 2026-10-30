@@ -1,4 +1,4 @@
-/*	$NetBSD: tlb.h,v 1.8 2026/06/13 19:45:50 rkujawa Exp $	*/
+/*	$NetBSD: tlb.h,v 1.10 2026/09/28 20:41:01 rkujawa Exp $	*/
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -138,6 +138,10 @@ struct	pmap;
 void	ppc4xx_tlb_enter(int, vaddr_t, u_int);
 void	ppc4xx_tlb_flush(vaddr_t, int);
 void	ppc4xx_tlb_flush_all(void);
+void	ppc44x_tlb_dump(void);
+void	ppc44x_tlb_read(int, u_long *, u_long *, u_long *, u_long *);
+void	ppc44x_tlb_print(int, u_long, u_long, u_long, u_long,
+	    void (*)(const char *, ...));
 void	ppc4xx_tlb_init(void);
 int	ppc4xx_tlb_new_pid(struct pmap *);
 void	ppc4xx_tlb_reserve(paddr_t, vaddr_t, size_t, int);
@@ -149,6 +153,8 @@ void	ppc44x_tlb_reserve(uint64_t, vaddr_t, size_t, int);
 void	ppc44x_tlb_reserve_ts0(paddr_t);
 /* claim locore-pinned boot TLB slots before the first reserve */
 void	ppc44x_tlb_boot_reserved(int);
+/* recover the low-32 PA of a VA mapped via a reserved TLB entry */
+bool	ppc44x_tlb_reverse(vaddr_t, paddr_t *);
 #endif
 
 #ifndef ppc4xx_tlbflags

@@ -1,4 +1,4 @@
-/*	$NetBSD: cryptodev.c,v 1.133 2026/05/19 19:00:00 riastradh Exp $ */
+/*	$NetBSD: cryptodev.c,v 1.139 2026/09/22 14:46:27 riastradh Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/cryptodev.c,v 1.4.2.4 2003/06/03 00:09:02 sam Exp $	*/
 /*	$OpenBSD: cryptodev.c,v 1.53 2002/07/10 22:21:30 mickey Exp $	*/
 
@@ -64,29 +64,31 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cryptodev.c,v 1.133 2026/05/19 19:00:00 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cryptodev.c,v 1.139 2026/09/22 14:46:27 riastradh Exp $");
 
 #include <sys/param.h>
-#include <sys/systm.h>
+
+#include <sys/atomic.h>
+#include <sys/compat_stub.h>
+#include <sys/conf.h>
+#include <sys/device.h>
+#include <sys/errno.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/kauth.h>
 #include <sys/kmem.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#include <sys/pool.h>
-#include <sys/sysctl.h>
-#include <sys/file.h>
-#include <sys/filedesc.h>
-#include <sys/errno.h>
 #include <sys/md5.h>
-#include <sys/sha1.h>
-#include <sys/conf.h>
-#include <sys/device.h>
-#include <sys/kauth.h>
-#include <sys/select.h>
-#include <sys/poll.h>
-#include <sys/atomic.h>
-#include <sys/stat.h>
 #include <sys/module.h>
-#include <sys/compat_stub.h> 
+#include <sys/poll.h>
+#include <sys/pool.h>
+#include <sys/sdt.h>
+#include <sys/select.h>
+#include <sys/sha1.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <sys/systm.h>
 
 #include "ioconf.h"
 
@@ -96,11 +98,13 @@ __KERNEL_RCSID(0, "$NetBSD: cryptodev.c,v 1.133 2026/05/19 19:00:00 riastradh Ex
 #endif
 
 #include <opencrypto/cryptodev.h>
-#include <opencrypto/ocryptodev.h>
 #include <opencrypto/cryptodev_internal.h>
+#include <opencrypto/ocryptodev.h>
 #include <opencrypto/xform.h>
 
 #include "ioconf.h"
+
+#define	CRYPTOP_IOV_MAX	(256*1024 - 4) /* XXX ??? */
 
 static kmutex_t cryptodev_mtx;
 
@@ -158,9 +162,9 @@ crypto_refcount_get(void)
 
 	mutex_enter(&cryptodev_mtx);
 	if (crypto_detaching) {
-		error = ENXIO;
+		error = SET_ERROR(ENXIO);
 	} else if (crypto_refcount == INT_MAX) {
-		error = EBUSY;
+		error = SET_ERROR(EBUSY);
 	} else {
 		crypto_refcount++;
 		error = 0;
@@ -229,6 +233,9 @@ static int	cryptodev_getstatus(struct fcrypt *, struct crypt_result *);
 static struct cryptop_data *
 cod_ctor(struct cryptop_data *cod, struct csession *cse, size_t iov_len)
 {
+
+	KASSERT(iov_len <= CRYPTOP_IOV_MAX);
+
 	memset(cod, 0, sizeof(*cod));
 	cod->cse = cse;
 	cod->iov_len = iov_len;
@@ -318,7 +325,7 @@ int
 cryptof_read(file_t *fp, off_t *poff,
     struct uio *uio, kauth_cred_t cred, int flags)
 {
-	return EIO;
+	return SET_ERROR(EIO);
 }
 
 /* ARGSUSED */
@@ -326,7 +333,7 @@ int
 cryptof_write(file_t *fp, off_t *poff,
     struct uio *uio, kauth_cred_t cred, int flags)
 {
-	return EIO;
+	return SET_ERROR(EIO);
 }
 
 /* ARGSUSED */
@@ -384,7 +391,7 @@ cryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		sgop = (struct crypt_sgop *)data;
 		if (sgop->count <= 0 || sgop->count >
 		    MIN(CRYPTODEV_OPS_MAX, SIZE_MAX/sizeof(*snop))) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			break;
 		}
 		len = sgop->count * sizeof(*snop);
@@ -412,7 +419,7 @@ cryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		sfop = (struct crypt_sfop *)data;
 		if (sfop->count <= 0 || sfop->count >
 		    MIN(CRYPTODEV_OPS_MAX, SIZE_MAX/sizeof(*sesid))) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			break;
 		}
 		len = sfop->count * sizeof(*sesid);
@@ -429,7 +436,7 @@ cryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		cse = cse_find(fcr, cop->ses);
 		if (cse == NULL) {
 			DPRINTF("cse_find failed %#x\n", cop->ses);
-			return EINVAL;
+			return SET_ERROR(EINVAL);
 		}
 		error = cryptodev_op(cse, cop, curlwp);
 		cse_free(cse);
@@ -440,7 +447,7 @@ cryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		mop = (struct crypt_mop *)data;
 		if (mop->count <= 0 || mop->count >
 		    MIN(CRYPTODEV_OPS_MAX, SIZE_MAX/sizeof(*cnop))) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			break;
 		}
 		len = mop->count * sizeof(*cnop);
@@ -463,7 +470,7 @@ cryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		mkop = (struct crypt_mkop *)data;
 		if (mkop->count <= 0 || mkop->count >
 		    MIN(CRYPTODEV_OPS_MAX, SIZE_MAX/sizeof(*knop))) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			break;
 		}
 		len = mkop->count * sizeof(*knop);
@@ -484,7 +491,7 @@ cryptof_ioctl(struct file *fp, u_long cmd, void *data)
 		crypt_ret = (struct cryptret *)data;
 		if (crypt_ret->count <= 0 || crypt_ret->count >
 		    MIN(CRYPTODEV_OPS_MAX, SIZE_MAX/sizeof(*crypt_res))) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			break;
 		}
 		len = crypt_ret->count * sizeof(*crypt_res);
@@ -516,7 +523,7 @@ reterr:
 		MODULE_HOOK_CALL(ocryptof_50_hook, (fp, cmd, data),
 		    enosys(), error);
 		if (error == ENOSYS)
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 		return error;
 	}
 	return error;
@@ -533,7 +540,7 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 	int flags=0;
 	size_t dst_len;	/* copyout size */
 
-	if (cop->len > 256*1024-4)
+	if (cop->len > CRYPTOP_IOV_MAX || cop->dst_len > CRYPTOP_IOV_MAX)
 		return E2BIG;
 
 	if (cse->txform) {
@@ -541,11 +548,11 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 		    + (cop->iv ? 0 : cse->txform->ivsize) ||
 		    (cop->len - (cop->iv ? 0 : cse->txform->ivsize))
 		    % cse->txform->blocksize != 0)
-			return EINVAL;
+			return SET_ERROR(EINVAL);
 	}
 
 	if (cse->tcomp == NULL && cse->txform == NULL && cse->thash == NULL)
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 
 	DPRINTF("[%u]: iov_len %zu\n",
 		CRYPTO_SESID2LID(cse->sid), iov_len);
@@ -561,7 +568,7 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 	crp = crypto_getreq((cse->tcomp != NULL)
 	    + (cse->txform != NULL) + (cse->thash != NULL));
 	if (crp == NULL) {
-		error = ENOMEM;
+		error = SET_ERROR(ENOMEM);
 		goto bail;
 	}
 	cod = cod_ctor(&crp->cod, cse, iov_len);
@@ -586,14 +593,14 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 		if (cse->txform) {
 			crde = crdc ? crdc->crd_next : crp->crp_desc;
 		} else if (!cse->tcomp) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			goto bail;
 		}
 	}
 
 	DPRINTF("ocf[%u]: iov_len %zu, cop->len %u\n",
 			CRYPTO_SESID2LID(cse->sid),
-			cod->uio.uio_iov[0].iov_len, 
+			cod->uio.uio_iov[0].iov_len,
 			cop->len);
 
 	if ((error = copyin(cop->src, cod->uio.uio_iov[0].iov_base, cop->len)))
@@ -673,11 +680,11 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 
 	if (cop->iv) {
 		if (crde == NULL) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			goto bail;
 		}
 		if (cse->txform->ivsize == 0) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			goto bail;
 		}
 		if ((error = copyin(cop->iv, crp->tmp_iv,
@@ -699,7 +706,7 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 
 	if (cop->mac) {
 		if (crda == NULL) {
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			goto bail;
 		}
 		crp->crp_mac = crp->tmp_mac;
@@ -726,7 +733,7 @@ cryptodev_op(struct csession *cse, struct crypt_op *cop, struct lwp *l)
 	/* let the user know how much data was returned */
 	if (crp->crp_olen) {
 		if (crp->crp_olen > (cop->dst_len ? cop->dst_len : cop->len)) {
-			error = ENOSPC;
+			error = SET_ERROR(ENOSPC);
 			goto bail;
 		}
 		dst_len = cop->dst_len = crp->crp_olen;
@@ -809,7 +816,7 @@ cryptodev_key(struct crypt_kop *kop)
 	size_t in, out, size, i;
 
 	if (kop->crk_iparams + kop->crk_oparams > CRK_MAXPARAM)
-		return EFBIG;
+		return SET_ERROR(EFBIG);
 
 	in = kop->crk_iparams;
 	out = kop->crk_oparams;
@@ -817,55 +824,55 @@ cryptodev_key(struct crypt_kop *kop)
 	case CRK_MOD_EXP:
 		if (in == 3 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD_EXP_CRT:
 		if (in == 6 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_DSA_SIGN:
 		if (in == 5 && out == 2)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_DSA_VERIFY:
 		if (in == 7 && out == 0)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_DH_COMPUTE_KEY:
 		if (in == 3 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD_ADD:
 		if (in == 3 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD_ADDINV:
 		if (in == 2 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD_SUB:
 		if (in == 3 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD_MULT:
 		if (in == 3 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD_MULTINV:
 		if (in == 2 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	case CRK_MOD:
 		if (in == 2 && out == 1)
 			break;
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	default:
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	}
 
 	krp = crypto_kgetreq(1, PR_WAITOK);
 	if (krp == NULL) {
 		/* limited by opencrypto.crypto_ret_kq.maxlen */
-		return ENOMEM;
+		return SET_ERROR(ENOMEM);
 	}
 	(void)memset(krp, 0, sizeof *krp);
 	cv_init(&krp->krp_cv, "crykdev");
@@ -992,13 +999,13 @@ cse_delete(struct fcrypt *fcr, uint32_t ses)
 	TAILQ_FOREACH_SAFE(cse, &fcr->csessions, next, cnext) {
 		if (cse->ses == ses) {
 			if (atomic_load_relaxed(&cse->refcnt) != 1)
-				return EBUSY;
+				return SET_ERROR(EBUSY);
 			TAILQ_REMOVE(&fcr->csessions, cse, next);
 			cse_free(cse);
 			return 0;
 		}
 	}
-	return EINVAL;
+	return SET_ERROR(EINVAL);
 }
 
 static struct csession *
@@ -1077,7 +1084,7 @@ cryptoopen(dev_t dev, int flag, int mode,
         int fd, error;
 
 	if (crypto_usercrypto == 0)
-		return ENXIO;
+		return SET_ERROR(ENXIO);
 
 	if ((error = crypto_refcount_get()) != 0)
 		return error;
@@ -1096,13 +1103,13 @@ cryptoopen(dev_t dev, int flag, int mode,
 static int
 cryptoread(dev_t dev, struct uio *uio, int ioflag)
 {
-	return EIO;
+	return SET_ERROR(EIO);
 }
 
 static int
 cryptowrite(dev_t dev, struct uio *uio, int ioflag)
 {
-	return EIO;
+	return SET_ERROR(EIO);
 }
 
 int
@@ -1127,8 +1134,8 @@ struct cdevsw crypto_cdevsw = {
 	.d_flag = D_OTHER
 };
 
-int 
-cryptodev_mop(struct fcrypt *fcr, 
+int
+cryptodev_mop(struct fcrypt *fcr,
               struct crypt_n_op * cnop,
               size_t count, struct lwp *l)
 {
@@ -1145,36 +1152,37 @@ cryptodev_mop(struct fcrypt *fcr,
 		cse = cse_find(fcr, cnop[req].ses);
 		if (cse == NULL) {
 			DPRINTF("cse_find failed %#x\n", cnop[req].ses);
-			cnop[req].status = EINVAL;
-			continue;
+			cnop[req].status = SET_ERROR(EINVAL);
+			goto bail;
 		}
-	
-		if (cnop[req].len > 256*1024-4) {
+
+		if (cnop[req].len > CRYPTOP_IOV_MAX ||
+		    cnop[req].dst_len > CRYPTOP_IOV_MAX) {
 			DPRINTF("length failed\n");
-			cnop[req].status = EINVAL;
-			continue;
+			cnop[req].status = SET_ERROR(EINVAL);
+			goto bail;
 		}
 		if (cse->txform) {
-			if (cnop[req].len < cse->txform->blocksize -
+			if (cnop[req].len < cse->txform->blocksize +
 			    (cnop[req].iv ? 0 : cse->txform->ivsize) ||
 			    (cnop[req].len -
 			     (cnop[req].iv ? 0 : cse->txform->ivsize))
 			    % cse->txform->blocksize) {
-				cnop[req].status = EINVAL;
-				continue;
+				cnop[req].status = SET_ERROR(EINVAL);
+				goto bail;
 			}
 		}
 
 		if (cse->txform == NULL &&
 		    cse->thash == NULL &&
 		    cse->tcomp == NULL) {
-			cnop[req].status = EINVAL;
+			cnop[req].status = SET_ERROR(EINVAL);
 			goto bail;
 		}
 
 		/* sanitize */
 		if (cnop[req].len <= 0) {
-			cnop[req].status = ENOMEM;
+			cnop[req].status = SET_ERROR(ENOMEM);
 			goto bail;
 		}
 
@@ -1182,7 +1190,7 @@ cryptodev_mop(struct fcrypt *fcr,
 				    (cse->thash != NULL) +
 				    (cse->tcomp != NULL));
 		if (crp == NULL) {
-			cnop[req].status = ENOMEM;
+			cnop[req].status = SET_ERROR(ENOMEM);
 			goto bail;
 		}
 
@@ -1210,14 +1218,14 @@ cryptodev_mop(struct fcrypt *fcr,
 			if (cse->txform) {
 				crde = crdc ? crdc->crd_next : crp->crp_desc;
 			} else if (!cse->tcomp) {
-				error = EINVAL;
+				error = SET_ERROR(EINVAL);
 				goto bail;
 			}
 		}
 
-		if ((copyin(cnop[req].src, 
+		if ((copyin(cnop[req].src,
 		    cod->uio.uio_iov[0].iov_base, cnop[req].len))) {
-			cnop[req].status = EINVAL;
+			cnop[req].status = SET_ERROR(EINVAL);
 			goto bail;
 		}
 
@@ -1247,7 +1255,7 @@ cryptodev_mop(struct fcrypt *fcr,
 				(uint32_t)cse->sid, crdc->crd_alg,
 				crdc->crd_len);
 		}
-	
+
 		if (crda) {
 			crda->crd_skip = 0;
 			crda->crd_len = cnop[req].len;
@@ -1271,9 +1279,9 @@ cryptodev_mop(struct fcrypt *fcr,
 			if(cnop[req].key && cnop[req].keylen) {
 				crde->crd_key = malloc(cnop[req].keylen,
 						    M_XDATA, M_WAITOK);
-				if((error = copyin(cnop[req].key, 
+				if((error = copyin(cnop[req].key,
 				    crde->crd_key, cnop[req].keylen))) {
-					cnop[req].status = EINVAL;
+					cnop[req].status = SET_ERROR(EINVAL);
 					goto bail;
 				}
 				crde->crd_klen =  cnop[req].keylen * 8;
@@ -1300,16 +1308,16 @@ cryptodev_mop(struct fcrypt *fcr,
 
 		if (cnop[req].iv) {
 			if (crde == NULL) {
-				cnop[req].status = EINVAL;
+				cnop[req].status = SET_ERROR(EINVAL);
 				goto bail;
 			}
 			if (cse->cipher == CRYPTO_ARC4) { /* XXX use flag? */
-				cnop[req].status = EINVAL;
+				cnop[req].status = SET_ERROR(EINVAL);
 				goto bail;
 			}
 			if ((error = copyin(cnop[req].iv, crp->tmp_iv,
 			    cse->txform->ivsize))) {
-				cnop[req].status = EINVAL;
+				cnop[req].status = SET_ERROR(EINVAL);
 				goto bail;
 			}
 			(void)memcpy(crde->crd_iv, crp->tmp_iv,
@@ -1326,10 +1334,10 @@ cryptodev_mop(struct fcrypt *fcr,
 				crde->crd_len -= cse->txform->ivsize;
 			}
 		}
-	
+
 		if (cnop[req].mac) {
 			if (crda == NULL) {
-				cnop[req].status = EINVAL;
+				cnop[req].status = SET_ERROR(EINVAL);
 				goto bail;
 			}
 			crp->crp_mac = crp->tmp_mac;
@@ -1344,7 +1352,8 @@ cryptodev_mop(struct fcrypt *fcr,
 bail:
 		if (cnop[req].status) {
 			DPRINTF("%zu status %d\n", req, cnop[req].status);
-			cse_free(cse);
+			if (cse)
+				cse_free(cse);
 			if (cod)
 				cod_dtor(cod);
 			if (crp)
@@ -1364,7 +1373,7 @@ cryptodev_mkey(struct fcrypt *fcr, struct crypt_n_kop *kop, size_t count)
 
 	for (req = 0; req < count; req++) {
 		if (kop[req].crk_iparams + kop[req].crk_oparams > CRK_MAXPARAM)
-			return EFBIG;
+			return SET_ERROR(EFBIG);
 
 		in = kop[req].crk_iparams;
 		out = kop[req].crk_oparams;
@@ -1372,60 +1381,60 @@ cryptodev_mkey(struct fcrypt *fcr, struct crypt_n_kop *kop, size_t count)
 		case CRK_MOD_EXP:
 			if (in == 3 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD_EXP_CRT:
 			if (in == 6 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_DSA_SIGN:
 			if (in == 5 && out == 2)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_DSA_VERIFY:
 			if (in == 7 && out == 0)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_DH_COMPUTE_KEY:
 			if (in == 3 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD_ADD:
 			if (in == 3 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD_ADDINV:
 			if (in == 2 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD_SUB:
 			if (in == 3 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD_MULT:
 			if (in == 3 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD_MULTINV:
 			if (in == 2 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		case CRK_MOD:
 			if (in == 2 && out == 1)
 				break;
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		default:
-			kop[req].crk_status = EINVAL;
+			kop[req].crk_status = SET_ERROR(EINVAL);
 			continue;
 		}
 
@@ -1497,7 +1506,7 @@ fail:
 }
 
 int
-cryptodev_session(struct fcrypt *fcr, struct session_op *sop) 
+cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 {
 	struct cryptoini cria, crie;
 	struct cryptoini cric;		/* compressor */
@@ -1553,7 +1562,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		break;
 	default:
 		DPRINTF("Invalid cipher %d\n", sop->cipher);
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	}
 
 	switch (sop->comp_alg) {
@@ -1568,7 +1577,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		break;
 	default:
 		DPRINTF("Invalid compression alg %d\n", sop->comp_alg);
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	}
 
 	switch (sop->mac) {
@@ -1596,7 +1605,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 			thash = &auth_hash_hmac_sha2_512;
 		} else {
 			DPRINTF("Invalid mackeylen %d\n", sop->mackeylen);
-			return EINVAL;
+			return SET_ERROR(EINVAL);
 		}
 		break;
 	case CRYPTO_SHA2_384_HMAC:
@@ -1634,7 +1643,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		break;
 	default:
 		DPRINTF("Invalid mac %d\n", sop->mac);
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	}
 
 	memset(&crie, 0, sizeof(crie));
@@ -1661,7 +1670,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		    sop->keylen < txform->minkey) {
 			DPRINTF("keylen %d not in [%d,%d]\n",
 			    sop->keylen, txform->minkey, txform->maxkey);
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			goto bail;
 		}
 
@@ -1673,7 +1682,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		}
 		if (thash)
 			crie.cri_next = &cria;
-	} 
+	}
 
 	if (thash) {
 		cria.cri_alg = thash->type;
@@ -1681,7 +1690,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		if (sop->mackeylen != thash->keysize) {
 			DPRINTF("mackeylen %d != keysize %d\n",
 			    sop->mackeylen, thash->keysize);
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			goto bail;
 		}
 		if (cria.cri_klen) {
@@ -1708,7 +1717,7 @@ cryptodev_session(struct fcrypt *fcr, struct session_op *sop)
 		} else {
 			DPRINTF("csecreate failed\n");
 			crypto_freesession(sid);
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 		}
 	} else {
 		DPRINTF("SIOCSESSION violates kernel parameters %d\n", error);
@@ -1781,14 +1790,14 @@ cryptodev_getmstatus(struct fcrypt *fcr, struct crypt_result *crypt_res,
 
 	/* On queue so nobody else can grab them
 	 * and copyout can be delayed-- no locking */
-	TAILQ_HEAD(, cryptop) crp_delfree_q = 
+	TAILQ_HEAD(, cryptop) crp_delfree_q =
 		TAILQ_HEAD_INITIALIZER(crp_delfree_q);
-	TAILQ_HEAD(, cryptkop) krp_delfree_q = 
+	TAILQ_HEAD(, cryptkop) krp_delfree_q =
 		TAILQ_HEAD_INITIALIZER(krp_delfree_q);
 
-	/* at this point we do not know which response user is requesting for 
-	 * (symmetric or asymmetric) so we copyout one from each i.e if the 
-	 * count is 2 then 1 from symmetric and 1 from asymmetric queue and 
+	/* at this point we do not know which response user is requesting for
+	 * (symmetric or asymmetric) so we copyout one from each i.e if the
+	 * count is 2 then 1 from symmetric and 1 from asymmetric queue and
 	 * if 3 then 2 symmetric and 1 asymmetric and so on */
 
 	/* pull off a list of requests while protected from changes */
@@ -1825,7 +1834,7 @@ cryptodev_getmstatus(struct fcrypt *fcr, struct crypt_result *crypt_res,
 			crypt_res[req].reqid = crp->crp_reqid;
 			crypt_res[req].opaque = crp->crp_usropaque;
 			completed++;
-			
+
 			if (crp->crp_etype != 0) {
 				crypt_res[req].status = crp->crp_etype;
 				goto bail;
@@ -1874,7 +1883,7 @@ bail:
 					if (crypt_res[req].status) {
 						DPRINTF("copyout oparam %d failed, "
 						    "error=%d\n",
-						    i - krp->krp_iparams, 
+						    i - krp->krp_iparams,
 						    crypt_res[req].status);
 						goto fail;
 					}
@@ -1882,7 +1891,7 @@ bail:
 fail:
 				TAILQ_REMOVE(&krp_delfree_q, krp, krp_next);
 				/* not sure what to do for this */
-				/* kop[req].crk_status = krp->krp_status; */ 
+				/* kop[req].crk_status = krp->krp_status; */
 				for (i = 0; i < CRK_MAXPARAM; i++) {
 					struct crparam *kp = &(krp->krp_param[i]);
 					if (kp->crp_p) {
@@ -1910,7 +1919,7 @@ cryptodev_getstatus (struct fcrypt *fcr, struct crypt_result *crypt_res)
         int i, size, req = 0;
 
 	mutex_enter(&fcr->lock);
-	/* Here we dont know for which request the user is requesting the 
+	/* Here we dont know for which request the user is requesting the
 	 * response so checking in both the queues */
 	TAILQ_FOREACH_SAFE(crp, &fcr->crp_ret_mq, crp_next, cnext) {
 		if(crp && (crp->crp_reqid == crypt_res->reqid)) {
@@ -1922,10 +1931,10 @@ cryptodev_getstatus (struct fcrypt *fcr, struct crypt_result *crypt_res)
 			}
 
 			if (crp->dst && (crypt_res->status =
-			    copyout(cod->uio.uio_iov[0].iov_base, 
+			    copyout(cod->uio.uio_iov[0].iov_base,
 			    crp->dst, crp->len)))
 				goto bail;
-			
+
 			if (crp->mac && (crypt_res->status =
 			    copyout(crp->crp_mac, crp->mac,
 			    cod->cse->thash->authsize)))
@@ -1944,7 +1953,7 @@ bail:
 		if(krp && (krp->krp_reqid == crypt_res->reqid)) {
 			crypt_res[req].opaque = krp->krp_usropaque;
 			if (krp->krp_status != 0) {
-				DPRINTF("krp->krp_status 0x%08x\n", 
+				DPRINTF("krp->krp_status 0x%08x\n",
 				    krp->krp_status);
 				crypt_res[req].status = krp->krp_status;
 				goto fail;
@@ -1956,12 +1965,12 @@ bail:
 				if (size == 0)
 					continue;
 				crypt_res[req].status = copyout(
-				    krp->krp_param[i].crp_p, 
+				    krp->krp_param[i].crp_p,
 				    krp->crk_param[i].crp_p, size);
 				if (crypt_res[req].status) {
 					DPRINTF("copyout oparam "
-					    "%d failed, error=%d\n", 
-					    i - krp->krp_iparams, 
+					    "%d failed, error=%d\n",
+					    i - krp->krp_iparams,
 					    crypt_res[req].status);
 					goto fail;
 				}
@@ -1970,7 +1979,7 @@ fail:
 			TAILQ_REMOVE(&fcr->crp_ret_mkq, krp, krp_next);
 			mutex_exit(&fcr->lock);
 			/* not sure what to do for this */
-			/* kop[req].crk_status = krp->krp_status; */ 
+			/* kop[req].crk_status = krp->krp_status; */
 			for (i = 0; i < CRK_MAXPARAM; i++) {
 				struct crparam *kp = &(krp->krp_param[i]);
 				if (kp->crp_p) {
@@ -1986,10 +1995,10 @@ fail:
 		}
 	}
 	mutex_exit(&fcr->lock);
-	return EINPROGRESS;
+	return SET_ERROR(EINPROGRESS);
 }
 
-static int      
+static int
 cryptof_stat(struct file *fp, struct stat *st)
 {
 	struct fcrypt *fcr = fp->f_fcrypt;
@@ -2008,7 +2017,7 @@ cryptof_stat(struct file *fp, struct stat *st)
 	return 0;
 }
 
-static int      
+static int
 cryptof_poll(struct file *fp, int events)
 {
 	struct fcrypt *fcr = fp->f_fcrypt;
@@ -2109,12 +2118,12 @@ crypto_modcmd(modcmd_t cmd, void *arg)
 		 * for all files with a given struct fileops to be
 		 * closed.
 		 */
-		return ENOTTY;
+		return SET_ERROR(ENOTTY);
 
 		mutex_enter(&cryptodev_mtx);
 		if (crypto_refcount != 0) {
 			mutex_exit(&cryptodev_mtx);
-			return EBUSY;
+			return SET_ERROR(EBUSY);
 		}
 		crypto_detaching = true;
 		mutex_exit(&cryptodev_mtx);
@@ -2122,6 +2131,6 @@ crypto_modcmd(modcmd_t cmd, void *arg)
 		cryptodev_fini();
 		return 0;
 	default:
-		return ENOTTY;
+		return SET_ERROR(ENOTTY);
 	}
 }

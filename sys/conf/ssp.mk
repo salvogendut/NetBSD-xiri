@@ -1,6 +1,6 @@
-# $NetBSD: ssp.mk,v 1.5 2020/02/08 07:07:07 maxv Exp $
+# $NetBSD: ssp.mk,v 1.7 2026/10/09 13:52:57 riastradh Exp $
 
-.if ${USE_SSP:Uno} == "yes"
+.if ${HAVE_SSP} == "yes" && ${USE_SSP} == "yes"
 COPTS.kern_ssp.c+=	-fno-stack-protector -D__SSP__
 .endif
 

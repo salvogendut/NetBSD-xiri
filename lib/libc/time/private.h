@@ -1,6 +1,6 @@
 /* Private header for tzdb code.  */
 
-/*	$NetBSD: private.h,v 1.76 2026/03/08 21:04:54 christos Exp $	*/
+/*	$NetBSD: private.h,v 1.78 2026/09/12 19:43:35 christos Exp $	*/
 
 #ifndef PRIVATE_H
 #define PRIVATE_H
@@ -257,6 +257,9 @@ strnlen (char const *s, size_t maxlen)
 # define EINVAL ERANGE
 #endif
 
+#ifndef EFTYPE
+# define EFTYPE EINVAL
+#endif
 #ifndef ELOOP
 # define ELOOP EINVAL
 #endif
@@ -266,6 +269,9 @@ strnlen (char const *s, size_t maxlen)
 #ifndef ENOMEM
 # define ENOMEM EINVAL
 #endif
+#ifndef ENOSYS
+# define ENOSYS EINVAL
+#endif
 #ifndef ENOTCAPABLE
 # define ENOTCAPABLE EINVAL
 #endif
@@ -274,6 +280,9 @@ strnlen (char const *s, size_t maxlen)
 #endif
 #ifndef EOVERFLOW
 # define EOVERFLOW EINVAL
+#endif
+#ifndef EPERM
+# define EPERM EINVAL
 #endif
 
 #if HAVE_GETTEXT
@@ -316,6 +325,7 @@ extern int optind;
 
 #ifndef HAVE_ISSETUGID
 # if (defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__ \
+      || defined __DragonFly__ \
       || (defined __linux__ && !defined __GLIBC__) /* Android, musl, etc. */ \
       || (defined __APPLE__ && defined __MACH__) || defined __sun)
 #  define HAVE_ISSETUGID 1
@@ -826,6 +836,7 @@ void tzset(void);
 # if (202311 <= __STDC_VERSION__ \
       || defined __GLIBC__ || defined __tm_zone /* musl */ \
       || defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__ \
+      || defined __DragonFly__ || defined __HAIKU__ \
       || (defined __APPLE__ && defined __MACH__))
 #  define HAVE_DECL_TIMEGM 1
 # else
@@ -854,7 +865,8 @@ extern char **environ;
 
 #ifndef HAVE_MEMPCPY
 # if (defined mempcpy \
-      || defined __FreeBSD__ || defined __NetBSD__ || defined __linux__ \
+      || defined __FreeBSD__ || defined __NetBSD__ || defined __DragonFly__ \
+      || defined __linux__ \
       || defined HAVE_NBTOOL_CONFIG_H)
 #  define HAVE_MEMPCPY 1
 # else
@@ -923,6 +935,7 @@ time_t posix2time(time_t);
      || defined __GLIBC__ \
      || defined __tm_zone /* musl */ \
      || defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__ \
+     || defined __DragonFly__ || defined __HAIKU__ \
      || (defined __APPLE__ && defined __MACH__))
 # if !defined TM_GMTOFF && !defined NO_TM_GMTOFF
 #  define TM_GMTOFF tm_gmtoff
@@ -972,6 +985,11 @@ ATTRIBUTE_POSIX2TIME time_t time2posix_z(timezone_t __restrict, time_t);
 #define TYPE_SIGNED(type) \
      (/*LINTED*/((type)~(type)0 >> (sizeof(type) * CHAR_BIT - 1)) == (type)-1)
 #define TWOS_COMPLEMENT(type) (TYPE_SIGNED (type) && (! ~ (type) -1))
+
+/* Yield the value of the arithmetic expression X after integer promotion.
+   This is safer than a cast, which in general would accept even
+   pointers and which might trap or yield a value not equal to X.  */
+#define INT_PROMOTE(x) (+(x))
 
 /* Minimum and maximum of two values.  Use lower case to avoid
    naming clashes with standard include files.  */
@@ -1093,12 +1111,16 @@ time_t timeoff(struct tm *, long);
 ** The default is to use gettext if available, and use MSGID otherwise.
 */
 
-#if HAVE_GETTEXT
-# define _(msgid) gettext(msgid)
-#else /* !HAVE_GETTEXT */
-# define _(msgid) (msgid)
-#endif /* !HAVE_GETTEXT */
-#define N_(msgid) (msgid)
+#ifndef _
+# if HAVE_GETTEXT
+#  define _(msgid) gettext(msgid)
+# else
+#  define _(msgid) (msgid)
+# endif
+#endif
+#ifndef N_
+# define N_(msgid) (msgid)
+#endif
 
 #if !defined TZ_DOMAIN && defined HAVE_GETTEXT
 # define TZ_DOMAIN "tz"
@@ -1188,6 +1210,7 @@ enum {
 #endif
 
 #define isleap(y) (((y) % 4) == 0 && (((y) % 100) != 0 || ((y) % 400) == 0))
+#define year_days(y) (DAYSPERNYEAR + isleap(y))
 
 /*
 ** Since everything in isleap is modulo 400 (or a factor of 400), we know that
@@ -1201,7 +1224,7 @@ enum {
 ** We use this to avoid addition overflow problems.
 */
 
-#define isleap_sum(a, b)	isleap((a) % 400 + (b) % 400)
+#define year_sum_days(a, b) (DAYSPERNYEAR + isleap((a) % 400 + (b) % 400))
 
 #ifdef _LIBC
 #include "reentrant.h"

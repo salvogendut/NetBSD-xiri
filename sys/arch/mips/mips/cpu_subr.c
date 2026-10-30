@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu_subr.c,v 1.66 2025/09/06 12:42:16 riastradh Exp $	*/
+/*	$NetBSD: cpu_subr.c,v 1.69 2026/09/29 05:45:44 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2010, 2019, 2023 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.66 2025/09/06 12:42:16 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.69 2026/09/29 05:45:44 skrll Exp $");
 
 #include "opt_cputype.h"
 #include "opt_ddb.h"
@@ -280,6 +280,12 @@ cpu_attach_common(device_t self, struct cpu_info *ci)
 		KASSERT(cpuid_infos[ci->ci_cpuid] == NULL);
 		atomic_store_release(&cpuid_infos[ci->ci_cpuid], ci);
 		membar_producer(); /* Cavium sync plunger */
+
+		/*
+		 * The BP has its ci_shootdowncpus cpuset created in
+		 * pmap_bootstrap.
+		 */
+		kcpuset_create(&ci->ci_shootdowncpus, true);
 	}
 	KASSERT(cpuid_infos[ci->ci_cpuid] != NULL);
 	evcnt_attach_dynamic(&ci->ci_evcnt_synci_activate_rqst,
@@ -300,7 +306,6 @@ cpu_attach_common(device_t self, struct cpu_info *ci)
 	 */
 	ipi_init(ci);
 
-	kcpuset_create(&ci->ci_shootdowncpus, true);
 	kcpuset_create(&ci->ci_multicastcpus, true);
 	kcpuset_create(&ci->ci_watchcpus, true);
 	kcpuset_create(&ci->ci_ddbcpus, true);
@@ -317,15 +322,15 @@ cpu_startup_common(void)
 
 #ifdef MULTIPROCESSOR
 	kcpuset_create(&cpus_halted, true);
-		KASSERT(cpus_halted != NULL);
 	kcpuset_create(&cpus_hatched, true);
-		KASSERT(cpus_hatched != NULL);
 	kcpuset_create(&cpus_paused, true);
-		KASSERT(cpus_paused != NULL);
 	kcpuset_create(&cpus_resumed, true);
-		KASSERT(cpus_resumed != NULL);
 	kcpuset_create(&cpus_running, true);
-		KASSERT(cpus_running != NULL);
+	KASSERT(cpus_halted != NULL);
+	KASSERT(cpus_hatched != NULL);
+	KASSERT(cpus_paused != NULL);
+	KASSERT(cpus_resumed != NULL);
+	KASSERT(cpus_running != NULL);
 	kcpuset_set(cpus_hatched, cpu_number());
 	kcpuset_set(cpus_running, cpu_number());
 #endif
@@ -880,7 +885,7 @@ cpu_debug_dump(void)
 void
 cpu_hatch(struct cpu_info *ci)
 {
-	struct pmap_tlb_info * const ti = ci->ci_tlb_info;
+	struct pmap_tlb_info * const ti = cpu_tlb_info(ci);
 
 	/*
 	 * Invalidate all the TLB enties (even wired ones) and then reserve

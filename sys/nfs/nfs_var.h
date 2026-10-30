@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_var.h,v 1.97 2024/12/07 02:05:55 riastradh Exp $	*/
+/*	$NetBSD: nfs_var.h,v 1.99 2026/08/26 13:28:37 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.

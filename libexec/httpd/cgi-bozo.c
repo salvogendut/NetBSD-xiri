@@ -1,4 +1,4 @@
-/*	$NetBSD: cgi-bozo.c,v 1.57 2026/06/11 05:44:11 mlelstv Exp $	*/
+/*	$NetBSD: cgi-bozo.c,v 1.59 2026/10/07 14:39:30 nia Exp $	*/
 
 /*	$eterna: cgi-bozo.c,v 1.40 2011/11/18 09:21:15 mrg Exp $	*/
 
@@ -607,6 +607,9 @@ bozo_process_cgi(bozo_httpreq_t *request)
 		close(sv[1]);
 		closelog();
 		bozo_daemon_closefds(httpd);
+
+		if (httpd->cgibin && chdir(httpd->cgibin) == -1)
+			bozoerr(httpd, 1, "failed to chdir(2)");
 
 		if (-1 == execve(path, argv, envp)) {
 			int saveerrno = errno;

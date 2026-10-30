@@ -12,26 +12,16 @@
  */
 
 options {
-	port @PORT@;
-	pid-file "named.pid";
-	listen-on { 10.53.0.2; };
-	listen-on-v6 { none; };
+	{% include_indented "_common/options.conf.j2" %}
 	allow-query { any; };
 	recursion no;
 	allow-new-zones yes;
 	dnssec-validation no;
 };
 
-include "../../_common/rndc.key";
+{% include "_common/controls.conf.j2" %}
 
-controls {
-	inet 10.53.0.2 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
-};
-
-zone "." {
-	type hint;
-	file "../../_common/root.hint";
-};
+{% include "_common/root.hint.conf" %}
 
 zone "normal.example" {
 	type primary;

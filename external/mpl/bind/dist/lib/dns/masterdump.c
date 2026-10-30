@@ -1,4 +1,4 @@
-/*	$NetBSD: masterdump.c,v 1.19 2026/04/08 00:16:13 christos Exp $	*/
+/*	$NetBSD: masterdump.c,v 1.21 2026/08/29 14:55:16 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -237,6 +237,7 @@ static char tabs[N_TABS + 1] = "\t\t\t\t\t\t\t\t\t\t";
 struct dns_dumpctx {
 	unsigned int magic;
 	isc_mem_t *mctx;
+	isc_loop_t *loop;
 	isc_mutex_t lock;
 	isc_refcount_t references;
 	atomic_bool canceled;
@@ -250,7 +251,6 @@ struct dns_dumpctx {
 	dns_dumpdonefunc_t done;
 	void *done_arg;
 	/* dns_master_dumpasync() */
-	isc_result_t result;
 	char *file;
 	char *tmpfile;
 	dns_masterformat_t format;
@@ -1489,10 +1489,21 @@ closeandrename(FILE *f, isc_result_t result, const char *temp,
 }
 
 /*
- * This will run in a libuv threadpool thread.
+ * The dump runs on the SLOW work lane of dctx->loop:
+ *
+ * 1. dns_master_dumptostreamasync() (or dns_master_dumpasync()) publishes
+ *    *dctxp, then starts master_dump_start() on dctx->loop with
+ *    isc_async_run().  Publishing first ensures dctx->done() cannot observe
+ *    *dctxp unset even when the caller runs on a different loop.
+ * 2. master_dump_start() enqueues the work; isc_work_enqueue() must be
+ *    called on the loop the work is bound to, hence the extra hop.
+ * 3. master_dump() runs on the worker thread and its result is handed to
+ *    master_dump_done() on dctx->loop.
+ * 4. master_dump_done() calls dctx->done() and drops the loop and dctx
+ *    references.
  */
-static void
-master_dump_cb(void *data) {
+static isc_result_t
+master_dump(void *data) {
 	isc_result_t result = ISC_R_UNSET;
 	dns_dumpctx_t *dctx = data;
 	REQUIRE(DNS_DCTX_VALID(dctx));
@@ -1514,18 +1525,24 @@ master_dump_cb(void *data) {
 		result = flushandsync(dctx->f, result, NULL);
 	}
 
-	dctx->result = result;
+	return result;
 }
 
-/*
- * This will run in a loop manager thread when the dump is complete.
- */
 static void
-master_dump_done_cb(void *data) {
+master_dump_done(void *data, isc_result_t result) {
 	dns_dumpctx_t *dctx = data;
 
-	(dctx->done)(dctx->done_arg, dctx->result);
+	(dctx->done)(dctx->done_arg, result);
+	isc_loop_detach(&dctx->loop);
 	dns_dumpctx_detach(&dctx);
+}
+
+static void
+master_dump_start(void *data) {
+	dns_dumpctx_t *dctx = data;
+
+	isc_work_enqueue(dctx->loop, ISC_WORKLANE_SLOW, master_dump,
+			 master_dump_done, dctx);
 }
 
 static isc_result_t
@@ -1758,21 +1775,6 @@ cleanup:
 	return result;
 }
 
-static void
-master_dump_enqueue(void *dctx) {
-	isc_work_enqueue(isc_loop(), master_dump_cb, master_dump_done_cb, dctx);
-}
-
-static void
-dns_dumpctx_enqueue(isc_loop_t *loop, dns_dumpctx_t *dctx) {
-	dns_dumpctx_ref(dctx);
-	if (loop == isc_loop()) {
-		master_dump_enqueue(dctx);
-	} else {
-		isc_async_run(loop, master_dump_enqueue, dctx);
-	}
-}
-
 isc_result_t
 dns_master_dumptostreamasync(isc_mem_t *mctx, dns_db_t *db,
 			     dns_dbversion_t *version,
@@ -1794,8 +1796,13 @@ dns_master_dumptostreamasync(isc_mem_t *mctx, dns_db_t *db,
 	dctx->done = done;
 	dctx->done_arg = done_arg;
 
-	dns_dumpctx_enqueue(loop, dctx);
+	dns_dumpctx_ref(dctx);
+	isc_loop_attach(loop, &dctx->loop);
+
+	/* Publish *dctxp before the dump can start (see master_dump). */
 	*dctxp = dctx;
+
+	isc_async_run(loop, master_dump_start, dctx);
 
 	return ISC_R_SUCCESS;
 }
@@ -1889,8 +1896,13 @@ dns_master_dumpasync(isc_mem_t *mctx, dns_db_t *db, dns_dbversion_t *version,
 	dctx->file = file;
 	dctx->tmpfile = tempname;
 
-	dns_dumpctx_enqueue(loop, dctx);
+	dns_dumpctx_ref(dctx);
+	isc_loop_attach(loop, &dctx->loop);
+
+	/* Publish *dctxp before the dump can start (see master_dump). */
 	*dctxp = dctx;
+
+	isc_async_run(loop, master_dump_start, dctx);
 
 	return ISC_R_SUCCESS;
 

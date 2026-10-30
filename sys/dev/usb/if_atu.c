@@ -1,4 +1,4 @@
-/*	$NetBSD: if_atu.c,v 1.78 2025/11/26 16:40:50 nia Exp $ */
+/*	$NetBSD: if_atu.c,v 1.80 2026/09/03 02:12:14 gutteridge Exp $ */
 /*	$OpenBSD: if_atu.c,v 1.48 2004/12/30 01:53:21 dlg Exp $ */
 /*
  * Copyright (c) 2003, 2004
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_atu.c,v 1.78 2025/11/26 16:40:50 nia Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_atu.c,v 1.80 2026/09/03 02:12:14 gutteridge Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -1446,7 +1446,7 @@ atu_complete_attach(struct atu_softc *sc)
 	IFQ_SET_READY(&ifp->if_snd);
 
 	/* Call MI attach routine. */
-	if_attach(ifp);
+	if_initialize(ifp);
 	ieee80211_ifattach(ic);
 
 	sc->sc_newstate = ic->ic_newstate;
@@ -1461,6 +1461,11 @@ atu_complete_attach(struct atu_softc *sc)
 	usb_init_task(&sc->sc_task, atu_task, sc, 0);
 
 	sc->sc_state = ATU_S_OK;
+
+	ifp->if_percpuq = if_percpuq_create(ifp);
+	if_register(ifp);
+
+	/* XXX ieee80211_announce? */
 }
 
 static int
@@ -1647,7 +1652,7 @@ atu_rxeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 			/*
 			 * My experience with USBD_IOERROR is that trying to
 			 * restart the transfer will always fail and we'll
-			 * keep on looping restarting transfers untill someone
+			 * keep on looping restarting transfers until someone
 			 * pulls the plug of the device.
 			 * So we don't restart the transfer, but just let it
 			 * die... If someone knows of a situation where we can

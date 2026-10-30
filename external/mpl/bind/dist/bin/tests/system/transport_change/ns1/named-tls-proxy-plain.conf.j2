@@ -11,11 +11,7 @@
  * information regarding copyright ownership.
  */
 
-include "../../_common/rndc.key";
-
-controls {
-	inet 10.53.0.1 port @CONTROLPORT@ allow { any; } keys { rndc_key; };
-};
+{% include "_common/controls.conf.j2" %}
 
 tls self-signed {
 	cert-file "../self-signed-cert.pem";
@@ -23,13 +19,14 @@ tls self-signed {
 };
 
 options {
-	pid-file "named.pid";
+	{% include_indented "_common/options/sources.conf.j2" %}
+	{% include_indented "_common/options/server.conf.j2" %}
 	##
 	# generic
-	listen-on port @PORT@ { 10.53.0.1; };
+	listen-on { @ns.ip@; };
 	# test TLS
-	listen-on port @EXTRAPORT1@ proxy plain tls self-signed { 10.53.0.1; };
-	listen-on-v6 port @EXTRAPORT1@ proxy plain tls self-signed { fd92:7065:b8e:ffff::1; };
+	listen-on port @EXTRAPORT1@ proxy plain tls self-signed { @ns.ip@; };
+	listen-on-v6 port @EXTRAPORT1@ proxy plain tls self-signed { @ns.ip6@; };
 	##
 	recursion no;
 	notify explicit;
@@ -37,9 +34,8 @@ options {
 	dnssec-validation no;
 	tcp-initial-timeout 1200;
 	allow-proxy { any; };
-	allow-proxy-on { 10.53.0.1; fd92:7065:b8e:ffff::1; };
+	allow-proxy-on { @ns.ip@; @ns.ip6@; };
 };
-
 
 zone "example" {
 	type primary;

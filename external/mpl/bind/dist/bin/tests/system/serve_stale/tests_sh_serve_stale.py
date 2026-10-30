@@ -11,17 +11,19 @@
 
 import pytest
 
-pytestmark = pytest.mark.extra_artifacts(
+EXTRA_ARTIFACTS = pytest.mark.extra_artifacts(
     [
         "dig.out.*",
         "rndc.out.*",
         "ans*/ans.run",
         "ns*/named.stats*",
         "ns*/named_dump*",
-        "ns*/named.stats*",
         "ns*/root.bk",
+        "ns1/stale.test.db.jnl",
     ]
 )
+
+pytestmark = EXTRA_ARTIFACTS
 
 
 @pytest.mark.flaky(max_runs=2)

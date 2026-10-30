@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_68k.h,v 1.19 2026/05/19 21:41:21 andvar Exp $	*/
+/*	$NetBSD: pmap_68k.h,v 1.22 2026/07/16 14:15:15 thorpej Exp $	*/
 
 /*-     
  * Copyright (c) 2025 The NetBSD Foundation, Inc.
@@ -443,15 +443,21 @@ bool	pmap_pa_has_static_mapping(paddr_t, size_t, vm_prot_t,
 	    vaddr_t *, int *);
 bool	pmap_va_is_static_mapping(vaddr_t, size_t);
 
+/* Kernel debugger support functions. */
+struct pmap_db_write_text_context {
+	vaddr_t		pgva;
+	pt_entry_t *	ptep;
+	pt_entry_t	opte;
+};
+bool	pmap_db_write_text_enter(vaddr_t, struct pmap_db_write_text_context *);
+void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
+
 /*
  * Functions exported for compatibility with the Hibler pmap, where
  * these are needed by other shared m68k code.
  *
  * XXX Clean this up eventually.
  */
-pt_entry_t *		pmap_kernel_pte(vaddr_t);
-#define	kvtopte(va)	pmap_kernel_pte(va)
-
 paddr_t		vtophys(vaddr_t);
 
 extern char *	vmmap;

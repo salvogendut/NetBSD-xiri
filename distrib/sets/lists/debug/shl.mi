@@ -1,4 +1,13 @@
-# $NetBSD: shl.mi,v 1.404 2026/06/13 18:07:21 kre Exp $
+# $NetBSD: shl.mi,v 1.417 2026/10/22 17:57:09 christos Exp $
+#
+# Note: Like base/shl.mi, entries here for shared libraries should
+#       generally NOT be marked `obsolete' and instead should be
+#       deleted when we stop installing a certain file.  This way,
+#       systems that still have the old shared libraries after an
+#       update, which applications might have been linked against, will
+#       not only generally continue to work, but also generally
+#       continue to have debug data.  Exceptions: shared objects that
+#       are only used through dlopen() at runtime.
 #
 ./usr/libdata/debug/lib						base-sys-usr	debug,dynamicroot,compatdir
 ./usr/libdata/debug/lib/libavl.so.0.0.debug			comp-zfs-debug	debug,dynamicroot,zfs
@@ -12,7 +21,7 @@
 ./usr/libdata/debug/lib/libdevmapper.so.1.0.debug		comp-sys-debug	debug,dynamicroot,lvm
 ./usr/libdata/debug/lib/libdm.so.0.0.debug 			comp-sys-debug	debug,dynamicroot
 ./usr/libdata/debug/lib/libedit.so.3.1.debug			comp-sys-debug	debug,dynamicroot
-./usr/libdata/debug/lib/libevent.so.5.0.debug			comp-sys-debug	debug,dynamicroot
+./usr/libdata/debug/lib/libevent.so.5.1.debug			comp-sys-debug	debug,dynamicroot
 ./usr/libdata/debug/lib/libgcc_s.so.1.0.debug			comp-sys-debug	debug,dynamicroot,gcc
 ./usr/libdata/debug/lib/libipsec.so.3.0.debug			comp-sys-debug	debug,dynamicroot
 ./usr/libdata/debug/lib/libisns.so.0.0.debug			comp-isns-debug	debug,dynamicroot
@@ -24,7 +33,6 @@
 ./usr/libdata/debug/lib/libnvpair.so.0.0.debug			comp-zfs-debug	debug,dynamicroot,zfs
 ./usr/libdata/debug/lib/libpcap.so.10.1.debug			comp-sys-debug	debug,dynamicroot
 ./usr/libdata/debug/lib/libppath.so.0.0.debug			comp-sys-debug	debug,dynamicroot
-./usr/libdata/debug/lib/libprop.so.1.2.debug			comp-obsolete	obsolete
 ./usr/libdata/debug/lib/libprop.so.1.3.debug			comp-sys-debug	debug,dynamicroot
 ./usr/libdata/debug/lib/libpthread.so.1.7.debug			comp-sys-debug	debug,dynamicroot
 ./usr/libdata/debug/lib/libradius.so.5.0.debug			comp-sys-debug	debug,dynamicroot
@@ -82,7 +90,6 @@
 ./usr/libdata/debug/usr/lib/libbfd.so.19.0.debug		comp-sys-debug	debug,compatfile,binutils=242
 ./usr/libdata/debug/usr/lib/libbfd.so.20.0.debug		comp-sys-debug	debug,compatfile,binutils=245
 ./usr/libdata/debug/usr/lib/libbfd.so.21.0.debug		comp-sys-debug	debug,compatfile,binutils=246
-./usr/libdata/debug/usr/lib/libbind9.so.22.0.debug		comp-obsolete	obsolete
 ./usr/libdata/debug/usr/lib/libblocklist.so.0.1.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libbluetooth.so.4.2.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libbozohttpd.so.1.0.debug		comp-sys-debug	debug,compatfile
@@ -105,18 +112,17 @@
 ./usr/libdata/debug/usr/lib/libdes.so.16.0.debug			comp-crypto-debug	debug,compatfile,openssl=35
 ./usr/libdata/debug/usr/lib/libdevmapper.so.1.0.debug		comp-lvm-debug	debug,compatfile,lvm
 ./usr/libdata/debug/usr/lib/libdm.so.0.0.debug 			comp-sys-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libdns.so.25.0.debug 		comp-bind-debug debug,compatfile
+./usr/libdata/debug/usr/lib/libdns.so.27.0.debug 		comp-bind-debug debug,compatfile,bind
 ./usr/libdata/debug/usr/lib/libdns_sd.so.0.0.debug		comp-mdns-debug	debug,compatfile,mdns
 ./usr/libdata/debug/usr/lib/libdtrace.so.3.0.debug		comp-sys-debug	debug,compatfile,dtrace
 ./usr/libdata/debug/usr/lib/libdwarf.so.2.0.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libedit.so.3.1.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libelf.so.2.1.debug			comp-sys-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libevent.so.5.0.debug		comp-sys-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libevent_openssl.so.5.0.debug	comp-sys-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libevent_pthreads.so.5.0.debug	comp-sys-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/libevent.so.5.1.debug		comp-sys-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/libevent_openssl.so.5.1.debug	comp-sys-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/libevent_pthreads.so.5.1.debug	comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libexecinfo.so.0.0.debug		comp-sys-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libexpat.so.2.5.debug		comp-obsolete	obsolete
-./usr/libdata/debug/usr/lib/libexpat.so.2.6.debug		comp-sys-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/libexpat.so.2.7.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libfetch.so.4.0.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libfido2.so.5.1.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libform.so.8.0.debug		comp-sys-debug	debug,compatfile
@@ -138,10 +144,9 @@
 ./usr/libdata/debug/usr/lib/libhx509.so.7.0.debug		comp-krb5-debug	debug,compatfile,kerberos
 ./usr/libdata/debug/usr/lib/libintl.so.1.1.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libipsec.so.3.0.debug		comp-net-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libirs.so.22.0.debug		comp-obsolete	obsolete
-./usr/libdata/debug/usr/lib/libisc.so.23.0.debug		comp-bind-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libisccc.so.23.0.debug		comp-bind-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libisccfg.so.23.1.debug		comp-bind-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/libisc.so.23.0.debug		comp-bind-debug	debug,compatfile,bind
+./usr/libdata/debug/usr/lib/libisccc.so.23.0.debug		comp-bind-debug	debug,compatfile,bind
+./usr/libdata/debug/usr/lib/libisccfg.so.23.1.debug		comp-bind-debug	debug,compatfile,bind
 ./usr/libdata/debug/usr/lib/libiscsi.so.2.0.debug		comp-iscsi-debug	debug,compatfile,iscsi
 ./usr/libdata/debug/usr/lib/libisns.so.0.0.debug		comp-isns-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libjemalloc.so.0.0.debug		comp-sys-debug	debug,compatfile
@@ -153,7 +158,6 @@
 ./usr/libdata/debug/usr/lib/libkvm.so.6.0.debug			comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/liblber.so.5.0.debug		comp-ldap-debug	debug,compatfile,ldap
 ./usr/libdata/debug/usr/lib/libldap.so.6.0.debug		comp-ldap-debug	debug,compatfile,ldap
-./usr/libdata/debug/usr/lib/libldap_r.so.6.0.debug		comp-obsolete	obsolete
 ./usr/libdata/debug/usr/lib/libldap_r.so.7.0.debug		comp-ldap-debug	debug,compatfile,ldap
 ./usr/libdata/debug/usr/lib/liblsan.so.2.0.debug		comp-sys-debug	debug,compatfile,cxx,gcccmds,gcc=10
 ./usr/libdata/debug/usr/lib/liblsan.so.3.0.debug		comp-sys-debug	debug,compatfile,cxx,gcccmds,gcc=12
@@ -169,7 +173,7 @@
 ./usr/libdata/debug/usr/lib/libnetpgp.so.4.0.debug		comp-crypto-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libnetpgpverify.so.5.0.debug	comp-crypto-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libnpf.so.0.1.debug			comp-npf-debug	debug,compatfile,npf
-./usr/libdata/debug/usr/lib/libns.so.23.0.debug			comp-bind-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/libns.so.23.0.debug			comp-bind-debug	debug,compatfile,bind
 ./usr/libdata/debug/usr/lib/libnvmm.so.0.1.debug		comp-sys-shlib		nvmm,pic,debug
 ./usr/libdata/debug/usr/lib/libnvpair.so.0.0.debug		comp-zfs-debug	debug,compatfile,zfs
 ./usr/libdata/debug/usr/lib/libobjc.so.4.0.debug		comp-sys-debug	debug,compatfile,gcc
@@ -189,7 +193,6 @@
 ./usr/libdata/debug/usr/lib/libposix.so.0.1.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libppath.so.0.0.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libproc.so.1.0.debug		comp-sys-debug	debug,compatfile,dtrace
-./usr/libdata/debug/usr/lib/libprop.so.1.2.debug		comp-obsolete   obsolete
 ./usr/libdata/debug/usr/lib/libprop.so.1.3.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libpthread.so.1.7.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libpuffs.so.2.0.debug		comp-puffs-debug	debug,compatfile
@@ -325,9 +328,8 @@
 ./usr/libdata/debug/usr/lib/libubsan.so.6.0.debug		comp-sys-debug	debug,compatfile,cxx,gcccmds,gcc=14
 ./usr/libdata/debug/usr/lib/libukfs.so.1.0.debug		comp-sys-debug	debug,compatfile,rump
 ./usr/libdata/debug/usr/lib/libumem.so.0.0.debug		comp-zfs-debug	debug,compatfile,zfs
-./usr/libdata/debug/usr/lib/libunbound.so.11.1.debug 		comp-net-debug	debug,compatfile,unbound
+./usr/libdata/debug/usr/lib/libunbound.so.11.3.debug 		comp-net-debug	debug,compatfile,unbound
 ./usr/libdata/debug/usr/lib/libusbhid.so.1.0.debug		comp-sys-debug	debug,compatfile
-./usr/libdata/debug/usr/lib/libutil.so.7.24.debug		comp-obsolete	obsolete
 ./usr/libdata/debug/usr/lib/libutil.so.7.25.debug		comp-sys-debug	debug,compatfile
 ./usr/libdata/debug/usr/lib/libuutil.so.0.0.debug		comp-zfs-debug	debug,compatfile,zfs
 ./usr/libdata/debug/usr/lib/libwind.so.1.0.debug		comp-krb5-debug	debug,compatfile,kerberos
@@ -336,7 +338,7 @@
 ./usr/libdata/debug/usr/lib/libzfs.so.0.0.debug			comp-zfs-debug	debug,compatfile,zfs
 ./usr/libdata/debug/usr/lib/libzfs_core.so.0.0.debug		comp-zfs-debug	debug,compatfile,zfs
 ./usr/libdata/debug/usr/lib/libzpool.so.0.0.debug		comp-zfs-debug	debug,compatfile,zfs
-./usr/libdata/debug/usr/lib/named/filter-aaaa.so.0.debug	comp-sys-debug	debug,compatfile
+./usr/libdata/debug/usr/lib/named/filter-aaaa.so.0.debug	comp-sys-debug	debug,compatfile,bind
 ./usr/libdata/debug/usr/lib/npf/ext_log.so.0.0.debug		comp-obsolete	debug,compatfile,npf,obsolete
 ./usr/libdata/debug/usr/lib/npf/ext_normalise.so.0.0.debug	comp-obsolete	debug,compatfile,npf,obsolete
 ./usr/libdata/debug/usr/lib/npf/ext_rndblock.so.0.0.debug	comp-obsolete	debug,compatfile,npf,obsolete
@@ -345,7 +347,7 @@
 ./usr/libdata/debug/usr/lib/npf/libext_normalise.so.0.0.debug	comp-obsolete	debug,compatfile,npf,obsolete
 ./usr/libdata/debug/usr/lib/npf/libext_rndblock.so.0.0.debug	comp-obsolete	debug,compatfile,npf,obsolete
 ./usr/libdata/debug/usr/lib/npf/libext_route.so.0.0.debug	comp-obsolete	debug,compatfile,npf,obsolete
-./usr/libdata/debug/usr/lib/private/libssh.so.50.1.debug	comp-secsh-debug	ssh,debug,compatfile
+./usr/libdata/debug/usr/lib/private/libssh.so.52.0.debug	comp-secsh-debug	ssh,debug,compatfile
 ./usr/libdata/debug/usr/lib/security/pam_afslog.so.4.debug	base-sys-debug	debug,compatfile,pam
 ./usr/libdata/debug/usr/lib/security/pam_chroot.so.4.debug	base-sys-debug	debug,compatfile,pam
 ./usr/libdata/debug/usr/lib/security/pam_deny.so.4.debug	base-sys-debug	debug,compatfile,pam
@@ -391,6 +393,8 @@
 ./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_helper_dso2.so.1.debug	tests-libexec-debug	debug,compattestfile,atf
 ./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_helper_dso3.so.1.debug	tests-libexec-debug	debug,compattestfile,atf
 ./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_helper_ifunc_dso.so.1.debug	tests-libexec-debug	debug,compattestfile,atf
+./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_helper_recurdso.so.1.debug	tests-libexec-debug	debug,compattestfile,atf
+./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_helper_recurdso2.so.1.debug	tests-libexec-debug	debug,compattestfile,atf
 ./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_onlyctor_dynamic.so.1.debug	tests-libexec-debug	debug,compattestfile,atf
 ./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_onlydef.so.1.debug		tests-libexec-debug	debug,compattestfile,atf
 ./usr/libdata/debug/usr/tests/libexec/ld.elf_so/libh_onlyuse_dynamic.so.1.debug	tests-libexec-debug	debug,compattestfile,atf

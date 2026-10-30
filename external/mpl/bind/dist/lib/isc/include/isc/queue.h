@@ -1,4 +1,4 @@
-/*	$NetBSD: queue.h,v 1.9 2026/04/08 00:16:16 christos Exp $	*/
+/*	$NetBSD: queue.h,v 1.11 2026/09/17 18:01:17 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -12,6 +12,7 @@
  * See the COPYRIGHT file distributed with this work for additional
  * information regarding copyright ownership.
  */
+#pragma once
 
 #include <isc/os.h>
 #include <isc/urcu.h>
@@ -26,7 +27,7 @@ typedef struct isc_queue {
 					      sizeof(struct __cds_wfcq_head)];
 	struct cds_wfcq_tail   tail;
 	uint8_t		       __padding_tail[ISC_OS_CACHELINE_SIZE -
-					      sizeof(struct __cds_wfcq_head)];
+					      sizeof(struct cds_wfcq_tail)];
 } isc_queue_t;
 
 typedef struct cds_wfcq_node isc_queue_node_t;

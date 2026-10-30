@@ -1,4 +1,4 @@
-/*	$NetBSD: http.c,v 1.8 2026/05/20 16:53:47 christos Exp $	*/
+/*	$NetBSD: http.c,v 1.11 2026/09/17 18:01:17 christos Exp $	*/
 
 /*
  * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
@@ -311,12 +311,6 @@ http_get_listener_endpoints(isc_nmsocket_t *listener, const int tid);
 static void
 http_initsocket(isc_nmsocket_t *sock);
 
-static bool
-http_session_active(isc_nm_http_session_t *session) {
-	REQUIRE(VALID_HTTP2_SESSION(session));
-	return !session->closed && !session->closing;
-}
-
 static void *
 http_malloc(size_t sz, isc_mem_t *mctx) {
 	return isc_mem_allocate(mctx, sz);
@@ -422,6 +416,13 @@ isc__nm_httpsession_handle(isc_nm_http_session_t *session) {
 	REQUIRE(VALID_HTTP2_SESSION(session));
 
 	return session->handle;
+}
+
+bool
+isc__nm_httpsession_active(isc_nm_http_session_t *session) {
+	REQUIRE(VALID_HTTP2_SESSION(session));
+
+	return !session->closed && !session->closing && session->handle != NULL;
 }
 
 static http_cstream_t *
@@ -1083,7 +1084,7 @@ http_process_input_data(isc_nm_http_session_t *session,
 	REQUIRE(VALID_HTTP2_SESSION(session));
 	REQUIRE(input_data != NULL);
 
-	if (!http_session_active(session)) {
+	if (!isc__nm_httpsession_active(session)) {
 		return 0;
 	}
 
@@ -1330,7 +1331,7 @@ http_writecb(isc_nmhandle_t *handle, isc_result_t result, void *arg) {
 	REQUIRE(VALID_HTTP2_SESSION(session));
 	REQUIRE(VALID_NMHANDLE(handle));
 
-	if (http_session_active(session)) {
+	if (isc__nm_httpsession_active(session)) {
 		INSIST(session->handle == handle);
 	}
 
@@ -1399,7 +1400,7 @@ http_send_outgoing(isc_nm_http_session_t *session, isc_nmhandle_t *httphandle,
 	size_t max_total_write_size = 0;
 #endif /* ENABLE_HTTP_WRITE_BUFFERING */
 
-	if (!http_session_active(session)) {
+	if (!isc__nm_httpsession_active(session)) {
 		if (cb != NULL) {
 			isc__nm_uvreq_t *req =
 				isc__nm_uvreq_get(httphandle->sock);
@@ -1470,7 +1471,7 @@ http_send_outgoing(isc_nm_http_session_t *session, isc_nmhandle_t *httphandle,
 	if (cb != NULL) {
 		/*
 		 * Case 0: The callback is specified, that means that a DNS
-		 * message is ready. Let's flush the the buffer.
+		 * message is ready. Let's flush the buffer.
 		 */
 		total = max_total_write_size;
 	} else if (max_total_write_size >= FLUSH_HTTP_WRITE_BUFFER_AFTER) {
@@ -1482,9 +1483,9 @@ http_send_outgoing(isc_nm_http_session_t *session, isc_nmhandle_t *httphandle,
 	} else if (session->sending > 0 && total > 0) {
 		/*
 		 * Case 2: There is one or more write requests in flight and
-		 * we have some new data form nghttp2 to send.
+		 * we have some new data from nghttp2 to send.
 		 * Then let's return from the function: as soon as the
-		 * "in-flight" write callback get's called or we have reached
+		 * "in-flight" write callback gets called or we have reached
 		 * FLUSH_HTTP_WRITE_BUFFER_AFTER bytes in the write buffer, we
 		 * will flush the buffer. */
 		INSIST(cb == NULL);
@@ -2095,7 +2096,7 @@ isc__nm_http_request(isc_nmhandle_t *handle, isc_region_t *region,
 	sock = handle->sock;
 
 	isc__nm_http_read(handle, cb, cbarg);
-	if (!http_session_active(handle->sock->h2->session)) {
+	if (!isc__nm_httpsession_active(handle->sock->h2->session)) {
 		/* the callback was called by isc__nm_http_read() */
 		return ISC_R_CANCELED;
 	}
@@ -2107,8 +2108,15 @@ isc__nm_http_request(isc_nmhandle_t *handle, isc_region_t *region,
 	return ISC_R_SUCCESS;
 
 error:
+	/*
+	 * client_send() detaches and frees the stream on a submit failure
+	 * (it nullifies sock->h2->connect.cstream before submitting, then
+	 * frees it on the failure branch), so the reloaded pointer can be
+	 * NULL here.  The caller still gets the error result and reports the
+	 * failure itself.
+	 */
 	cstream = sock->h2->connect.cstream;
-	if (cstream->read_cb != NULL) {
+	if (cstream != NULL && cstream->read_cb != NULL) {
 		cstream->read_cb(handle, result, NULL, cstream->read_cbarg);
 	}
 	return result;
@@ -2180,8 +2188,9 @@ server_handle_path_header(isc_nmsocket_t *socket, const uint8_t *value,
 	if (socket->h2->request_path != NULL) {
 		isc_mem_free(socket->worker->mctx, socket->h2->request_path);
 	}
-	socket->h2->request_path = isc_mem_strndup(
-		socket->worker->mctx, (const char *)value, vlen + 1);
+	socket->h2->request_path = isc_mem_allocate(socket->worker->mctx,
+						    vlen + 1);
+	strlcpy(socket->h2->request_path, (const char *)value, vlen + 1);
 
 	if (!isc_nm_http_path_isvalid(socket->h2->request_path)) {
 		isc_mem_free(socket->worker->mctx, socket->h2->request_path);
@@ -2551,7 +2560,7 @@ isc__nm_http_bad_request(isc_nmhandle_t *handle) {
 	REQUIRE(VALID_HTTP2_SESSION(sock->h2->session));
 
 	if (sock->h2->response_submitted ||
-	    !http_session_active(sock->h2->session))
+	    !isc__nm_httpsession_active(sock->h2->session))
 	{
 		return;
 	}
@@ -2711,7 +2720,7 @@ server_httpsend(isc_nmhandle_t *handle, isc_nmsocket_t *sock,
 	isc_nm_cb_t cb = req->cb.send;
 	void *cbarg = req->cbarg;
 	if (isc__nmsocket_closing(sock) ||
-	    !http_session_active(handle->httpsession))
+	    !isc__nm_httpsession_active(handle->httpsession))
 	{
 		failed_send_cb(sock, req, ISC_R_CANCELED);
 		return;
@@ -2792,7 +2801,7 @@ isc__nm_http_read(isc_nmhandle_t *handle, isc_nm_recv_cb_t cb, void *cbarg) {
 	REQUIRE(VALID_NMHANDLE(handle));
 
 	session = handle->sock->h2->session;
-	if (!http_session_active(session)) {
+	if (!isc__nm_httpsession_active(session)) {
 		cb(handle, ISC_R_CANCELED, NULL, cbarg);
 		return;
 	}

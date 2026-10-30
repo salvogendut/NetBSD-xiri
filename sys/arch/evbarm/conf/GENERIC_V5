@@ -1,4 +1,4 @@
-# $NetBSD $
+# $NetBSD: GENERIC_V5,v 1.16 2026/09/29 20:03:36 yurix Exp $
 #
 # GENERIC ARMv5 kernel
 #
@@ -65,16 +65,19 @@ am18xxintc*			at fdt?	pass 1	# TI AM18XX interrupt controller
 
 # Timers
 imx23timrot* 		at fdt? pass 2		# imx23 timer
-am18xxtimer* 		at fdt? pass 2			# TI AM18XX timer
+am18xxtimer* 		at fdt? pass 3			# TI AM18XX timer
 
 # DMA controller
 imx23apbdma* 	at fdt? pass 1			# NXP i.MX23 DMA controller
+tiedma*			at fdt?	pass 5			# TI EDMA controller
+titptc*			at fdt?	pass 5			# TI EDMA controller
 
 # Clock Controllers
 imx23clkctrl*	at fdt? pass 1			# i.MX23 clock controller
 am18xxpllc*	at fdt?	pass 2				# TI AM18XX pll controller
 am18xxaclk*	at fdt? pass 3				# TI AM18XX async-clk clkgates
 am18xxpsc*	at fdt? pass 4				# TI AM18XX power&sleep controller
+am18xxuphyclk*	at fdt? pass 5			# TI AM18XX  usb phy pll
 
 # System Controller
 syscon*		at fdt? pass 1		# Generic System Controller
@@ -90,6 +93,7 @@ gpioleds* 	at fdt?
 
 # SDMMC
 imx23mmc* 	at fdt? pass 2			# i.MX23 SD/MMC
+am18xxsdmmc*	at fdt? pass 6		# TI AM18XX SD/MMC
 sdmmc* 		at sdmmcbus?
 ld0 		at sdmmc0
 ld1 		at sdmmc1
@@ -101,8 +105,11 @@ ld* 		at sdmmc?
 pseudo-device 	tprof
 
 # GPIOs
-imx23pctl* 			at fdt?	pass 1		# imx23 pin control+gpio
-gpio* 					at gpiobus?
+pinctrl* 	at fdt? pass 1		# generic pinctrl driver
+am18xxgpio*	at fdt?	pass 5		# am18xx gpio driver
+am18xxpupd*	at fdt?	pass 1		# am18xx pull up/pull down
+imx23pctl* 	at fdt?	pass 1		# imx23 pin control+gpio
+gpio* 		at gpiobus?
 
 # UART
 com* 		at fdt?	pass 5		# UART
@@ -118,11 +125,14 @@ iic* 		at i2cbus?
 
 # USB
 imx23usbphy*	at fdt? pass 1	# i.MX23 usb phy
+am18xxusbphy*	at fdt? pass 6	# TI AM18XX usb phy
 
 imxusbc* 	at fdt? pass 6 # i.MX23 usb controller
 
+ohci* 		at fdt? pass 7
 ehci* 		at imxusbc?
 
+usb* 		at usbus?
 usb*		at ehci?
 uhub*		at usb?
 uhub*		at uhub? port ?

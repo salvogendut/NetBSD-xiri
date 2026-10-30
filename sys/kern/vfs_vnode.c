@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_vnode.c,v 1.158 2026/05/03 16:02:36 thorpej Exp $	*/
+/*	$NetBSD: vfs_vnode.c,v 1.160 2026/09/27 22:00:05 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997-2011, 2019, 2020 The NetBSD Foundation, Inc.
@@ -148,7 +148,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_vnode.c,v 1.158 2026/05/03 16:02:36 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_vnode.c,v 1.160 2026/09/27 22:00:05 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_pax.h"
@@ -171,6 +171,7 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_vnode.c,v 1.158 2026/05/03 16:02:36 thorpej Exp 
 #include <sys/namei.h>
 #include <sys/pax.h>
 #include <sys/sdt.h>
+#include <sys/stdalign.h>
 #include <sys/syscallargs.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -704,13 +705,10 @@ vdrain_one(u_int target)
 static void
 vdrain_task(struct threadpool_job *job)
 {
-	u_int target;
-
-	target = desiredvnodes - desiredvnodes / 16;
 
 	mutex_enter(&vdrain_lock);
 
-	while (!vdrain_one(target))
+	while (!vdrain_one(desiredvnodes - desiredvnodes / 16))
 		kpause("vdrain", false, 1, &vdrain_lock);
 
 	threadpool_job_done(job);
@@ -1366,7 +1364,8 @@ static void
 vcache_init(void)
 {
 
-	vcache_pool = pool_cache_init(sizeof(vnode_impl_t), coherency_unit,
+	vcache_pool = pool_cache_init(sizeof(vnode_impl_t), MAX(coherency_unit,
+		alignof(vnode_impl_t)),
 	    0, 0, "vcachepl", NULL, IPL_NONE, NULL, NULL, NULL);
 	KASSERT(vcache_pool != NULL);
 	mutex_init(&vcache_lock, MUTEX_DEFAULT, IPL_NONE);

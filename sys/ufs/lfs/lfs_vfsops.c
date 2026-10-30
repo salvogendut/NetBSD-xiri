@@ -1,4 +1,4 @@
-/*	$NetBSD: lfs_vfsops.c,v 1.399 2026/01/05 05:02:47 perseant Exp $	*/
+/*	$NetBSD: lfs_vfsops.c,v 1.408 2026/10/30 01:03:04 perseant Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001, 2002, 2003, 2007, 2007
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lfs_vfsops.c,v 1.399 2026/01/05 05:02:47 perseant Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lfs_vfsops.c,v 1.408 2026/10/30 01:03:04 perseant Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_lfs.h"
@@ -127,6 +127,7 @@ static int lfs_mountfs(struct vnode *, struct mount *, struct lwp *);
 static int lfs_flushfiles(struct mount *, int);
 static int compare_nodes_sd(void *, const void *, const void *);
 static int compare_key_sd(void *, const void *, const void *);
+static void lfs_reclaimd(void *);
 
 extern const struct vnodeopv_desc lfs_vnodeop_opv_desc;
 extern const struct vnodeopv_desc lfs_specop_opv_desc;
@@ -439,7 +440,7 @@ lfs_writerd(void *arg)
  	for (;;) {
 		KASSERT(mutex_owned(&lfs_lock));
 		if (wrote_something == 0)
-			cv_timedwait(&lfs_writerd_cv, &lfs_lock, hz/10 + 1);
+			cv_timedwait(&lfs_writerd_cv, &lfs_lock, 2 * hz);
 		KASSERT(mutex_owned(&lfs_lock));
 		wrote_something = 0;
 
@@ -805,6 +806,10 @@ lfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 				return error;
 			fs->lfs_ronly = 1;
 
+			/* Wake up reclaimd so it can die */
+			cv_broadcast(&fs->lfs_reclaim_cv);
+			kthread_join(fs->lfs_reclaimd_lwp);
+
 			/*
 			 * Drain pending I/O now that we have declared
 			 * read-only.  We compare against 1 because
@@ -822,6 +827,13 @@ lfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 			 * Changing from read-only to read/write.
 			 * Note in the superblocks that we're writing.
 			 */
+
+			/* Start reclaimd */
+			error = kthread_create(PRI_BIO, KTHREAD_MUSTJOIN, NULL,
+				lfs_reclaimd, mp, &fs->lfs_reclaimd_lwp,
+				"lfs_reclaim");
+			if (error)
+				return error;
 
 			/* XXX: quotas should have been on even if readonly */
 			if (fs->lfs_use_quota2) {
@@ -913,13 +925,11 @@ lfs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 	struct ulfsmount *ump;
 	struct vnode *vp;
 	dev_t dev;
-	int error, i, ronly, fsbsize;
+	int error, i, ronly, fsbsize, rfw;
 	kauth_cred_t cred;
 	CLEANERINFO *cip;
 	SEGUSE *sup;
 	daddr_t sb_addr;
-	ino_t *orphan;
-	size_t norphan;
 
 	cred = l ? l->l_cred : NOCRED;
 
@@ -936,6 +946,7 @@ lfs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 		return (error);
 
 	ronly = (mp->mnt_flag & MNT_RDONLY) != 0;
+	rfw = (mp->mnt_flag & MNT_LOG) != 0;
 
 	/* Don't free random space on error. */
 	primarybuf = NULL;
@@ -1147,6 +1158,7 @@ lfs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 	cv_init(&fs->lfs_cleanercv, "cleancv");
 	cv_init(&fs->lfs_prelockcv, "prelockcv");
 	cv_init(&fs->lfs_cleanquitcv, "cleanquit");
+	cv_init(&fs->lfs_reclaim_cv, "seg reclaim");
 
 	/* Set the file system readonly/modify bits. */
 	fs->lfs_ronly = ronly;
@@ -1221,9 +1233,6 @@ lfs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 	fs->lfs_ivnode = vp;
 	vref(vp);
 
-	/* Set up inode bitmap, order free list, and gather orphans.  */
-	lfs_order_freelist(fs, &orphan, &norphan);
-
 	/* Set up segment usage flags for the autocleaner. */
 	fs->lfs_nactive = 0;
 	for (i = 0; i < lfs_sb_getnseg(fs); i++) {
@@ -1251,18 +1260,23 @@ lfs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 		if (changed)
 			LFS_WRITESEGENTRY(sup, fs, i, bp);
 		else
-			brelse(bp, 0);
+			LFS_RELEASESEGENTRY(sup, fs, i, bp);
 	}
 	/* Set lastcleaned to an invalid value */
 	fs->lfs_lastcleaned = (uint32_t)-1;
 
-	/* Free the orphans we discovered while ordering the freelist.  */
-	lfs_free_orphans(fs, orphan, norphan);
-
-	if (!ronly) {
+	if (rfw && !ronly) {
 		/* Roll forward */
 		lfs_roll_forward(fs, mp, l);
 		lfs_reset_avail(fs);
+	}
+
+	/* Init reclaimd */
+	if (!ronly) {
+		error = kthread_create(PRI_BIO, KTHREAD_MUSTJOIN, NULL,
+			lfs_reclaimd, mp, &fs->lfs_reclaimd_lwp, "lfs_reclaim");
+		if (error != 0)
+			goto out;
 	}
 	fs->lfs_rfpid = 0;
 
@@ -1348,6 +1362,9 @@ lfs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 	/* Now that roll-forward is done, unlock the Ifile */
 	vput(vp);
 
+	/* Free any file orphaned during a crash */
+	lfs_free_orphans(fs);
+
 	/* Start the pagedaemon-anticipating daemon */
 	mutex_enter(&lfs_lock);
 	if (lfs_writer_daemon == NULL &&
@@ -1373,6 +1390,29 @@ out:
 	}
 
 	return (error);
+}
+
+static void
+lfs_reclaimd(void *v)
+{
+	struct mount *mp = (struct mount *)v;
+	struct lfs *fs = VFSTOULFS(mp)->um_lfs;
+
+	for (;;) {
+		mutex_enter(&lfs_lock);
+		cv_wait(&fs->lfs_reclaim_cv, &lfs_lock);
+		if (mp->mnt_iflag & (IMNT_UNMOUNT|IMNT_WANTRDONLY))
+			goto out;
+		mutex_exit(&lfs_lock);
+
+		EXCL_IFLOCK(fs);
+		lfs_auto_segclean(fs);
+		UNEXCL_IFLOCK(fs);
+	}
+
+ out:
+	mutex_exit(&lfs_lock);
+	kthread_exit(0);
 }
 
 void
@@ -1403,7 +1443,7 @@ lfs_reset_avail(struct lfs *fs)
 					- lfs_sb_gets0addr(fs);
 		}
 
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, sn, bp);
 	}
 
 	/* Also may be available bytes in current seg */
@@ -1446,6 +1486,12 @@ lfs_unmount(struct mount *mp, int mntflags)
 	ump = VFSTOULFS(mp);
 	fs = ump->um_lfs;
 
+	if (!fs->lfs_ronly) {
+		/* Wake up reclaimd so it can die */
+		cv_broadcast(&fs->lfs_reclaim_cv);
+		kthread_join(fs->lfs_reclaimd_lwp);
+	}
+
 	error = lfs_flushfiles(mp, mntflags & MNT_FORCE ? FORCECLOSE : 0);
 	if (error)
 		return error;
@@ -1482,12 +1528,12 @@ lfs_unmount(struct mount *mp, int mntflags)
 	mutex_exit(&lfs_lock);
 
 	/* Free per-mount data structures */
-	free(fs->lfs_ino_bitmap, M_SEGMENT);
 	lfs_free_resblks(fs);
 	cv_destroy(&fs->lfs_sleeperscv);
 	cv_destroy(&fs->lfs_diropscv);
 	cv_destroy(&fs->lfs_stopcv);
 	cv_destroy(&fs->lfs_nextsegsleep);
+	cv_destroy(&fs->lfs_reclaim_cv);
 
 	rw_destroy(&fs->lfs_fraglock);
 	rw_destroy(&fs->lfs_iflock);
@@ -1802,7 +1848,7 @@ lfs_loadvnode(struct mount *mp, struct vnode *vp,
 			&lfs_lock);
 	mutex_exit(&lfs_lock);
 
-	KASSERT(ino >= LFS_IFILE_INUM);
+	KASSERTMSG(ino >= LFS_IFILE_INUM, "ino=%lld", (long long)ino);
 	/* LFS_ASSERT_MAXINO(fs, ino); */
 
 	/* Translate the inode number to a disk address. */
@@ -1815,8 +1861,8 @@ lfs_loadvnode(struct mount *mp, struct vnode *vp,
 			ts.tv_sec = lfs_if_getatime_sec(fs, ifp);
 			ts.tv_nsec = lfs_if_getatime_nsec(fs, ifp);
 		}
+		LFS_RELEASEIENTRY(ifp, fs, ino, bp);
 
-		brelse(bp, 0);
 		if (DADDR_IS_BAD(daddr))
 			return (ENOENT);
 	}
@@ -2555,7 +2601,7 @@ lfs_resize_fs(struct lfs *fs, int newnsegs)
 			uint32_t bytes;
 			LFS_SEGENTRY(sup, fs, i, bp);
 			bytes = sup->su_nbytes;
-			brelse(bp, 0);
+			LFS_RELEASESEGENTRY(sup, fs, i, bp);
 			if (bytes > 0) {
 				if ((error = lfs_rewrite_segment(fs, i, NULL, NOCRED, curlwp)) != 0)
 					goto out;
@@ -2583,7 +2629,7 @@ lfs_resize_fs(struct lfs *fs, int newnsegs)
 				csbbytes += LFS_SBPAD;
 		} else
 			dirtysums += sup->su_nsums;
-		brelse(bp, 0);
+		LFS_RELEASESEGENTRY(sup, fs, i, bp);
 		if (badnews) {
 			error = EBUSY;
 			goto out;
@@ -2602,7 +2648,6 @@ lfs_resize_fs(struct lfs *fs, int newnsegs)
 	 * is holding Ifile buffers, so we get each one, to drain them.
 	 * (XXX this could be done better.)
 	 */
-	rw_enter(&fs->lfs_iflock, RW_WRITER);
 	for (i = 0; i < ilast; i++) {
 		/* XXX what to do if bread fails? */
 		bread(ivp, i, lfs_sb_getbsize(fs), 0, &bp);
@@ -2725,9 +2770,6 @@ lfs_resize_fs(struct lfs *fs, int newnsegs)
 	lfs_ci_setclean(fs, cip, lfs_sb_getnclean(fs));
 	lfs_ci_setdirty(fs, cip, lfs_sb_getnseg(fs) - lfs_sb_getnclean(fs));
 	VOP_BWRITE(bp->b_vp, bp);
-
-	/* Let Ifile accesses proceed */
-	rw_exit(&fs->lfs_iflock);
 
     out:
 	lfs_segunlock(fs);

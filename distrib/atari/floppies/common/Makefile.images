@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.images,v 1.15 2025/12/26 00:54:32 mrg Exp $
+#	$NetBSD: Makefile.images,v 1.17 2026/10/08 17:50:26 mrg Exp $
 
 NOSSP=yes
 .include <bsd.own.mk>
@@ -7,12 +7,15 @@ NOSSP=yes
 .include <bsd.kernobj.mk>
 
 WARNS=		1
-DBG=		-Os -fno-unwind-tables #-m68020-60	# -m68020-60 seems to generate smaller binaries
-				# but not for gcc-7
+DBG=		-Os -fno-unwind-tables -m68020-60	# -m68020-60 seems to generate smaller binaries
 DBG+=		-fno-reorder-blocks
 DBG+=		-DNDEBUG	# to remove assert(3) macro
 DBG+=		-D_PTHREADS	# to remove putc
 DBG+=		-DNO_PROGRESS	# to remove ftp's progress
+
+LIBCDIR!=	cd ${NETBSDSRCDIR}/distrib/lib/libc_small && ${PRINTOBJDIR}
+LDFLAGS+=	-L${LIBCDIR}
+CRUNCHENV+=	LDFLAGS=${LDFLAGS:Q}
 
 CRUNCHBIN=	instbin
 LISTS=		${.CURDIR}/list ${.CURDIR}/../common/list.images

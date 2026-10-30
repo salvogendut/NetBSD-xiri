@@ -1,4 +1,4 @@
-#	$NetBSD: common.sh,v 1.1 2026/06/10 05:22:57 yamaguchi Exp $
+#	$NetBSD: common.sh,v 1.4 2026/07/28 08:07:11 yamaguchi Exp $
 #
 # Copyright (c) Internet Initiative Japan Inc.
 # All rights reserved.
@@ -51,12 +51,25 @@ setup_pppoe_server_client()
 	SERVER_=$1
 	CLIENT_=$2
 	BUS_=$3
+	local bpf=false
+	shift 3
+
+	if [ "$1" = "bpf" ]; then
+		bpf=true
+		shift
+	fi
 
 	# IPCP is disabled and IPv6CP is enabled by default
 	NCP_="IPv6CP"
 
-	rump_server_start $SERVER_ netinet6 pppoe
-	rump_server_start $CLIENT_ netinet6 pppoe
+	if $bpf; then
+		rump_server_bpf_start $SERVER_ netinet6 pppoe "$@"
+		rump_server_bpf_start $CLIENT_ netinet6 pppoe "$@"
+
+	else
+		rump_server_start $SERVER_ netinet6 pppoe "$@"
+		rump_server_start $CLIENT_ netinet6 pppoe "$@"
+	fi
 
 	for S in $SERVER_ $CLIENT_; do
 		export RUMP_SERVER=$S
@@ -64,6 +77,8 @@ setup_pppoe_server_client()
 		rump_server_add_iface $S pppoe0
 		atf_ifconfig shmif0 up
 		atf_pppoectl -e shmif0 pppoe0
+		atf_check -s exit:0 rump.sysctl -q -w net.inet.ip.dad_count=0
+		atf_check -s exit:0 rump.sysctl -q -w net.inet6.ip6.dad_count=0
 	done
 
 	if $DEBUG; then
@@ -87,7 +102,7 @@ setup_auth_params()
 
 	# As pppoe client doesn't support rechallenge yet.
 	local server_optparam=""
-	if [ $auth = "chap" ]; then
+	if [ "$auth" = "chap" ]; then
 		server_optparam="norechallenge"
 	fi
 
@@ -147,7 +162,6 @@ pppoe_connect()
 
 	for S in $SERVER_ $CLIENT_; do
 		export RUMP_SERVER=$S
-		atf_ifconfig -w 10
 		$DEBUG && rump.ifconfig
 	done
 }
@@ -166,7 +180,6 @@ pppoe_connect_ncp()
 
 	for S in $SERVER_ $CLIENT_; do
 		export RUMP_SERVER=$S
-		atf_ifconfig -w 10
 		$DEBUG && rump.ifconfig
 	done
 }
@@ -237,7 +250,7 @@ cleanup_bus()
 		atf_ifconfig shmif0 -linkstr
 	done
 
-	rm $BUS
+	rm $BUS_
 
 	for S in $SERVER_ $CLIENT_; do
 		export RUMP_SERVER=$S
@@ -246,3 +259,36 @@ cleanup_bus()
 	done
 }
 
+atf_sendpkt()
+{
+	local dst="$1"
+	local port="${2%/*}"
+	local proto="${2#*/}"
+
+	if [ "$dst" != "${dst#*:}" ]; then
+		# $addr is an IPv6 address
+		opt="-6"
+	else
+		# $addr is an IPv4 address
+		opt="-4"
+	fi
+
+	opt="$opt -w 1 -z"
+
+	# NOTE: Sending 3 packets as a workaround to prevent
+	# occasional outgoing packet drops to stabilize testing
+	for n in $(seq 1 3); do
+		case $proto in
+		"tcp")
+			atf_check -s ignore -o ignore -e ignore \
+			    -x "$HIJACKING nc $opt $dst $port"
+			;;
+		"udp")
+			atf_check -s ignore -o ignore -e ignore \
+			    -x "printf UDP_Packet | $HIJACKING nc -u $opt $dst $port"
+			;;
+		esac
+
+		sleep 0.1
+	done
+}

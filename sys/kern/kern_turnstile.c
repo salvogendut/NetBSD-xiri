@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_turnstile.c,v 1.56 2025/06/27 21:36:24 andvar Exp $	*/
+/*	$NetBSD: kern_turnstile.c,v 1.58 2026/09/23 19:07:40 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2006, 2007, 2009, 2019, 2020, 2023
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_turnstile.c,v 1.56 2025/06/27 21:36:24 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_turnstile.c,v 1.58 2026/09/23 19:07:40 riastradh Exp $");
 
 #include <sys/param.h>
 

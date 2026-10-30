@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_pool.c,v 1.297 2026/01/04 03:20:29 riastradh Exp $	*/
+/*	$NetBSD: subr_pool.c,v 1.299 2026/09/27 22:01:23 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1997, 1999, 2000, 2002, 2007, 2008, 2010, 2014, 2015, 2018,
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_pool.c,v 1.297 2026/01/04 03:20:29 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_pool.c,v 1.299 2026/09/27 22:01:23 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
@@ -58,6 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD: subr_pool.c,v 1.297 2026/01/04 03:20:29 riastradh Ex
 #include <sys/pool.h>
 #include <sys/proc.h>
 #include <sys/sdt.h>
+#include <sys/stdalign.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
 #include <sys/systm.h>
@@ -732,10 +733,12 @@ pool_subsystem_init(void)
 	pool_init(&pcg_large_pool, size, coherency_unit, 0, 0,
 	    "pcglarge", &pool_allocator_meta, IPL_VM);
 
-	pool_init(&cache_pool, sizeof(struct pool_cache), coherency_unit,
+	pool_init(&cache_pool, sizeof(struct pool_cache), MAX(coherency_unit,
+		alignof(struct pool_cache)),
 	    0, 0, "pcache", &pool_allocator_meta, IPL_NONE);
 
-	pool_init(&cache_cpu_pool, sizeof(pool_cache_cpu_t), coherency_unit,
+	pool_init(&cache_cpu_pool, sizeof(pool_cache_cpu_t),
+	    MAX(coherency_unit, alignof(pool_cache_cpu_t)),
 	    0, 0, "pcachecpu", &pool_allocator_meta, IPL_NONE);
 }
 
@@ -1409,25 +1412,12 @@ pool_grow(struct pool *pp, int flags)
 			} while (pp->pr_flags & PR_GROWING);
 			return SET_ERROR(ERESTART);
 		} else {
-			if (pp->pr_flags & PR_GROWINGNOWAIT) {
-				/*
-				 * This needs an unlock/relock dance so
-				 * that the other caller has a chance to
-				 * run and actually do the thing.  Note
-				 * that this is effectively a busy-wait.
-				 */
-				mutex_exit(&pp->pr_lock);
-				mutex_enter(&pp->pr_lock);
-				return SET_ERROR(ERESTART);
-			}
 			return SET_ERROR(EWOULDBLOCK);
 		}
 	}
 	pp->pr_flags |= PR_GROWING;
 	if (flags & PR_WAITOK)
 		mutex_exit(&pp->pr_lock);
-	else
-		pp->pr_flags |= PR_GROWINGNOWAIT;
 
 	storage = pool_allocator_alloc(pp, flags);
 	if (__predict_false(storage == NULL))
@@ -1444,7 +1434,7 @@ pool_grow(struct pool *pp, int flags)
 	pool_prime_page(pp, storage, ph);
 	pp->pr_npagealloc++;
 	KASSERT(pp->pr_flags & PR_GROWING);
-	pp->pr_flags &= ~(PR_GROWING|PR_GROWINGNOWAIT);
+	pp->pr_flags &= ~PR_GROWING;
 	/*
 	 * If anyone was waiting for pool_grow, notify them that we
 	 * may have just done it.
@@ -1455,7 +1445,7 @@ out:
 	if (flags & PR_WAITOK)
 		mutex_enter(&pp->pr_lock);
 	KASSERT(pp->pr_flags & PR_GROWING);
-	pp->pr_flags &= ~(PR_GROWING|PR_GROWINGNOWAIT);
+	pp->pr_flags &= ~PR_GROWING;
 	return SET_ERROR(ENOMEM);
 }
 
