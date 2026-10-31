@@ -1783,7 +1783,7 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 	if (error == 0) {
 		*rval = 0;
 		if (pid != 0 && !(flags & 0x80))
-			rval[1] = status;
+			rval[1] = (int16_t)status;
 	}
 	return error;
 }
