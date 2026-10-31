@@ -80,6 +80,7 @@
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
 #include <sys/fcntl.h>
+#include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/filio.h>
@@ -489,7 +490,7 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_o32_open_args * const uap = args;
 	struct sys_open_args native = { 0 };
 	const uint32_t flags = SCARG(uap, flags);
-	const uint32_t supported = 3 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400;
+	const uint32_t supported = 3 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400;
 	int converted;
 
 	if ((flags & ~supported) != 0 || (flags & 3) == 3)
@@ -497,7 +498,9 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	converted = (flags & 3) == 2 ? O_RDWR : (flags & 3) == 1 ? O_WRONLY : O_RDONLY;
 	if (flags & 0x8)
 		converted |= O_APPEND;
-	if (flags & 0x80)
+	/* Canonicalize legacy NDELAY to native NONBLOCK, retaining native
+	 * I/O error behavior rather than introducing a second file flag. */
+	if (flags & (0x4 | 0x80))
 		converted |= O_NONBLOCK;
 	if (flags & 0x100)
 		converted |= O_CREAT;
@@ -509,6 +512,40 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
 	SCARG(&native, mode) = SCARG(uap, mode);
 	return sys_open(l, &native, rval);
+}
+
+struct irix_chmod_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) mode;
+};
+
+static int
+irix_chmod(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_chmod_args *uap = args;
+	struct sys_chmod_args native = { 0 };
+
+	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
+	SCARG(&native, mode) = SCARG(uap, mode);
+	return sys_chmod(l, &native, rval);
+}
+
+struct irix_chown_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) uid;
+	syscallarg(uint32_t) gid;
+};
+
+static int
+irix_chown(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_chown_args *uap = args;
+	struct sys___posix_chown_args native = { 0 };
+
+	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
+	SCARG(&native, uid) = SCARG(uap, uid);
+	SCARG(&native, gid) = SCARG(uap, gid);
+	return sys___posix_chown(l, &native, rval);
 }
 
 struct irix_access_args {
@@ -584,6 +621,27 @@ irix_stat_device(dev_t dev)
 	return ((major(dev) & 0x3fffU) << 18) | (minor(dev) & 0x3ffffU);
 }
 
+/* IRIX libc's getpty recognizes the first 400 master/slave device numbers.
+ * Translate only actual native PTY character devices, never filesystem IDs
+ * or other character/block devices. Native ownership and mode stay intact. */
+static uint32_t
+irix_stat_rdev(const struct stat *st)
+{
+	extern const struct cdevsw ptc_cdevsw, pts_cdevsw;
+	const struct cdevsw *sw;
+
+	if (!S_ISCHR(st->st_mode) && !S_ISBLK(st->st_mode))
+		return 0;
+	if (S_ISCHR(st->st_mode) && minor(st->st_rdev) < 400) {
+		sw = cdevsw_lookup(st->st_rdev);
+		if (sw == &ptc_cdevsw)
+			return (14U << 18) | minor(st->st_rdev);
+		if (sw == &pts_cdevsw)
+			return (15U << 18) | minor(st->st_rdev);
+	}
+	return irix_stat_device(st->st_rdev);
+}
+
 /* Shared fixed-width serialization; callers establish native metadata first. */
 static int
 irix_stat_copyout(struct lwp *l, const struct stat *st, int32_t stat_version,
@@ -619,8 +677,7 @@ irix_stat_copyout(struct lwp *l, const struct stat *st, int32_t stat_version,
 	(dst).nlink = st->st_nlink; \
 	(dst).uid = st->st_uid; \
 	(dst).gid = st->st_gid; \
-	(dst).rdev = S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode) ? \
-	    irix_stat_device(st->st_rdev) : 0; \
+	(dst).rdev = irix_stat_rdev(st); \
 	(dst).atim.sec = st->st_atimespec.tv_sec; \
 	(dst).atim.nsec = st->st_atimespec.tv_nsec; \
 	(dst).mtim.sec = st->st_mtimespec.tv_sec; \
@@ -1195,6 +1252,43 @@ struct irix_ioctl_args {
 	syscallarg(uint32_t) data;
 };
 
+/* getpty's I_STR/UNLKPT request. NetBSD PTYs have no slave-lock state;
+ * native unlockpt is a no-op. Here we also validate the descriptor. This
+ * operation neither grants ownership nor changes permissions. */
+static int
+irix_pty_unlock(const struct irix_ioctl_args *uap, register_t *rval)
+{
+	extern const struct cdevsw ptc_cdevsw;
+	struct {
+		int32_t command, timeout, length;
+		uint32_t data;
+	} request;
+	file_t *fp;
+	int error;
+
+	CTASSERT(sizeof(request) == 16);
+	fp = fd_getfile(SCARG(uap, fd));
+	if (fp == NULL)
+		return EBADF;
+	if (fp->f_type != DTYPE_VNODE || fp->f_vnode->v_type != VCHR ||
+	    cdevsw_lookup(fp->f_vnode->v_rdev) != &ptc_cdevsw) {
+		error = ENOTTY;
+		goto out;
+	}
+	error = copyin(irix_pointer(SCARG(uap, data)), &request, sizeof(request));
+	if (error != 0)
+		goto out;
+	if (request.command != 0x5002 || request.timeout != 0 ||
+	    request.length != 0 || request.data != 0) {
+		error = ENOSYS;
+		goto out;
+	}
+	*rval = 0;
+out:
+	fd_putfile(SCARG(uap, fd));
+	return error;
+}
+
 static int
 irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 {
@@ -1205,6 +1299,8 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	int32_t foreign_count;
 
 	CTASSERT(sizeof(available) == sizeof(foreign_count));
+	if (SCARG(uap, command) == 0x5308) /* IRIX_I_STR */
+		return irix_pty_unlock(uap, rval);
 	/* Preserve the unsupported-command policy, including TCGETA. Never
 	 * interpret foreign direction/length bits as a native ioctl command. */
 	if (SCARG(uap, command) != 0x4004730aU) /* IRIX_SIOCNREAD */
@@ -1293,13 +1389,13 @@ irix_fcntl(struct lwp *l, const void *args, register_t *rval)
 		fd_putfile(SCARG(uap, fd));
 		*rval = irix_fileflags(value, socket);
 		return 0;
-	case 4: /* F_SETFL: bounded append/POSIX nonblocking subset. */
-		if (arg & ~(3U | 0x8U | 0x80U | 0x200U))
+	case 4: /* F_SETFL: append and canonicalized nonblocking subset. */
+		if (arg & ~(3U | 0x4U | 0x8U | 0x80U | 0x200U))
 			return EINVAL;
 		converted = 0;
 		if (arg & 0x8)
 			converted |= O_APPEND;
-		if (arg & 0x80)
+		if (arg & (0x4 | 0x80))
 			converted |= O_NONBLOCK;
 		SCARG(&native, cmd) = F_SETFL;
 		SCARG(&native, arg) = (void *)(intptr_t)converted;
@@ -1589,6 +1685,18 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_break,
 	},
+	[15] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_chmod_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_chmod,
+	},
+	[16] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_chown_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_chown,
+	},
 	[24] = { .sy_call = (sy_call_t *)sys_getuid_with_euid },
 	[33] = {
 		.sy_narg = 2,
@@ -1719,6 +1827,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access",
+	[15] = "chmod", [16] = "chown",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
@@ -1772,6 +1881,8 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1015: code = 15; break;
+	case 1016: code = 16; break;
 	case 1017: code = 17; break;
 	case 1024: code = 24; break;
 	case 1033: code = 33; break;
