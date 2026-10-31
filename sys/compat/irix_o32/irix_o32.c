@@ -599,6 +599,64 @@ irix_connect(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* IPv4 output uses a 16-bit foreign family, not the native length/family
+ * bytes. Never copy native padding or use the caller's capacity as a native
+ * address allocation size. */
+struct irix_getsockname_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) addr;
+	syscallarg(uint32_t) len;
+};
+
+static int
+irix_getsockname(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_getsockname_args *uap = args;
+	struct sockaddr_big address = { 0 };
+	const struct sockaddr_in *native = (const void *)&address;
+	struct {
+		uint16_t family, port;
+		uint32_t address;
+		uint8_t zero[8];
+	} foreign = { 0 };
+	int32_t length;
+	int error;
+
+	CTASSERT(sizeof(foreign) == 16);
+	/* An inherited native descriptor need not be an IPv4 socket. Reserve
+	 * enough space for the native callback before checking its family. */
+	address.sb_len = UCHAR_MAX;
+	error = do_sys_getsockname(SCARG(uap, fd), (struct sockaddr *)&address);
+	if (error != 0)
+		return error;
+	if (address.sb_family != AF_INET)
+		return EAFNOSUPPORT;
+	if (address.sb_len != sizeof(*native))
+		return EINVAL;
+	error = copyin(irix_pointer(SCARG(uap, len)), &length, sizeof(length));
+	if (error != 0)
+		return error;
+	/* IRIX reports EFAULT for a negative output capacity. Reject it
+	 * before it can become a native unsigned copy size. */
+	if (length < 0)
+		return EFAULT;
+	if (length > sizeof(foreign))
+		length = sizeof(foreign);
+	foreign.family = 2;
+	foreign.port = native->sin_port;
+	foreign.address = native->sin_addr.s_addr;
+	error = copyout(&foreign, irix_pointer(SCARG(uap, addr)), length);
+	if (error == 0) {
+		/* Report the full address size even for a truncated/empty copy.
+		 * IRIX writes the address before attempting this length output. */
+		length = sizeof(foreign);
+		error = copyout(&length, irix_pointer(SCARG(uap, len)), sizeof(length));
+	}
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 struct irix_setsockopt_args {
 	syscallarg(int32_t) fd;
 	syscallarg(int32_t) level;
@@ -728,6 +786,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_connect,
 	},
+	[94] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_getsockname_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_getsockname,
+	},
 	[105] = {
 		.sy_narg = 5,
 		.sy_argsize = sizeof(struct irix_setsockopt_args),
@@ -765,7 +829,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [82] = "sginap", [91] = "connect",
-	[105] = "setsockopt", [107] = "socket",
+	[94] = "getsockname", [105] = "setsockopt", [107] = "socket",
 };
 
 /* Symbolic native indices avoid importing the obsolete positional table. */
@@ -820,6 +884,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1056: code = 56; break;
 	case 1082: code = 82; break;
 	case 1091: code = 91; break;
+	case 1094: code = 94; break;
 	case 1105: code = 105; break;
 	case 1107: code = 107; break;
 	case 1134: code = 134; break;
