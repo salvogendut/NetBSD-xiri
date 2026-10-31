@@ -108,6 +108,7 @@
 #include <sys/uio.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <uvm/uvm_extern.h>
@@ -1652,6 +1653,125 @@ irix_shutdown(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* Traditional IRIX/SVR4 signal numbers. Realtime/checkpoint signals remain
+ * outside this subset. Preserve native-only mask bits on replacement. */
+static const uint8_t irix_signal_map[32] = {
+	0, SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGTRAP, SIGABRT, SIGEMT,
+	SIGFPE, SIGKILL, SIGBUS, SIGSEGV, SIGSYS, SIGPIPE, SIGALRM, SIGTERM,
+	SIGUSR1, SIGUSR2, SIGCHLD, SIGPWR, SIGWINCH, SIGURG, SIGIO, SIGSTOP,
+	SIGTSTP, SIGCONT, SIGTTIN, SIGTTOU, SIGVTALRM, SIGPROF, SIGXCPU, SIGXFSZ,
+};
+
+struct irix_sigprocmask_args {
+	syscallarg(int32_t) how;
+	syscallarg(uint32_t) set;
+	syscallarg(uint32_t) oldset;
+};
+
+static int
+irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_sigprocmask_args *uap = args;
+	struct proc *p = l->l_proc;
+	uint32_t in[4], out[4] = { 0 };
+	sigset_t requested, old;
+	int error, how = 0;
+
+	if (SCARG(uap, set) != 0) {
+		switch (SCARG(uap, how)) {
+		case 1: how = SIG_BLOCK; break;
+		case 2: how = SIG_UNBLOCK; break;
+		case 3: case 256: how = SIG_SETMASK; break;
+		default: return EINVAL;
+		}
+		error = copyin(irix_pointer(SCARG(uap, set)), in, sizeof(in));
+		if (error != 0)
+			return error;
+	}
+	mutex_enter(p->p_lock);
+	sigemptyset(&requested);
+	if (how == SIG_SETMASK) {
+		requested = l->l_sigmask;
+		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
+			sigdelset(&requested, irix_signal_map[i]);
+	}
+	if (SCARG(uap, set) != 0)
+		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
+			if (in[0] & (1U << (i - 1)))
+				sigaddset(&requested, irix_signal_map[i]);
+	error = sigprocmask1(l, how, SCARG(uap, set) != 0 ? &requested : NULL,
+	    &old);
+	mutex_exit(p->p_lock);
+	if (error != 0)
+		return error;
+	if (SCARG(uap, oldset) != 0) {
+		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
+			if (sigismember(&old, irix_signal_map[i]))
+				out[0] |= 1U << (i - 1);
+		error = copyout(out, irix_pointer(SCARG(uap, oldset)), sizeof(out));
+		if (error != 0)
+			return error;
+	}
+	*rval = 0;
+	return 0;
+}
+
+struct irix_waitsys_args {
+	syscallarg(int32_t) type;
+	syscallarg(int32_t) pid;
+	syscallarg(uint32_t) info;
+	syscallarg(uint32_t) options;
+	syscallarg(uint32_t) rusage;
+};
+
+static int
+irix_waitsys(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_waitsys_args *uap = args;
+	uint32_t info[32] = { 0 };
+	const uint32_t flags = SCARG(uap, options);
+	int pid = 0, status = 0, options = WEXITED, error;
+
+	/* Only exit observation/reaping for one positive child PID. Do not
+	 * consume a child for unsupported selectors/options/accounting. */
+	if (SCARG(uap, type) != 0 || SCARG(uap, pid) <= 0 ||
+	    !(flags & 1) || (flags & ~(1U | 0x40U | 0x80U)))
+		return EINVAL;
+	if (SCARG(uap, rusage) != 0)
+		return ENOSYS;
+	if (flags & 0x40)
+		options |= WNOHANG;
+	if (flags & 0x80)
+		options |= WNOWAIT;
+	error = do_sys_waitid(P_PID, SCARG(uap, pid), &pid, &status,
+	    options, NULL, NULL);
+	if (error != 0)
+		return error;
+	info[5] = UINT32_MAX; /* IRIX's no-event status. */
+	if (pid != 0) {
+		info[0] = 18; /* IRIX SIGCHLD */
+		info[3] = pid;
+		if (WIFEXITED(status)) {
+			info[1] = 1; /* CLD_EXITED */
+			info[5] = WEXITSTATUS(status);
+		} else {
+			info[1] = WCOREDUMP(status) ? 3 : 2;
+			for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
+				if (irix_signal_map[i] == WTERMSIG(status))
+					info[5] = i;
+		}
+	}
+	/* CPU accounting and resource usage are outside this exit-info subset.
+	 * Native wait owns consumption; a later copyout fault does not undo it. */
+	error = copyout(info, irix_pointer(SCARG(uap, info)), sizeof(info));
+	if (error == 0) {
+		*rval = 0;
+		if (pid != 0 && !(flags & 0x80))
+			rval[1] = status;
+	}
+	return error;
+}
+
 static struct sysent irix_o32_sysent[] = {
 	[0] = { .sy_call = irix_o32_nosys },
 	[1] = {
@@ -1659,7 +1779,7 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_exit_args),
 		.sy_call = (sy_call_t *)sys_exit,
 	},
-	[2] = { .sy_call = irix_o32_nosys },
+	[2] = { .sy_call = (sy_call_t *)sys_fork },
 	[3] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_o32_io_args),
@@ -1701,6 +1821,7 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_chown,
 	},
+	[20] = { .sy_call = (sy_call_t *)sys_getpid_with_ppid },
 	[24] = { .sy_call = (sy_call_t *)sys_getuid_with_euid },
 	[33] = {
 		.sy_narg = 2,
@@ -1806,6 +1927,18 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_fxstat,
 	},
+	[164] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_sigprocmask_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_sigprocmask,
+	},
+	[170] = {
+		.sy_narg = 5,
+		.sy_argsize = sizeof(struct irix_waitsys_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_waitsys,
+	},
 	[134] = {
 		.sy_narg = 6,
 		.sy_argsize = sizeof(struct irix_o32_mmap_args),
@@ -1832,6 +1965,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access",
 	[15] = "chmod", [16] = "chown",
+	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
@@ -1881,6 +2015,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	 * slot zero, consume no arguments, and never read the user stack. */
 	switch (selected) {
 	case 1001: code = 1; break;
+	case 1002: code = 2; break;
 	case 1003: code = 3; break;
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
@@ -1888,6 +2023,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1015: code = 15; break;
 	case 1016: code = 16; break;
 	case 1017: code = 17; break;
+	case 1020: code = 20; break;
 	case 1024: code = 24; break;
 	case 1033: code = 33; break;
 	case 1040: code = 40; break;
@@ -1911,6 +2047,8 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1136: code = 136; break;
 	case 1158: code = 158; break;
 	case 1160: code = 160; break;
+	case 1164: code = 164; break;
+	case 1170: code = 170; break;
 	default: code = 0; break;
 	}
 	const size_t nargs = irix_o32_sysent[code].sy_narg;
