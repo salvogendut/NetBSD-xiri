@@ -491,7 +491,8 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_o32_open_args * const uap = args;
 	struct sys_open_args native = { 0 };
 	const uint32_t flags = SCARG(uap, flags);
-	const uint32_t supported = 3 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 | 0x400;
+	const uint32_t supported = 3 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 |
+	    0x400 | 0x800;
 	int converted;
 
 	if ((flags & ~supported) != 0 || (flags & 3) == 3)
@@ -509,6 +510,8 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 		converted |= O_TRUNC;
 	if (flags & 0x400)
 		converted |= O_EXCL;
+	if (flags & 0x800)
+		converted |= O_NOCTTY;
 	SCARG(&native, flags) = converted;
 	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
 	SCARG(&native, mode) = SCARG(uap, mode);
