@@ -76,6 +76,7 @@
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/cpu.h>
+#include <sys/domain.h>
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
 #include <sys/fcntl.h>
@@ -94,6 +95,8 @@
 #include <sys/timevar.h>
 #include <sys/syscallargs.h>
 #include <sys/syscallvar.h>
+#include <sys/sysctl.h>
+#include <sys/uio.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
 #include <netinet/in.h>
@@ -770,6 +773,252 @@ irix_sginap(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* Hostname output uses the host's current name, with a private snapshot so
+ * no user fault is taken while holding the sysctl tree lock. */
+struct irix_gethostname_args {
+	syscallarg(uint32_t) name;
+	syscallarg(uint32_t) len;
+};
+
+static int
+irix_gethostname(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_gethostname_args *uap = args;
+	char name[MAXHOSTNAMELEN];
+	const char zero = 0;
+	int mib[2] = { CTL_KERN, KERN_HOSTNAME };
+	size_t length = sizeof(name);
+	int error;
+
+	error = old_sysctl(mib, __arraycount(mib), name, &length, NULL, 0, NULL);
+	if (error != 0)
+		return error;
+	length = MIN(length, SCARG(uap, len));
+	if (length != 0) {
+		error = copyout(name, irix_pointer(SCARG(uap, name)), length);
+		if (error != 0)
+			return error;
+	}
+	/* IRIX forcibly terminates even a truncated result. Its zero-capacity
+	 * case writes one byte before the supplied address; retain that measured
+	 * ABI behavior through checked copyout, with unsigned 32-bit arithmetic. */
+	error = copyout(&zero, irix_pointer(SCARG(uap, name) +
+	    (uint32_t)length - 1), 1);
+	if (error != 0)
+		return error;
+	*rval = 0;
+	return 0;
+}
+
+/* Translate file-status flags without exposing native-only assignments. */
+static int
+irix_fileflags(int value, bool socket)
+{
+	/* IRIX reports 0x200 for sockets even after F_SETFL. It is a
+	 * descriptive legacy bit here, not a request to truncate a file. */
+	int converted = (value & O_ACCMODE) | (socket ? 0x200 : 0);
+	if (value & O_APPEND)
+		converted |= 0x8;
+	if (value & O_NONBLOCK)
+		converted |= 0x80;
+	if (value & O_SYNC)
+		converted |= 0x10;
+	if (value & O_DSYNC)
+		converted |= 0x20;
+	if (value & O_RSYNC)
+		converted |= 0x40;
+	if (value & O_ASYNC)
+		converted |= 0x1000;
+	return converted;
+}
+
+struct irix_fcntl_args {
+	syscallarg(int32_t) fd;
+	syscallarg(int32_t) cmd;
+	syscallarg(uint32_t) arg;
+};
+
+static int
+irix_fcntl(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_fcntl_args *uap = args;
+	struct sys_fcntl_args native = { 0 };
+	const uint32_t arg = SCARG(uap, arg);
+	int error, value, converted;
+	file_t *fp;
+	bool socket = false;
+
+	SCARG(&native, fd) = SCARG(uap, fd);
+	switch (SCARG(uap, cmd)) {
+	case 1: /* F_GETFD */
+		SCARG(&native, cmd) = F_GETFD;
+		break;
+	case 2: /* F_SETFD: do not alter NetBSD's independent close-on-fork bit. */
+		if (fd_getfile(SCARG(uap, fd)) == NULL)
+			return EBADF;
+		if (arg & ~1U) {
+			fd_putfile(SCARG(uap, fd));
+			return EINVAL;
+		}
+		fd_set_exclose(l, SCARG(uap, fd), (arg & 1) != 0);
+		fd_putfile(SCARG(uap, fd));
+		*rval = 0;
+		return 0;
+	case 3: /* F_GETFL: keep type and flags under one native fd reference. */
+		fp = fd_getfile(SCARG(uap, fd));
+		if (fp == NULL)
+			return EBADF;
+		value = OFLAGS(fp->f_flag);
+		socket = fp->f_type == DTYPE_SOCKET;
+		fd_putfile(SCARG(uap, fd));
+		*rval = irix_fileflags(value, socket);
+		return 0;
+	case 4: /* F_SETFL: bounded append/POSIX nonblocking subset. */
+		if (arg & ~(3U | 0x8U | 0x80U | 0x200U))
+			return EINVAL;
+		converted = 0;
+		if (arg & 0x8)
+			converted |= O_APPEND;
+		if (arg & 0x80)
+			converted |= O_NONBLOCK;
+		SCARG(&native, cmd) = F_SETFL;
+		SCARG(&native, arg) = (void *)(intptr_t)converted;
+		break;
+	default:
+		/* Never forward a foreign selector into the native command space. */
+		if (fd_getfile(SCARG(uap, fd)) == NULL)
+			return EBADF;
+		fd_putfile(SCARG(uap, fd));
+		return EINVAL;
+	}
+	error = sys_fcntl(l, &native, rval);
+	if (error != 0)
+		return error;
+	if (SCARG(uap, cmd) == 1) {
+		*rval &= FD_CLOEXEC;
+	} else {
+		*rval = 0;
+	}
+	return 0;
+}
+
+struct irix_sendmsg_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) msg;
+	syscallarg(int32_t) flags;
+};
+
+static int
+irix_sendmsg(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_sendmsg_args *uap = args;
+	struct {
+		uint32_t name;
+		int32_t namelen;
+		uint32_t iov;
+		int32_t iovlen;
+		uint32_t rights;
+		int32_t rightslen;
+	} foreign;
+	struct {
+		uint32_t base, len;
+	} vector[16];
+	struct iovec iov[__arraycount(vector)];
+	struct msghdr native = { 0 };
+	struct socket *so;
+	file_t *fp;
+	uint32_t total = 0;
+	int error;
+
+	CTASSERT(sizeof(foreign) == 24);
+	CTASSERT(sizeof(vector[0]) == 8);
+	/* IRIX validates the socket descriptor before reading the message. */
+	error = fd_getsock1(SCARG(uap, fd), &so, &fp);
+	if (error != 0)
+		return error;
+	error = copyin(irix_pointer(SCARG(uap, msg)), &foreign, sizeof(foreign));
+	if (error != 0)
+		goto out;
+	if (so->so_proto->pr_domain->dom_family != AF_INET ||
+	    so->so_type != SOCK_STREAM || so->so_proto->pr_protocol != IPPROTO_TCP) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
+	/* Destination addresses, access rights, extended/XPG message layouts
+	 * and foreign flags need separate contracts. No foreign flags become
+	 * native MSG_* bits, including the kernel-only ownership flags. */
+	if (SCARG(uap, flags) != 0 || foreign.name != 0 ||
+	    foreign.namelen != 0 || foreign.rights != 0 || foreign.rightslen != 0) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if (foreign.iovlen <= 0 || (unsigned)foreign.iovlen > __arraycount(vector)) {
+		error = EMSGSIZE;
+		goto out;
+	}
+	if (foreign.iovlen != 0) {
+		error = copyin(irix_pointer(foreign.iov), vector,
+		    foreign.iovlen * sizeof(vector[0]));
+		if (error != 0)
+			goto out;
+	}
+	for (int i = 0; i < foreign.iovlen; i++) {
+		/* The foreign return and residual are signed 32-bit even on LP64. */
+		if (vector[i].len > INT32_MAX - total) {
+			error = EINVAL;
+			goto out;
+		}
+		total += vector[i].len;
+		iov[i].iov_base = irix_pointer(vector[i].base);
+		iov[i].iov_len = vector[i].len;
+	}
+	native.msg_iov = iov;
+	native.msg_iovlen = foreign.iovlen;
+	*rval = 0;
+	error = do_sys_sendmsg_so(l, SCARG(uap, fd), so, fp, &native, 0, rval);
+out:
+	fd_putfile(SCARG(uap, fd));
+	return error;
+}
+
+struct irix_shutdown_args {
+	syscallarg(int32_t) fd;
+	syscallarg(int32_t) how;
+};
+
+static int
+irix_shutdown(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_shutdown_args *uap = args;
+	struct socket *so;
+	int error;
+
+	error = fd_getsock(SCARG(uap, fd), &so);
+	if (error != 0)
+		return error;
+	solock(so);
+	/* The connection check precedes direction validation on IRIX. */
+	if ((so->so_state & SS_ISCONNECTED) == 0) {
+		error = ENOTCONN;
+	} else if (SCARG(uap, how) == SHUT_WR &&
+	    (so->so_state & SS_CANTSENDMORE) != 0) {
+		/* Repeating a write shutdown must retain the readable half;
+		 * do not ask TCP to advance its close state a second time. */
+		error = 0;
+	} else {
+		error = soshutdown(so, SCARG(uap, how));
+		/* Full shutdown immediately disconnects the foreign endpoint;
+		 * native TCP still owns its PCB and completes protocol teardown. */
+		if (error == 0 && SCARG(uap, how) == SHUT_RDWR)
+			soisdisconnected(so);
+	}
+	sounlock(so);
+	fd_putfile(SCARG(uap, fd));
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 static struct sysent irix_o32_sysent[] = {
 	[0] = { .sy_call = irix_o32_nosys },
 	[1] = {
@@ -820,6 +1069,11 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_o32_sysmp_args),
 		.sy_call = irix_o32_sysmp,
 	},
+	[62] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_fcntl_args),
+		.sy_call = irix_fcntl,
+	},
 	[82] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_sginap_args),
@@ -843,16 +1097,33 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getsockname,
 	},
+	[102] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_sendmsg_args),
+		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
+		.sy_call = irix_sendmsg,
+	},
 	[105] = {
 		.sy_narg = 5,
 		.sy_argsize = sizeof(struct irix_setsockopt_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_setsockopt,
 	},
+	[106] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_shutdown_args),
+		.sy_call = irix_shutdown,
+	},
 	[107] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_socket_args),
 		.sy_call = irix_socket,
+	},
+	[108] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_gethostname_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_gethostname,
 	},
 	[134] = {
 		.sy_narg = 6,
@@ -881,7 +1152,8 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
-	[105] = "setsockopt", [107] = "socket",
+	[62] = "fcntl", [102] = "sendmsg", [105] = "setsockopt",
+	[106] = "shutdown", [107] = "socket", [108] = "gethostname",
 };
 
 /* Symbolic native indices avoid importing the obsolete positional table. */
@@ -934,12 +1206,16 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1040: code = 40; break;
 	case 1047: code = 47; break;
 	case 1056: code = 56; break;
+	case 1062: code = 62; break;
 	case 1082: code = 82; break;
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
 	case 1094: code = 94; break;
+	case 1102: code = 102; break;
 	case 1105: code = 105; break;
+	case 1106: code = 106; break;
 	case 1107: code = 107; break;
+	case 1108: code = 108; break;
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
