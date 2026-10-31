@@ -353,6 +353,22 @@ state_check:
 	return error;
 }
 
+/*
+ * Compatibility callers with different copyout/counting rules can use the
+ * native scan/wait protocol on owned storage. bits contains three input masks
+ * followed by three output masks, each howmany(nd, NFDBITS) words long.
+ * The caller validates nd and the timeout and retains the storage until return.
+ */
+int
+selcommon_kern(register_t *retval, int nd, __fd_mask *bits,
+    struct timespec *ts)
+{
+
+	KASSERT(nd >= 0);
+	return sel_do_scan(selop_select, bits, nd,
+	    howmany(nd, NFDBITS) * sizeof(fd_mask), ts, NULL, retval);
+}
+
 /* designed to be compatible with FD_SET() FD_ISSET() ... */
 static int
 anyset(void *p, size_t nbits)

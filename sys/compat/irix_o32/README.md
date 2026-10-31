@@ -329,3 +329,30 @@ and page-granular shrinking apply. Successful returns are explicitly zero.
 No IRIX executable-heap or shared-process semantics are promised. The Xiri
 companion lab adds original growth/shrink, zero-fill, inaccessible released
 page, collision and invalid-range fixtures for both ABIs and call forms.
+
+
+### Experimental select (1100)
+
+Both o32 and n32 decode five 32-bit arguments, including the o32 direct and
+indirect stack spill positions. The timeout consists of two signed 32-bit
+fields (seconds, microseconds). It is copied and validated first, is allowed
+at an unaligned address, and is never written back. Negative seconds or
+microseconds, or microseconds >= 1000000, return EINVAL.
+
+The measured IRIX behavior treats negative nfds as zero. This subset caps
+positive nfds at 1024 before computing mask sizes. Three aligned arrays of
+32-bit mask words are copied into owned storage, then selcommon_kern uses the
+native select scan/wait and notification machinery. The adapter counts the
+union of the three ready sets, so a descriptor ready for both reading and
+writing counts once. Bits above nfds in the final word are preserved. Results
+are copied back in read/write/exception order; a fault in one set does not
+prevent later sets from being updated before EFAULT is returned. Aliased user sets cannot affect the already computed distinct-fd count.
+
+Two explicit scope differences remain: nfds > 1024 returns EINVAL, and a
+selected invalid descriptor within the requested range returns EBADF even
+when the original IRIX allocation-dependent scan truncates the range and
+ignores that bit. No assumption about IRIX's internal fd-table capacity is
+encoded in the native table allocator. Signal delivery and concurrent fd/set
+mutation are outside this qualification. Xiri's irix-select lab contains the
+paired guarded records, timeout and delayed TCP readiness probes, and native
+and vendor controls. Toolchest still needs version-2 xstat for its menu check.

@@ -90,6 +90,7 @@
 #include <sys/proc.h>
 #include <sys/protosw.h>
 #include <sys/resourcevar.h>
+#include <sys/select.h>
 #include <sys/signalvar.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -444,6 +445,99 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
 	SCARG(&native, mode) = SCARG(uap, mode);
 	return sys_open(l, &native, rval);
+}
+
+/* Both supported IRIX ABIs use 32-bit fd-mask words and timeval fields. */
+struct irix_select_args {
+	syscallarg(int32_t) nd;
+	syscallarg(uint32_t) in;
+	syscallarg(uint32_t) out;
+	syscallarg(uint32_t) ex;
+	syscallarg(uint32_t) tv;
+};
+
+#define IRIX_SELECT_MAXFD 1024
+
+static int
+irix_select(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_select_args *uap = args;
+	struct { int32_t sec, usec; } tv;
+	struct timespec timeout, *ts = NULL;
+	__fd_mask bits[6 * howmany(IRIX_SELECT_MAXFD, 32)] = { 0 };
+	const uint32_t pointers[3] = {
+	    SCARG(uap, in), SCARG(uap, out), SCARG(uap, ex)
+	};
+	int nd = SCARG(uap, nd), error, count = 0;
+	size_t words, bytes;
+
+	CTASSERT(sizeof(tv) == 8);
+	CTASSERT(sizeof(__fd_mask) == 4 && NFDBITS == 32);
+	/* IRIX reads and validates the timeval before touching any fd set;
+	 * it never writes the timeout back, including on a timeout return. */
+	if (SCARG(uap, tv) != 0) {
+		error = copyin(irix_pointer(SCARG(uap, tv)), &tv, sizeof(tv));
+		if (error != 0)
+			return error;
+		if (tv.sec < 0 || tv.usec < 0 || tv.usec >= 1000000)
+			return EINVAL;
+		timeout.tv_sec = tv.sec;
+		timeout.tv_nsec = tv.usec * 1000;
+		ts = &timeout;
+	}
+	/* Negative nfds examines no descriptors on the measured IRIX release.
+	 * Cap this experimental subset before any size arithmetic. Unlike IRIX's
+	 * allocation-dependent truncation, all selected invalid fds in the
+	 * requested range are reported as EBADF by the native scan. */
+	if (nd < 0)
+		nd = 0;
+	if (nd > IRIX_SELECT_MAXFD)
+		return EINVAL;
+	words = howmany(nd, 32);
+	bytes = words * sizeof(bits[0]);
+	for (size_t i = 0; i < 3; i++) {
+		if (pointers[i] == 0 || bytes == 0)
+			continue;
+		if ((pointers[i] & 3) != 0)
+			return EFAULT;
+		error = copyin(irix_pointer(pointers[i]), bits + i * words,
+		    bytes);
+		if (error != 0)
+			return error;
+	}
+	error = selcommon_kern(rval, nd, bits, ts);
+	if (error != 0)
+		return error;
+	/* IRIX counts distinct ready descriptors, not ready bits across sets.
+	 * Count before copyout so aliased output sets cannot lose readiness. */
+	for (size_t i = 0; i < words; i++) {
+		uint32_t mask = UINT32_MAX;
+		if (i == words - 1 && (nd & 31) != 0)
+			mask = (1U << (nd & 31)) - 1;
+		uint32_t ready = (bits[3 * words + i] |
+		    bits[4 * words + i] | bits[5 * words + i]) & mask;
+		while (ready != 0) {
+			ready &= ready - 1;
+			count++;
+		}
+		/* Bits outside nfds in the final word are preserved by IRIX. */
+		for (size_t j = 0; j < 3; j++)
+			bits[(j + 3) * words + i] |= bits[j * words + i] & ~mask;
+	}
+	/* A failed set copyout does not prevent later sets from being updated. */
+	error = 0;
+	for (size_t i = 0; i < 3; i++) {
+		if (pointers[i] == 0 || bytes == 0)
+			continue;
+		int copy_error = copyout(bits + (i + 3) * words,
+		    irix_pointer(pointers[i]), bytes);
+		if (error == 0)
+			error = copy_error;
+	}
+	if (error != 0)
+		return error;
+	*rval = count;
+	return 0;
 }
 
 struct irix_o32_mmap_args {
@@ -1217,6 +1311,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
 		.sy_call = irix_recvmsg,
 	},
+	[100] = {
+		.sy_narg = 5,
+		.sy_argsize = sizeof(struct irix_select_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_select,
+	},
 	[102] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_sendmsg_args),
@@ -1272,7 +1372,8 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
-	[62] = "fcntl", [99] = "recvmsg", [102] = "sendmsg", [105] = "setsockopt",
+	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
+	[102] = "sendmsg", [105] = "setsockopt",
 	[106] = "shutdown", [107] = "socket", [108] = "gethostname",
 };
 
@@ -1332,6 +1433,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1093: code = 93; break;
 	case 1094: code = 94; break;
 	case 1099: code = 99; break;
+	case 1100: code = 100; break;
 	case 1102: code = 102; break;
 	case 1105: code = 105; break;
 	case 1106: code = 106; break;

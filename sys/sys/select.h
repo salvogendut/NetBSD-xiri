@@ -51,6 +51,7 @@ struct knote;
 
 int	selcommon(register_t *, int, fd_set *, fd_set *, fd_set *,
     struct timespec *, sigset_t *);
+int	selcommon_kern(register_t *, int, __fd_mask *, struct timespec *);
 void	selrecord(struct lwp *selector, struct selinfo *);
 void	selrecord_knote(struct selinfo *, struct knote *);
 bool	selremove_knote(struct selinfo *, struct knote *);
