@@ -1,12 +1,19 @@
 $NetBSD$
 
-Experimental GPL XFS port for NetBSD
-===================================
+Experimental GPL XFS for NetBSD PUFFS
+====================================
 
 This starts a direct port of SGI/Linux XFS, using Linux v6.12 as a pinned
 baseline. See README.import for source provenance and COPYING for the license.
 The old http://oss.sgi.com/projects/xfs/ URL is historical; the maintained
 implementation is in Linux's fs/xfs tree.
+
+The target is a user-space filesystem using NetBSD PUFFS/libpuffs. The GPL
+XFS reader and future recovery code run in a mount_xfs server, with the
+existing PUFFS kernel interface handling filesystem requests. The source
+has moved from sys/external/gpl2/xfs to external/gpl2/xfs for this purpose.
+The current milestone is the portable image-reading core; a PUFFS server
+has not been implemented yet. See the integration milestones below.
 
 Current milestone
 -----------------
@@ -24,7 +31,7 @@ and validates the primary superblock; xfs_read_blocks checks encoded addresses
 and rejects reads crossing an AG boundary, the filesystem end, or the device
 end. Short reads and callback failures propagate as errors. The caller owns
 the read-only device and a sector-sized scratch buffer; there are no large
-kernel-stack buffers or hidden allocations.
+stack buffers or hidden allocations.
 
 xfs_read_ag reads and verifies AGF, AGI and AGFL sectors, checking CRC32C,
 metadata UUID, sequence number, actual AG length, free-list ring, tree roots
@@ -72,9 +79,34 @@ inside the image. There are no host pathname operations or permission checks.
 
 Directory/path APIs require directory-block-size + filesystem-block-size
 scratch, from xfs_directory_scratch_size. Path resolution also takes a
-caller-owned xfs_path_workspace; never put it on a kernel stack. Directory
+caller-owned xfs_path_workspace; use heap allocation in the server. Directory
 callbacks receive byte names valid only during that call. Earlier callbacks
 can have run when a later block fails. Lookup outputs are unchanged on error.
+
+xfs_log_inspect scans the internal v2 journal's cycle stamps and checks the
+latest record's boundaries, UUID, LSNs, sector/stripe alignment and CRC32C.
+It supports extended headers and records wrapping across the physical end.
+Only a complete, single unmount operation at the current head establishes
+CLEAN; a checksummed record without that operation reports NEEDS_RECOVERY.
+Malformed, ambiguous and unsupported logs return errors. The inspector
+does not trim partial writes, fall back to an older unmount, clear stale
+blocks or replay transactions. It accepts the special zero-CRC mkfs initial
+unmount only with its canonical fields, padding and wholly zero suffix.
+
+xfs_require_clean_log returns zero only for CLEAN. Call it before opening
+inodes for filesystem service; xfs_reader_open alone remains a raw metadata
+inspection API. The CLI now gates inode, file and pathname operations with
+this check. Its --raw option explicitly bypasses the guard for image analysis;
+the future mount_xfs server must provide no such bypass. A successful check
+does not establish global consistency or validate metadata LSNs.
+
+Journal scratch is XFS_LOG_SCRATCH_SIZE (260 KiB), caller-owned and reusable.
+The scan reads the whole log in 64 KiB chunks, then reads the selected record;
+it is linear in log size, with upstream limits on log and record lengths.
+V1 logs, cycle-number rollover, nonmonotonic cycle patterns and noninitial
+zero-CRC records are unsupported. Some logs recoverable by Linux will be
+rejected. CRC verification covers the upstream 324/328-byte header layouts
+and the used portions of extended headers, before restoring packed cycle data.
 
 The probe recognizes v4 superblocks with v2 directories and unwritten extent
 support, and v5 superblocks with the pinned upstream's feature definitions.
@@ -86,12 +118,12 @@ feature bit does not mean that all operations for that feature are ported.
 
 This is NOT a mountable filesystem or a complete filesystem verifier.
 It does not inspect external directory indexes or attribute contents,
-cross-check global tree counts or allocation ownership, validate metadata LSNs against the log, or
-establish journal cleanliness. Tree verification covers the visited paths;
+cross-check global tree counts or allocation ownership, or validate metadata LSNs
+against the log. Tree verification covers the visited paths;
 it does not check unvisited subtrees or reciprocal sibling links.
 Even a read-only mount can require recovery; a successful probe must never
 be used as evidence that replay can be skipped.
-There is no VFS registration, mount helper, kernel module, or write path yet.
+There is no PUFFS mount helper or write path yet.
 The command-line probe accepts regular image files only and opens them
 read-only. No test mounts a filesystem or accesses a raw disk device.
 Images must be quiescent for the entire inspection: this reader has no cache,
@@ -104,14 +136,14 @@ Layout
     dist/       Unmodified upstream files, retained for comparison.
     include/    Compatibility definitions and the probe interface.
     netbsd/     Selected upstream routines and NetBSD probe wrapper.
-    tests/      Host tests, image inspector and kernel-header compile check.
+    tests/      Host tests, image inspector and NetBSD user-space compile check.
 
 Build and test from the src root
 -------------------------------
 
-    sh sys/external/gpl2/xfs/tests/run.sh
-    sh sys/external/gpl2/xfs/tests/run.sh --images
-    sh sys/external/gpl2/xfs/tests/check-kernel.sh
+    sh external/gpl2/xfs/tests/run.sh
+    sh external/gpl2/xfs/tests/run.sh --images
+    sh external/gpl2/xfs/tests/check-netbsd.sh
 
 The first command needs a C compiler and runs 1,070 superblock checks, including
 v4 quota translation, UUID selection, unaligned and short input, sector corruption,
@@ -137,8 +169,14 @@ symlinks. Contiguous and fragmented two-block v5 symlinks with 1 KiB blocks
 are covered by synthetic fixtures, including corruption in an unrequested
 tail and insufficient scratch capacity.
 
+The journal suite adds 1,009 checks plus guard/argument checks for v4/v5
+superblocks, both endian formats, extended headers, wrapped records, skipped
+magic cycle numbers, record CRCs, canonical initialization, I/O failures,
+unaligned scratch, output preservation, torn writes and stale unmounts.
+
 The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
-and xfs_db). It creates six disposable 400 MiB sparse images, compares the
+and xfs_db, plus xfs_logprint for the journal tests). It creates six disposable
+400 MiB sparse images, compares the
 superblock, all 24 AGs and 30 populated inodes with xfs_db, checks regular-file
 and local/remote-symlink contents against mkfs prototype sources.
 Whole-image hashes before and after inspection confirm
@@ -163,23 +201,31 @@ xfsprogs 7.1.1's prototype writer produced a truncated remote symlink in the
 The reader correctly rejects that image. The mkfs test uses a shorter target
 for this configuration; synthetic fixtures test valid two-block targets.
 
-The third compiles all eleven port files with this checkout's NetBSD amd64 kernel
-headers and no host system headers. It needs an amd64 compiler. This checks
-header/layout compatibility and a 2 KiB per-frame stack limit, not linking,
-module loading or booting. There is no rump runtime test yet.
+Six additional images compare journal head/tail and cleanliness with
+xfs_logprint, including v4, 4 KiB sectors and 64/256 KiB log stripe units.
+They test guarded root lookup, dirty/clean transitions, corrupt/torn records,
+explicit raw inspection and a synthetic wrapped record in a mkfs image.
+No journal fixture was captured from a running Linux mount yet; ordinary
+noninitial records and crash cases currently use synthetic data.
+
+The third compiles all twelve port files and the CLI with this checkout's
+NetBSD amd64 user-space headers and no host headers. It needs an amd64
+compiler. This verifies header/layout compatibility, not linking or running
+on NetBSD. There is no PUFFS mount/runtime test yet.
 
 An undefined-behavior check that does not require sanitizer runtime libraries:
 
     CFLAGS='-O1 -g -fsanitize=undefined -fsanitize-undefined-trap-on-error' \
-        sh sys/external/gpl2/xfs/tests/run.sh
+        sh external/gpl2/xfs/tests/run.sh
 
 To build a persistent image inspector on NetBSD or Linux:
 
-    xfs_src=sys/external/gpl2/xfs
+    xfs_src=external/gpl2/xfs
     cc -std=gnu11 -D_DEFAULT_SOURCE -O2 -I "$xfs_src/include" \
         -isystem "$xfs_src/dist" "$xfs_src/netbsd/xfs_sb.c" \
         "$xfs_src/netbsd/xfs_probe.c" "$xfs_src/netbsd/xfs_cksum.c" \
         "$xfs_src/netbsd/xfs_io.c" "$xfs_src/netbsd/xfs_ag.c" \
+        "$xfs_src/netbsd/xfs_read_log.c" \
         "$xfs_src/netbsd/xfs_read_btree.c" \
         "$xfs_src/netbsd/xfs_read_inode.c" "$xfs_src/netbsd/xfs_read_file.c" \
         "$xfs_src/netbsd/xfs_read_symlink.c" \
@@ -187,6 +233,7 @@ To build a persistent image inspector on NetBSD or Linux:
         "$xfs_src/tests/xfs_probe.c" \
         -o /tmp/xfs_probe
     /tmp/xfs_probe /path/to/image
+    /tmp/xfs_probe -j /path/to/image
     /tmp/xfs_probe -a 0 /path/to/image
     /tmp/xfs_probe -i 131 /path/to/image
     /tmp/xfs_probe -r 131 0 4096 /path/to/image > /tmp/file-prefix
@@ -200,22 +247,37 @@ lines with ino, type (XFS on-disk type) and name; non-ASCII/control name bytes
 are escaped as \u00xx. -p inspects metadata and -R reads bytes after following
 symlinks; -s returns the final symlink's target. -r, -R and -s emit raw bytes
 without a trailing newline. Discard partial output if a command fails.
+-j prints journal state, head, tail, latest record, head cycle and whether
+the canonical initial record was used. These addresses are log-relative
+512-byte block numbers. An inspection can report needs-recovery successfully;
+guarded file/path commands reject that state. Use --raw before the other CLI
+options only when deliberately inspecting potentially unrecovered metadata.
 
-Next milestones
----------------
+PUFFS integration milestones
+----------------------------
 
-1. Establish reliable clean-log detection and reject filesystems requiring
-   replay before enabling mounting. Port external directory index verifiers
-   and hash-based lookup. Add fragmented, sparse and unwritten files produced
-   by a running Linux XFS filesystem, complementing the synthetic bmap tests and mkfs prototype
-   images. Expand cross-tree consistency and metadata validation coverage.
-2. Add NetBSD VFS/vnode operations, vnode lifecycle/locking, UBC integration,
-   a rump component, a mount helper and an explicitly enabled GPL module.
-   Start with read-only mounts and unmount/error-path tests. Unsupported
-   formats and write requests must fail rather than use placeholder handlers.
-3. Port transaction reservations, logging/recovery and allocation before
-   enabling any writes. Require crash/replay tests and xfstests coverage,
-   including concurrency and forced-shutdown paths.
+1. Implement a direct libpuffs mount_xfs server around this reader, initially
+   read-only and using quiescent regular image files. Require a clean journal
+   before puffs_mount. Extend inode decoding for truthful vattr values
+   (UID/GID, link count, allocated bytes, timestamps including bigtime),
+   and enforce credentials through puffs_access and directory search checks.
+   Reject unsupported ACL/security semantics explicitly.
+2. Implement lookup/getattr/access/open/read/readdir/readlink/statvfs and
+   node reclamation. Key puffs_node objects by inode number so hard links
+   share a cookie. PUFFS supplies component lookup and kernel pathname/symlink
+   handling; xfs_lookup_path remains an image-inspector convenience. Translate
+   file-read lengths to PUFFS residual counts and provide stable readdir
+   offsets/cookies, including partial buffers and resumed listings. Use
+   per-request workspace or serialized callbacks, with no shared scratch
+   across yielded requests. Reject mutations with EROFS. Start with explicit
+   read-only/nodev/nosuid mounts, then test unmount, error and server-exit paths
+   on NetBSD before adding the server to a default build.
+3. Add Linux-produced clean/dirty journals, fragmented, sparse and unwritten
+   files, complementing synthetic fixtures. Port external directory index
+   verifiers/hash lookup and expand cross-tree and metadata-LSN validation.
+   Port transaction reservations, logging/recovery and allocation in user
+   space before enabling writes. Require crash/replay tests and xfstests
+   coverage, including concurrency and forced-shutdown paths.
 
 Useful references
 -----------------
@@ -224,7 +286,9 @@ Useful references
     https://docs.kernel.org/filesystems/xfs/index.html
     https://www.kernel.org/pub/linux/utils/fs/xfs/docs/xfs_filesystem_structure.pdf
 
-NetBSD's existing fs/efs and fs/ntfs code, sys/rump/fs components and
-sys/modules layouts provide local integration examples. The XFS transaction,
-locking and cache contracts still require explicit adaptation; the scalar
-compatibility header is not a substitute for that work.
+NetBSD's lib/libpuffs/puffs.h, puffs_ops.3, puffs_node.3 and puffs_cred.3,
+share/examples/puffs, and usr.sbin/puffs supply the local integration contracts
+and examples. This will use libpuffs directly; the XFS engine stays in the
+user-space process. GPL provenance and the pinned upstream baseline remain
+unchanged. XFS transaction, locking and cache contracts still require explicit
+adaptation; the scalar compatibility header is not a substitute for that work.

@@ -36,10 +36,11 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_dir2_data.c
     xfs_symlink_remote.c
 
-dist/xfs_dir2_readdir.c comes from fs/xfs/ (outside libxfs/) at that commit.
+dist/xfs_dir2_readdir.c, dist/xfs_log.c and dist/xfs_log_recover.c come from
+fs/xfs/ (outside libxfs/) at that commit.
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these twenty-four upstream files. Verify them with
+SHA256 records the hashes of these twenty-six upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
@@ -64,6 +65,32 @@ netbsd/xfs_cksum.c adapts xfs_start_cksum_safe / xfs_verify_cksum from
 dist/xfs_cksum.h: the field offset is checked, unaligned checksum loads use
 memcpy, and a software Castagnoli CRC replaces Linux's crc32c service.
 No checksum-generation/write path is exposed.
+The internal xfs_crc32c helper also feeds the noncontiguous journal checksum.
+
+include/xfs_log_layout.h selects the physical record and operation layouts
+from xfs_log_format.h, using the port UUID type. netbsd/xfs_read_log.c adapts
+cycle-stamp interpretation, head/record positioning, xlog_check_unmount_rec
+and packed cycle-data restoration from xfs_log_recover.c, and xlog_cksum /
+the unmount operation format from xfs_log.c. Log size/sector/stripe checks
+follow xfs_sb.c and the pinned xfs_fs.h limits. These adaptations deliberately:
+
+  - scan every cycle stamp rather than use the recovery search heuristics;
+  - reject nonmonotonic cycles, rollover and incomplete latest records,
+    without trimming to an older record, replaying or clearing stale blocks;
+  - bound sizes, require the record to end exactly at the head, verify its
+    UUID/LSNs/cycles and checksum, and restore cycle data only afterward;
+  - require exactly one well-formed modern eight-byte unmount operation to
+    report CLEAN, with explicit little/big-endian payload decoding;
+  - handle the special unchecksummed mkfs record only at cycle 1/block 0,
+    with canonical fields/padding and a verified wholly zero log suffix;
+  - return NEEDS_RECOVERY for a checksummed latest record without an unmount,
+    and errors for unsupported/malformed journals, preserving output on error.
+
+The checksum covers the used extended-header regions, not entire 512-byte
+header sectors. Both upstream header ABI sizes (324 and 328 bytes) are
+accepted. No transaction items are interpreted or replayed. Cleanliness
+does not imply global consistency, and metadata LSNs are not yet checked
+against the log. The caller must keep the entire image quiescent.
 
 netbsd/xfs_ag.c adapts the following read-side checks to an explicit reader
 context, without creating placeholder Linux mount, buffer, or log objects:
@@ -171,11 +198,13 @@ Bmap blocks are verified lazily during file reads. Unknown read-only-compatible 
 block inode access even though the superblock probe permits inspection.
 Zero-length directories/symlinks are explicitly unsupported.
 No Linux cache, locking, transaction or recovery object is
-emulated; those contracts remain work for the VFS/recovery milestones.
+emulated; those contracts remain work for the PUFFS/recovery milestones.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
 No SGI/Linux code has been relicensed as BSD code. This directory is not wired
-into the default kernel, installed header set, or base-system build.
+into the installed header set or default base-system build. It now lives in
+external/gpl2/xfs for a user-space PUFFS/libpuffs server; the earlier location
+was sys/external/gpl2/xfs. Moving the code does not change its license.
 
 For a future import, update the commit and original files together, review
 changes to the selected routines and compatibility layer, regenerate SHA256,

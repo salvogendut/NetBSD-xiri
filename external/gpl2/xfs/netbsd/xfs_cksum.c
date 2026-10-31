@@ -6,10 +6,11 @@
  * software CRC32C implementation replaces Linux's crc32c service.
  */
 #include "xfs_io.h"
+#include "xfs_crc.h"
 #include <sys/errno.h>
 
-static uint32_t
-crc32c(uint32_t crc, const void *data, size_t length)
+uint32_t
+xfs_crc32c(uint32_t crc, const void *data, size_t length)
 {
 	const uint8_t *bytes = data;
 	size_t i;
@@ -31,9 +32,9 @@ xfs_verify_metadata_crc(const void *data, size_t length, size_t offset)
 
 	if (data == NULL || offset > length || length - offset < sizeof(stored))
 		return EINVAL;
-	crc = crc32c(UINT32_MAX, data, offset);
-	crc = crc32c(crc, &zero, sizeof(zero));
-	crc = crc32c(crc, bytes + offset + sizeof(stored),
+	crc = xfs_crc32c(UINT32_MAX, data, offset);
+	crc = xfs_crc32c(crc, &zero, sizeof(zero));
+	crc = xfs_crc32c(crc, bytes + offset + sizeof(stored),
 	    length - offset - sizeof(stored));
 	memcpy(&stored, bytes + offset, sizeof(stored));
 	return le32toh(stored) == ~crc ? 0 : EINVAL;

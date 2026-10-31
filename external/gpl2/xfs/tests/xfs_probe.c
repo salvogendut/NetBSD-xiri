@@ -2,6 +2,7 @@
 /* $NetBSD$ */
 
 #include "xfs_directory.h"
+#include "xfs_log.h"
 
 #include <sys/stat.h>
 #include <errno.h>
@@ -66,15 +67,25 @@ main(int argc, char **argv)
 	struct xfs_reader reader;
 	struct xfs_io io;
 	struct xfs_ag_headers ag;
+	struct xfs_log_info log;
 	struct stat st;
 	const char *why, *path, *image_path = NULL;
 	uint64_t agno = 0, ino = 0, offset = 0, length = 0;
 	size_t done, part;
 	bool inspect_ag = false, inspect_inode = false, read_file = false;
 	bool list_directory = false, read_link = false;
+	bool inspect_log = false, raw = false;
 	int fd, error;
 
-	if (argc == 4 && strcmp(argv[1], "-a") == 0) {
+	if (argc > 1 && strcmp(argv[1], "--raw") == 0) {
+		raw = true;
+		argc--;
+		argv++;
+	}
+	if (argc == 3 && strcmp(argv[1], "-j") == 0) {
+		inspect_log = true;
+		path = argv[2];
+	} else if (argc == 4 && strcmp(argv[1], "-a") == 0) {
 		agno = number(argv[2]);
 		if (agno > UINT32_MAX) {
 			fprintf(stderr, "xfs_probe: invalid allocation group number\n");
@@ -110,10 +121,11 @@ main(int argc, char **argv)
 	} else if (argc == 2) {
 		path = argv[1];
 	} else {
-		fprintf(stderr, "usage: xfs_probe [-a agno | -i ino] image\n"
+		fprintf(stderr, "usage: xfs_probe [--raw] [-j | -a agno | -i ino] image\n"
 		    "       xfs_probe -r ino offset length image\n"
 		    "       xfs_probe {-p|-l|-s} /path/in/image image\n"
-		    "       xfs_probe -R /path/in/image offset length image\n");
+		    "       xfs_probe -R /path/in/image offset length image\n"
+		    "       --raw skips the clean-journal guard for image analysis\n");
 		return 2;
 	}
 	fd = open(path, O_RDONLY | O_NONBLOCK);
@@ -135,6 +147,22 @@ main(int argc, char **argv)
 	io.size = (uint64_t)st.st_size;
 	io.read = image_read;
 	error = xfs_reader_open(&io, data, sizeof(data), &reader, &why);
+	if (error == 0 && (inspect_log ||
+	    (!raw && (inspect_inode || read_file || list_directory)))) {
+		void *log_scratch = malloc(XFS_LOG_SCRATCH_SIZE);
+		if (log_scratch == NULL) {
+			error = ENOMEM;
+			why = "cannot allocate journal workspace";
+		} else {
+			if (inspect_log)
+				error = xfs_log_inspect(&reader, log_scratch,
+				    XFS_LOG_SCRATCH_SIZE, &log, &why);
+			else
+				error = xfs_require_clean_log(&reader, log_scratch,
+				    XFS_LOG_SCRATCH_SIZE, &why);
+			free(log_scratch);
+		}
+	}
 	if (error == 0 && inspect_ag)
 		error = xfs_read_ag(&reader, (uint32_t)agno, data, sizeof(data), &ag, &why);
 	if (error == 0 && image_path != NULL)
@@ -180,6 +208,15 @@ main(int argc, char **argv)
 	}
 	if (read_file || list_directory)
 		return 0;
+	if (inspect_log) {
+		printf("state = %s\n", log.state == XFS_LOG_CLEAN ? "clean" : "needs-recovery");
+		printf("head = %" PRIu32 "\n", log.head);
+		printf("tail = %" PRIu32 "\n", log.tail);
+		printf("record = %" PRIu32 "\n", log.record);
+		printf("cycle = %" PRIu32 "\n", log.cycle);
+		printf("initialized = %u\n", log.initialized);
+		return 0;
+	}
 	if (inspect_inode) {
 		printf("mode = %u\n", inode.mode);
 		printf("size = %" PRIu64 "\n", inode.size);

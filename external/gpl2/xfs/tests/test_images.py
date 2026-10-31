@@ -252,7 +252,8 @@ def main():
             with image.open("xb") as stream:
                 stream.write(data)
                 stream.truncate(image_size)
-            result = subprocess.run((probe, "-i", str(ino), str(image)),
+            # This metadata-only sparse fixture has no journal.
+            result = subprocess.run((probe, "--raw", "-i", str(ino), str(image)),
                                     capture_output=True, text=True)
             require(result.returncode == 1 and message in result.stderr,
                     f"inode-{case}: {result.returncode}: {result.stderr}")
