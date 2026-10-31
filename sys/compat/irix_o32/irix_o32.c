@@ -81,6 +81,7 @@
 #include <sys/exec_elf.h>
 #include <sys/fcntl.h>
 #include <sys/conf.h>
+#include <miscfs/specfs/specdev.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/filio.h>
