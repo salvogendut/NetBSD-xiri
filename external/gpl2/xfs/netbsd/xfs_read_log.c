@@ -22,6 +22,7 @@ _Static_assert(sizeof(struct xlog_op_header) == 12, "log operation");
 struct log_geometry {
 	uint64_t offset;
 	uint32_t blocks, unit;
+	bool v2;
 };
 struct log_head {
 	uint32_t block, cycle, record;
@@ -78,9 +79,8 @@ geometry(const struct xfs_reader *reader, struct log_geometry *log,
 	uint64_t agno, agbno, offset, bytes;
 	uint32_t blocks, sector = 512;
 
-	if (XFS_SB_VERSION_NUM(sb) != 5 &&
-	    !(sb->sb_versionnum & XFS_SB_VERSION_LOGV2BIT))
-		return fail(why, EOPNOTSUPP, "v1 journals are not supported");
+	log->v2 = XFS_SB_VERSION_NUM(sb) == 5 ||
+	    (sb->sb_versionnum & XFS_SB_VERSION_LOGV2BIT) != 0;
 	if (sb->sb_logstart == 0 || sb->sb_agblklog > 32)
 		return fail(why, EINVAL, "invalid internal log address");
 	agno = sb->sb_logstart >> sb->sb_agblklog;
@@ -106,6 +106,8 @@ geometry(const struct xfs_reader *reader, struct log_geometry *log,
 	if (sb->sb_logsunit > XLOG_MAX_RECORD_BSIZE ||
 	    (sb->sb_logsunit > 1 && sb->sb_logsunit % sb->sb_blocksize != 0))
 		return fail(why, EINVAL, "invalid log stripe unit");
+	if (!log->v2 && (sector != 512 || sb->sb_logsunit > 1))
+		return fail(why, EINVAL, "v1 internal log requires 512-byte sectors and no stripe unit");
 	log->offset = offset + agbno * sb->sb_blocksize;
 	log->blocks = (uint32_t)(bytes / 512);
 	log->unit = sb->sb_logsunit > sector ? sb->sb_logsunit : sector;
@@ -120,21 +122,23 @@ geometry(const struct xfs_reader *reader, struct log_geometry *log,
  * against that exact layout before accepting one in the unwritten suffix.
  */
 static bool
-cleared_block(const struct xfs_reader *reader, const uint8_t *data,
-    uint32_t block, uint32_t head)
+cleared_block(const struct xfs_reader *reader, const struct log_geometry *log,
+    const uint8_t *data, uint32_t block, uint32_t head)
 {
 	struct xlog_rec_header hdr = { 0 };
 	uint32_t fmt = get32(data + offsetof(struct xlog_rec_header, h_fmt));
 	uint32_t tail = get32(data + offsetof(struct xlog_rec_header, h_tail_lsn) + 4);
-	if ((fmt != XLOG_FMT_LINUX_LE && fmt != XLOG_FMT_LINUX_BE &&
+	bool legacy = !log->v2 && fmt == XLOG_FMT_UNKNOWN;
+	if ((!legacy && fmt != XLOG_FMT_LINUX_LE && fmt != XLOG_FMT_LINUX_BE &&
 	    fmt != XLOG_FMT_IRIX_BE) || tail >= head)
 		return false;
 	hdr.h_magicno = cpu_to_be32(XLOG_HEADER_MAGIC_NUM);
-	hdr.h_version = cpu_to_be32(XLOG_VERSION_2);
+	hdr.h_version = cpu_to_be32(log->v2 ? XLOG_VERSION_2 : XLOG_VERSION_1);
 	hdr.h_lsn = cpu_to_be64(block);
 	hdr.h_tail_lsn = cpu_to_be64(UINT64_C(1) << 32 | tail);
 	hdr.h_fmt = cpu_to_be32(fmt);
-	hdr.h_fs_uuid = reader->sb.sb_uuid;
+	if (!legacy)
+		hdr.h_fs_uuid = reader->sb.sb_uuid;
 	return memcmp(data, &hdr, 324) == 0 && zeroes(data + 324, 512 - 324);
 }
 
@@ -177,7 +181,7 @@ find_head(const struct xfs_reader *reader, const struct log_geometry *log,
 			}
 			if (cycle == 0) {
 				if (!zeroes(p, 512) &&
-				    !cleared_block(reader, p, block + i, head->block))
+				    !cleared_block(reader, log, p, block + i, head->block))
 					return fail(why, EINVAL, "nonzero data in zero-cycle log suffix");
 				continue;
 			}
@@ -231,6 +235,36 @@ record_crc(uint8_t *data, uint32_t hblocks, uint32_t length, size_t hdrsize)
 }
 
 static int
+v1_operations(const uint8_t *body, uint32_t length, uint32_t numops,
+    bool unmount, uint32_t unmount_length, const char **why)
+{
+	uint32_t i, offset = 0, bytes;
+	if (unmount) {
+		/* v1 h_len excludes sector padding; mkfs uses a whole data sector.
+		 * A clean record must contain only its one complete unmount item.
+		 */
+		if (length != unmount_length && (length != 512 ||
+		    !zeroes(body + unmount_length, length - unmount_length)))
+			return fail(why, EINVAL, "unexpected data after v1 log unmount");
+		return 0;
+	}
+	for (i = 0; i < numops; i++) {
+		if (length - offset < sizeof(struct xlog_op_header))
+			return fail(why, EINVAL, "truncated v1 log operation header");
+		bytes = get32(body + offset + 4);
+		if (body[offset + 8] != XFS_TRANSACTION ||
+		    (body[offset + 9] & ~0x1fU) != 0 ||
+		    !zeroes(body + offset + 10, 2) || bytes % 4 != 0 ||
+		    bytes > length - offset - sizeof(struct xlog_op_header))
+			return fail(why, EINVAL, "malformed v1 log operation");
+		offset += sizeof(struct xlog_op_header) + bytes;
+	}
+	if (offset != length)
+		return fail(why, EINVAL, "v1 log operation count or length mismatch");
+	return 0;
+}
+
+static int
 verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
     const struct log_head *head, uint8_t *data, struct xfs_log_info *info,
     const char **why)
@@ -238,9 +272,10 @@ verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
 	struct xlog_rec_header hdr;
 	uint32_t length, size, hblocks, blocks, cycle, fmt, tailcycle, tailblock;
 	uint32_t i, group, slot, stamp, stored, offset, numops, prev;
+	uint32_t version, bodyblocks, unmount_length = 20;
 	uint64_t lsn, tail;
 	uint8_t *body;
-	bool unmount, initial;
+	bool unmount, initial = false, legacy;
 	int error;
 
 	error = read_record(reader, log, head->record, 1, data, why);
@@ -257,19 +292,36 @@ verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
 	tailblock = (uint32_t)tail;
 	numops = be32_to_cpu(hdr.h_num_logops);
 	prev = be32_to_cpu(hdr.h_prev_block);
+	version = be32_to_cpu(hdr.h_version);
+	stored = le32toh(hdr.h_crc);
+	legacy = !log->v2 && fmt == XLOG_FMT_UNKNOWN;
+	if (version != (log->v2 ? XLOG_VERSION_2 : XLOG_VERSION_1))
+		return fail(why, EOPNOTSUPP, "log record version disagrees with superblock");
+	if (legacy) {
+		/* IRIX left the later format/UUID/size fields zero. Older nonzero
+		 * h_chksum values are not CRC32C and are deliberately unsupported.
+		 */
+		if (stored != 0 || !zeroes(data + 300, 512 - 300))
+			return fail(why, EOPNOTSUPP, "unsupported IRIX log header or checksum");
+	} else if ((fmt != XLOG_FMT_LINUX_LE && fmt != XLOG_FMT_LINUX_BE &&
+	    fmt != XLOG_FMT_IRIX_BE) ||
+	    memcmp(&hdr.h_fs_uuid, &reader->sb.sb_uuid, sizeof(xfs_uuid_t)) != 0) {
+		return fail(why, EINVAL, "log record UUID or format mismatch");
+	}
 	if (be32_to_cpu(hdr.h_magicno) != XLOG_HEADER_MAGIC_NUM || cycle == 0 ||
 	    cycle == XLOG_HEADER_MAGIC_NUM ||
-	    lsn != ((uint64_t)cycle << 32 | head->record) ||
-	    memcmp(&hdr.h_fs_uuid, &reader->sb.sb_uuid, sizeof(xfs_uuid_t)) != 0)
+	    lsn != ((uint64_t)cycle << 32 | head->record))
 		return fail(why, EINVAL, "log record identity or LSN mismatch");
-	if (be32_to_cpu(hdr.h_version) != XLOG_VERSION_2 ||
-	    (fmt != XLOG_FMT_LINUX_LE && fmt != XLOG_FMT_LINUX_BE && fmt != XLOG_FMT_IRIX_BE))
-		return fail(why, EOPNOTSUPP, "unsupported log record version or format");
+	if (legacy)
+		size = XLOG_BIG_RECORD_BSIZE;
 	if (size < XLOG_MIN_RECORD_BSIZE || size > XLOG_MAX_RECORD_BSIZE ||
-	    size % 512 != 0 || length < 20 || length % 512 != 0 || length > size)
+	    size % 512 != 0 || length < (log->v2 ? 20U : 12U) ||
+	    length % (log->v2 ? 512U : 4U) != 0 || length > size ||
+	    (!log->v2 && size > XLOG_BIG_RECORD_BSIZE))
 		return fail(why, EINVAL, "invalid log record size");
 	hblocks = (size + XLOG_HEADER_CYCLE_SIZE - 1) / XLOG_HEADER_CYCLE_SIZE;
-	blocks = hblocks + length / 512;
+	bodyblocks = (length + 511) / 512;
+	blocks = hblocks + bodyblocks;
 	if (blocks >= log->blocks || blocks * 512 > size ||
 	    head->record * 512U % log->unit != 0 || blocks * 512 % log->unit != 0 ||
 	    (head->record + blocks) % log->blocks != head->block ||
@@ -284,49 +336,66 @@ verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
 	error = read_record(reader, log, head->record, blocks, data, why);
 	if (error != 0)
 		return error;
-	if (memcmp(&hdr, data, sizeof(hdr)) != 0)
+	if (memcmp(&hdr, data, sizeof(hdr)) != 0 ||
+	    (legacy && !zeroes(data + 300, 512 - 300)))
 		return fail(why, EINVAL, "log changed during inspection");
 	for (i = 1; i < blocks; i++) {
 		stamp = head->record + i >= log->blocks ? next_cycle(cycle) : cycle;
 		if (get32(data + i * 512) != stamp)
 			return fail(why, EINVAL, "log record cycle stamp mismatch");
 	}
-	stored = le32toh(hdr.h_crc);
 	memset(data + offsetof(struct xlog_rec_header, h_crc), 0, 4);
 	/* Upstream sizeof(header) includes four tail-padding bytes on 64-bit ABIs. */
 	if (stored != 0 && stored != record_crc(data, hblocks, length, 328) &&
 	    stored != record_crc(data, hblocks, length, 324))
 		return fail(why, EINVAL, "log record CRC32C mismatch");
 	body = data + hblocks * 512;
-	for (i = 0; i < length / 512; i++) {
+	for (i = 0; i < bodyblocks; i++) {
 		group = i / 64;
 		slot = i % 64;
 		offset = group == 0 ? offsetof(struct xlog_rec_header, h_cycle_data) : 4;
 		memcpy(body + i * 512, data + group * 512 + offset + slot * 4, 4);
 	}
 	/* Linux writes oh_len == 0; mkfs writes the eight-byte payload length. */
-	unmount = numops == 1 && (get32(body + 4) == 0 || get32(body + 4) == 8) &&
+	unmount = length >= 20 && numops == 1 &&
+	    (get32(body + 4) == 0 || get32(body + 4) == 8) &&
 	    body[8] == XFS_LOG && body[9] == XLOG_UNMOUNT_TRANS &&
 	    zeroes(body + 10, 2) && zeroes(body + 14, 6) &&
 	    (fmt == XLOG_FMT_LINUX_LE ? (body[12] == 0x6e && body[13] == 0x55) :
 	    (body[12] == 0x55 && body[13] == 0x6e));
+	/* Historical big-endian unmount payload documented in xfs_log_format.h. */
+	if (!log->v2 && length >= 32 && fmt != XLOG_FMT_LINUX_LE &&
+	    numops == 1 && get32(body + 4) == 20 && body[8] == XFS_LOG &&
+	    body[9] == XLOG_UNMOUNT_TRANS && zeroes(body + 10, 2) &&
+	    memcmp(body + 12, "Unmount filesystem--", 20) == 0) {
+		unmount = true;
+		unmount_length = 32;
+	}
 	if ((body[9] & XLOG_UNMOUNT_TRANS) && !unmount)
 		return fail(why, EINVAL, "malformed log unmount operation");
-	initial = stored == 0;
-	if (initial) {
-		/* mkfs's special unchecksummed record: accept only its exact shape. */
+	if (!log->v2) {
+		error = v1_operations(body, length, numops, unmount, unmount_length, why);
+		if (error != 0)
+			return error;
+	}
+	if (stored == 0 && !legacy) {
+		/* Identify mkfs's exact initial record. V2 has no other zero-CRC
+		 * exception; older v1 writers also omitted checksums in normal use.
+		 */
 		uint32_t init_size = log->unit > 32768 ? log->unit : 32768;
 		uint32_t init_bytes = ((hblocks * 512 + 20 + log->unit - 1) /
 		    log->unit) * log->unit;
-		if (!head->zero_tail || head->record != 0 || cycle != 1 || tail != lsn ||
-		    prev != UINT32_MAX || size != init_size || blocks * 512 != init_bytes ||
-		    !unmount || get32(body + 4) != 8 || get32(body) != 0xb0c0d0d0 ||
-		    !zeroes(body + 20, length - 20) ||
-		    !zeroes(data + 48, 252) || !zeroes(data + 324, 512 - 324))
-			return fail(why, EOPNOTSUPP, "unchecksummed log is not a canonical initial unmount");
+		initial = head->zero_tail && head->record == 0 && cycle == 1 && tail == lsn &&
+		    prev == UINT32_MAX && size == init_size && blocks * 512 == init_bytes &&
+		    length == init_bytes - hblocks * 512 &&
+		    unmount && get32(body + 4) == 8 && get32(body) == 0xb0c0d0d0 &&
+		    zeroes(body + 20, length - 20) &&
+		    zeroes(data + 48, 252) && zeroes(data + 324, 512 - 324);
 		for (i = 1; i < hblocks; i++)
 			if (!zeroes(data + i * 512 + 4, 508))
-				return fail(why, EINVAL, "nonzero initial log extended header data");
+				initial = false;
+		if (!initial && log->v2)
+			return fail(why, EOPNOTSUPP, "unchecksummed log is not a canonical initial unmount");
 	}
 	info->state = unmount ? XFS_LOG_CLEAN : XFS_LOG_NEEDS_RECOVERY;
 	info->head = head->block;
@@ -334,6 +403,9 @@ verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
 	info->record = head->record;
 	info->cycle = head->cycle;
 	info->initialized = initial;
+	info->version = version;
+	info->legacy = legacy;
+	info->checksummed = stored != 0;
 	return 0;
 }
 

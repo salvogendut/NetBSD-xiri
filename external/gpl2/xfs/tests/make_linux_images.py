@@ -153,6 +153,7 @@ def main():
     parser.add_argument("--kernel", type=Path, required=True)
     parser.add_argument("--modules", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--v1", action="store_true", help="also capture a v4 filesystem with a v1 journal")
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
     directory = args.directory.resolve()
@@ -165,12 +166,13 @@ def main():
                   "helper_source_sha256": digest(source), "mkfs_version": run("mkfs.xfs", "-V").strip(),
                   "qemu_version": run("qemu-system-x86_64", "--version").splitlines()[0],
                   "initramfs_inputs": initramfs(directory / "initramfs.gz", helper, args.modules.resolve())}
-    for version in (4, 5):
+    for version in ("4", "5", "4-log1") if args.v1 else ("4", "5"):
         clean = directory / f"linux-v{version}.img"
         dirty = directory / f"linux-v{version}-dirty.img"
         with clean.open("xb") as stream:
             stream.truncate(400 * 1024 * 1024)
-        mkfs = ["mkfs.xfs", "-q", "-f", "-K", "-n", "parent=0", "-m", f"crc={int(version == 5)}", str(clean)]
+        log_options = ["-l", "version=1"] if version == "4-log1" else []
+        mkfs = ["mkfs.xfs", "-q", "-f", "-K", "-n", "parent=0", "-m", f"crc={int(version == '5')}", *log_options, str(clean)]
         provenance[f"v{version}_mkfs"] = mkfs
         subprocess.run(mkfs, check=True)
         print(f"Linux v{version}: generating clean workload", flush=True)

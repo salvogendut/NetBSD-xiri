@@ -97,7 +97,7 @@ make_record(uint32_t start, uint32_t cycle, uint32_t size, uint32_t length,
 	rec_start = start;
 	rec_hblocks = (size + 32767) / 32768;
 	rec_length = length;
-	rec_blocks = rec_hblocks + length / 512;
+	rec_blocks = rec_hblocks + (length + 511) / 512;
 	crc_header_size = 328;
 	hdr.h_magicno = cpu_to_be32(XLOG_HEADER_MAGIC_NUM);
 	hdr.h_cycle = cpu_to_be32(cycle);
@@ -118,7 +118,7 @@ make_record(uint32_t start, uint32_t cycle, uint32_t size, uint32_t length,
 	body[9] = clean ? XLOG_UNMOUNT_TRANS : 2; /* COMMIT */
 	body[12] = fmt == XLOG_FMT_LINUX_LE ? 0x6e : 0x55;
 	body[13] = fmt == XLOG_FMT_LINUX_LE ? 0x55 : 0x6e;
-	for (i = 0; i < length / 512; i++) {
+	for (i = 0; i < (length + 511) / 512; i++) {
 		group = i / 64;
 		slot = i % 64;
 		offset = group == 0 ? 44 : 4;
@@ -157,6 +157,25 @@ inspect(int expected)
 }
 
 static void
+make_v1(uint32_t start, uint32_t cycle, uint32_t length, uint32_t fmt,
+    bool clean, bool checksum, bool old_string)
+{
+	reader.sb.sb_versionnum &= ~XFS_SB_VERSION_LOGV2BIT;
+	make_record(start, cycle, 32768, length, fmt ? fmt : XLOG_FMT_IRIX_BE, clean, false);
+	put32(record + 8, 1);
+	if (fmt == 0)
+		memset(record + 300, 0, 212); /* actual IRIX header shape */
+	if (!clean)
+		put32(record + 516, length - 12);
+	if (old_string) {
+		put32(record + 516, 20);
+		memcpy(record + 524, "Unmount filesystem--", 20);
+	}
+	if (checksum) seal();
+	publish();
+}
+
+static void
 stamps(uint32_t head, uint32_t cycle)
 {
 	uint32_t i, previous = cycle - 1;
@@ -164,6 +183,129 @@ stamps(uint32_t head, uint32_t cycle)
 		previous--;
 	for (i = 0; i < LOG_BLOCKS; i++)
 		put32(disk + i * 512, i < head ? cycle : previous);
+}
+
+static void
+v1_tests(void)
+{
+	static const uint32_t lengths[] = {12, 20, 508, 512, 516, 32256};
+	struct xfs_log_info info;
+	const char *why;
+	uint32_t fmt, crc, wrap, start, cycle, n, i, count;
+	for (fmt = 0; fmt <= 3; fmt++) {
+		for (crc = 0; crc <= 1; crc++) {
+			if (fmt == 0 && crc) continue;
+			for (wrap = 0; wrap < 3; wrap++) {
+				start = wrap == 0 ? 0 : wrap == 1 ? LOG_BLOCKS - 1 : LOG_BLOCKS - 2;
+				cycle = wrap ? 7 : 1;
+				setup(false);
+				if (wrap) stamps(wrap == 1 ? 1 : LOG_BLOCKS, wrap == 1 ? 8 : 7);
+				make_v1(start, cycle, 20, fmt, true, crc, false);
+				info = inspect(0);
+				CHECK(info.state == XFS_LOG_CLEAN && info.version == 1 && !info.initialized);
+				CHECK(info.legacy == (fmt == 0) && info.checksummed == (crc != 0));
+				CHECK(info.head == (start + 2) % LOG_BLOCKS && info.record == start);
+				CHECK(xfs_require_clean_log(&reader, scratch, sizeof(scratch), &why) == 0);
+				/* Padding beyond v1 h_len is not part of the operation. */
+				record[512 + 100] = 0xa5; publish();
+				CHECK(inspect(0).state == XFS_LOG_CLEAN);
+				if (fmt != 1) {
+					make_v1(start, cycle, 32, fmt, true, crc, true);
+					CHECK(inspect(0).state == XFS_LOG_CLEAN);
+				}
+			}
+			for (n = 0; n < sizeof(lengths) / sizeof(lengths[0]); n++) {
+				setup(false);
+				make_v1(0, 1, lengths[n], fmt, false, crc, false);
+				info = inspect(0);
+				CHECK(info.state == XFS_LOG_NEEDS_RECOVERY);
+				CHECK(info.head == 1 + (lengths[n] + 511) / 512);
+				CHECK(xfs_require_clean_log(&reader, scratch, sizeof(scratch), &why) == EBUSY);
+			}
+		}
+	}
+	/* Every read of a wrapped legacy record: I/O errors and bad byte counts. */
+	setup(false); stamps(1, 8);
+	make_v1(LOG_BLOCKS - 1, 7, 32, 0, true, false, true);
+	calls = 0; inspect(0); count = calls;
+	for (i = 1; i <= count; i++) {
+		calls = 0; fail_call = i; inspect(EIO); fail_call = 0;
+		calls = 0; short_call = i; inspect(EIO); short_call = 0;
+		calls = 0; over_call = i; inspect(EIO); over_call = 0;
+	}
+	/* Mixed/unknown identities and legacy checksum encodings stay rejected. */
+	for (i = 0; i < 5; i++) {
+		setup(false); make_v1(0, 1, 20, 0, true, false, false);
+		switch (i) {
+		case 0: record[32] = 1; break;
+		case 1: record[304] = 1; break;
+		case 2: put32(record + 320, 32768); break;
+		case 3: record[324] = 1; break;
+		case 4: record[511] = 1; break;
+		}
+		publish(); inspect(EOPNOTSUPP);
+	}
+	for (i = 0; i < 15; i++) {
+		setup(false); make_v1(0, 1, 20, 0, true, false, false);
+		switch (i) {
+		case 0: put32(record + 12, 12); break;
+		case 1: put32(record + 12, 16); break;
+		case 2: put32(record + 12, 21); break;
+		case 3: put32(record + 12, 24); break;
+		case 4: put32(record + 12, 32768); break;
+		case 5: put32(record + 20, 1); break;
+		case 6: put32(record + 28, 1); break;
+		case 7: put32(record + 36, 0); break;
+		case 8: put32(record + 40, 2); break;
+		case 9: put32(record + 516, 4); break;
+		case 10: record[520] = XFS_TRANSACTION; break;
+		case 11: record[521] |= 1; break;
+		case 12: record[522] = 1; break;
+		case 13: record[524] = 0x6e; break; /* wrong payload byte order */
+		case 14: record[526] = 1; break;
+		}
+		publish(); inspect(EINVAL);
+	}
+	for (i = 0; i < 20; i++) {
+		setup(false); make_v1(0, 1, 32, 0, true, false, true);
+		record[524 + i] ^= 1; publish(); inspect(EINVAL);
+	}
+	for (i = 0; i < 6; i++) {
+		setup(false); make_v1(0, 1, 20, 0, false, false, false);
+		switch (i) {
+		case 0: put32(record + 516, UINT32_MAX); break;
+		case 1: put32(record + 516, 4); break;
+		case 2: put32(record + 516, 7); break;
+		case 3: record[520] = 0; break;
+		case 4: record[521] = 0x80; break;
+		case 5: record[522] = 1; break;
+		}
+		publish(); inspect(EINVAL);
+	}
+	/* Latest dirty record takes precedence over an older clean unmount. */
+	setup(false); make_v1(0, 1, 20, 0, true, false, false);
+	make_v1(2, 1, 516, 0, false, false, false);
+	CHECK(inspect(0).state == XFS_LOG_NEEDS_RECOVERY);
+	put32(disk + 4 * 512, 0); /* torn last sector, including partial payload */
+	inspect(EINVAL);
+	/* Whole-sector mkfs records, and unchecksummed old Linux unmounts. */
+	setup(false); make_v1(0, 1, 512, 1, true, false, false);
+	CHECK(inspect(0).initialized);
+	record[44] ^= 1; publish();
+	CHECK(!inspect(0).initialized);
+	record[512 + 20] = 1; publish(); inspect(EINVAL);
+	/* No v1 interpretation or missing-UUID exception on a v2 filesystem. */
+	setup(false); make_v1(0, 1, 20, 0, true, false, false);
+	reader.sb.sb_versionnum |= XFS_SB_VERSION_LOGV2BIT;
+	inspect(EOPNOTSUPP);
+	put32(record + 8, 2); publish(); inspect(EINVAL);
+	setup(false); make_v1(0, 1, 20, 1, true, true, false);
+	record[512 + 12] ^= 1; publish(); inspect(EINVAL); /* CRC protected */
+	setup(false); make_v1(0, 1, 20, 0, true, false, false);
+	reader.sb.sb_logsunit = 4096; inspect(EINVAL);
+	reader.sb.sb_logsunit = 0;
+	reader.sb.sb_versionnum |= XFS_SB_VERSION_SECTORBIT;
+	reader.sb.sb_logsectsize = 4096; reader.sb.sb_logsectlog = 12; inspect(EINVAL);
 }
 
 int
@@ -176,6 +318,7 @@ main(void)
 	bool v5;
 	int error;
 
+	v1_tests();
 	for (i = 0; i < 2; i++) {
 		v5 = i != 0;
 		for (j = 1; j <= 3; j++) {

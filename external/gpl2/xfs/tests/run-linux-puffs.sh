@@ -25,7 +25,9 @@ trap 'exit 1' HUP INT TERM
 mkdir "$xfs_build/mnt"
 make -C "$xfs_root/puffs" MKMAN=no
 ${CC:-cc} -O2 -g -Wall -Wextra -Werror "$xfs_root/tests/t_linux_puffs.c" -o "$xfs_build/client"
-for xfs_version in 4 5; do
+xfs_versions='4 5'
+if [ -f "$xfs_images/linux-v4-log1.img" ]; then xfs_versions="$xfs_versions 4-log1"; fi
+for xfs_version in $xfs_versions; do
 	xfs_image="$xfs_images/linux-v$xfs_version.img"
 	xfs_before=$(cksum -a sha256 "$xfs_image")
 	"$xfs_root/puffs/mount_xfs" -s "$xfs_image" "$xfs_build/mnt" > "$xfs_build/server.log" 2>&1 &

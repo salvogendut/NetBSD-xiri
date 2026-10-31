@@ -258,6 +258,9 @@ main(int argc, char **argv)
 		printf("record = %" PRIu32 "\n", log.record);
 		printf("cycle = %" PRIu32 "\n", log.cycle);
 		printf("initialized = %u\n", log.initialized);
+		printf("version = %" PRIu32 "\n", log.version);
+		printf("legacy = %u\n", log.legacy);
+		printf("checksummed = %u\n", log.checksummed);
 		return 0;
 	}
 	if (inspect_inode) {

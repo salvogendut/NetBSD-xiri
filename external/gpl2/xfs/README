@@ -185,19 +185,36 @@ callbacks receive byte names valid only during that call. Metadata verification
 finishes before any entry is emitted; callback failures can occur after earlier
 entries were emitted. Lookup outputs are unchanged on error.
 
-xfs_log_inspect scans the internal v2 journal's cycle stamps and checks the
-latest record's boundaries, UUID, LSNs, sector/stripe alignment and CRC32C.
+xfs_log_inspect scans the internal v1/v2 journal's cycle stamps and checks the
+latest record's boundaries, LSNs, sector/stripe alignment, and UUID/CRC32C
+when present.
 It supports extended headers and records wrapping across the physical end.
 Only a complete, single unmount operation at the current head establishes
-CLEAN; a checksummed record without that operation reports NEEDS_RECOVERY.
+CLEAN; a valid latest record without that operation reports NEEDS_RECOVERY.
 Malformed, ambiguous and unsupported logs return errors. The inspector
 does not trim partial writes, fall back to an older unmount, clear stale
 blocks or replay transactions. It accepts both Linux's zero-length unmount
 operation header and mkfs's eight-byte length, with their common payload
 validated. Canonical empty headers written by Linux to clear stale blocks
 are accepted in a cycle-zero suffix after checking their entire contents;
-they are never selected as transactions. The special zero-CRC mkfs initial
-unmount still requires its exact canonical fields and padding.
+they are never selected as transactions. The initialized marker requires
+the special zero-CRC mkfs unmount's exact canonical fields and padding.
+V2 journals permit no other zero-CRC records.
+
+V1 journals use one header sector and at most 32 KiB per record. Their
+record length excludes sector padding, so the reader rounds only physical
+I/O and cycle-stamp coverage. V1 operation headers, lengths and counts are
+checked before reporting recovery state. IRIX-style headers with zero
+format/UUID/size fields and no checksum are supported only on v4 filesystems
+without the log-v2 feature. Both the eight-byte big-endian unmount payload
+and the historical 20-byte "Unmount filesystem--" payload are recognized.
+Clean v1 records must contain exactly that one complete item (or the
+zero-padded mkfs data sector). Dirty records cannot be mistaken for an older
+unmount. Known-format v1 records require the matching filesystem UUID;
+nonzero CRC32C values are verified. Legacy nonzero checksum encodings,
+mixed identity fields, larger internal log sectors and v1 stripe units are
+rejected. V1 journals without checksums cannot provide v2's corruption
+detection, and IRIX-style records also lack UUID binding to the filesystem.
 
 xfs_require_clean_log returns zero only for CLEAN. Call it before opening
 inodes for filesystem service; xfs_reader_open alone remains a raw metadata
@@ -209,8 +226,8 @@ does not establish global consistency or validate metadata LSNs.
 Journal scratch is XFS_LOG_SCRATCH_SIZE (260 KiB), caller-owned and reusable.
 The scan reads the whole log in 64 KiB chunks, then reads the selected record;
 it is linear in log size, with upstream limits on log and record lengths.
-V1 logs, cycle-number rollover, nonmonotonic cycle patterns and noninitial
-zero-CRC records are unsupported. Some logs recoverable by Linux will be
+Cycle-number rollover, nonmonotonic cycle patterns and noninitial
+zero-CRC v2 records are unsupported. Some logs recoverable by Linux will be
 rejected. CRC verification covers the upstream 324/328-byte header layouts
 and the used portions of extended headers, before restoring packed cycle data.
 
@@ -287,10 +304,13 @@ free-space summaries, orphan blocks, workspace exhaustion and every read's
 failure/short-read path. The directory suite also passes with undefined-behavior
 checks configured to trap.
 
-The journal suite adds 1,521 checks plus guard/argument checks for v4/v5
+The journal suite adds 1,734 checks plus guard/argument checks for v4/v5
 superblocks, both endian formats, extended headers, wrapped records, skipped
 magic cycle numbers, record CRCs, canonical initialization, I/O failures,
 unaligned scratch, output preservation, torn writes and stale unmounts.
+V1 cases cover IRIX-style and known-format headers, both unmount payloads,
+partial sectors, wrapped records, operation framing, maximum records,
+checksum/identity rejection and every read's error/short-read path.
 
 The attribute suite adds 1,272 checks for v4/v5 inline forks, empty retained
 forks, all flag combinations, truncation, duplicate names, binary/empty values,
@@ -360,6 +380,23 @@ They test guarded root lookup, dirty/clean transitions, corrupt/torn records,
 explicit raw inspection and a synthetic wrapped record in a mkfs image.
 Linux-generated clean unmounts and forced-shutdown journals are tested by
 the separate workload suite below.
+Nine further v1 fixtures cover a populated mkfs filesystem without directory
+file types, synthetic modern/string/wrapped IRIX unmounts, dirty and torn logs,
+malformed unmounts/operations and inconsistent identity fields. Clean head/tail
+results agree with xfs_logprint; guarded file/directory reads and image hashes
+are checked. These synthetic fixtures are created from new mkfs images, never
+by clearing a real image's dirty journal. To retain them for native tests:
+
+    PYTHONDONTWRITEBYTECODE=1 python3 external/gpl2/xfs/tests/test_log_v1.py \
+        /tmp/xfs_probe --fixtures /tmp/xfs-v1-fixtures
+
+Transfer the fixtures in a sparse archive to NetBSD and run as root:
+
+    sh external/gpl2/xfs/tests/run-v1-puffs.sh /path/to/xfs-v1-fixtures
+
+This mounts all four clean fixtures, compares file bytes, symlinks, ownership
+and directory lookup, and requires startup rejection for the other five.
+Every image's hash must remain unchanged.
 
 The third compiles all seventeen port files, the CLI, PUFFS server and native
 test clients with this checkout's
@@ -409,8 +446,9 @@ without a trailing newline. Discard partial output if a command fails.
 -x emits attribute JSON lines with flags, hexadecimal name and hexadecimal
 value. -X first applies the mount attribute policy. Neither implements path
 credentials; these are inspection commands, not an access-control boundary.
--j prints journal state, head, tail, latest record, head cycle and whether
-the canonical initial record was used. These addresses are log-relative
+-j prints journal state, head, tail, latest record, head cycle, record version,
+whether the header is legacy IRIX-style, whether a CRC32C was checked, and
+whether the canonical initial record was used. These addresses are log-relative
 512-byte block numbers. An inspection can report needs-recovery successfully;
 guarded file/path commands reject that state. Use --raw before the other CLI
 options only when deliberately inspecting potentially unrecovered metadata.
@@ -427,13 +465,15 @@ Python 3.11+, cc, ldd, sha256sum, mkfs.xfs, cp and qemu-system-x86_64; zstd is
 needed if the modules use that compression. Dynamic libraries are copied
 into the initramfs, and module dependencies are loaded in order.
 
-    python3 external/gpl2/xfs/tests/make_linux_images.py \
+    python3 external/gpl2/xfs/tests/make_linux_images.py --v1 \
         --kernel /path/to/vmlinuz --modules /path/to/matching/modules \
         /tmp/xfs-linux-fixtures
     PYTHONDONTWRITEBYTECODE=1 python3 external/gpl2/xfs/tests/test_linux_images.py \
         /tmp/xfs_probe /tmp/xfs-linux-fixtures
 
-The destination must not exist. The generator records kernel, module,
+The optional --v1 adds a v4 filesystem with a v1 journal alongside the v4/v5
+filesystems with v2 journals. The destination must not exist.
+The generator records kernel, module,
 helper and library hashes, tool versions, mkfs commands, serial logs,
 Linux reference JSON and image hashes. FIEMAP must demonstrate actual holes,
 unwritten extents and physical fragmentation. The workload also creates
@@ -449,8 +489,8 @@ The portable comparison checks metadata/content/partial reads, complete
 directory enumeration, symlinks and attribute/ACL bytes, and compares both
 journals with xfs_logprint. Dirty images must reject guarded operations with
 no output. All images must retain their recorded hashes. The comparison
-also writes native manifests beside the fixtures. Transfer the four images
-and two manifests to NetBSD (use a sparse archive), then run as root with
+also writes native manifests beside the fixtures. Transfer all generated images
+and manifests to NetBSD (use a sparse archive), then run as root with
 the corrected libpuffs from this checkout:
 
     sh external/gpl2/xfs/tests/run-linux-puffs.sh /path/to/linux-fixtures
@@ -465,9 +505,14 @@ retain their separate synthetic regression coverage.
 A user-supplied IRIX 6.5 CHD image also permits raw inspection of its v4 XFS
 partition (4 KiB blocks, 256-byte inodes). Root enumeration and reads of
 /bin/ls and /unix succeed; their bytes agree with xfs_db's extent mappings.
-This is not a successful mount: its v1 journal is unsupported, and xfs_logprint
-reports a dirty log plus legacy UUID/format errors. The regular mount guard
-rejects it. The sample and its contents are not distributed in this tree.
+The v1 reader now identifies its latest complete record as requiring recovery:
+cycle 96, head 5561, tail 4829 and record 5531 (log-relative 512-byte blocks).
+Guarded access and mounting remain rejected; the image is unchanged.
+xfs_logprint's legacy UUID/format errors reflect the missing recovery identity
+fields. There is no IRIX transaction replay implementation.
+Clean IRIX-style mounts are currently exercised with synthetic journal
+fixtures; actual Linux v1 clean mounts and forced shutdowns are also tested.
+The user sample and its contents are not distributed in this tree.
 
 Native PUFFS build and test
 --------------------------
@@ -581,9 +626,11 @@ Remaining milestones
    security namespaces remain rejected.
    Expand runtime coverage to prolonged workloads and allocator failures.
    Add bounded caching only with explicit consistency and lifetime contracts.
-2. Add Linux-produced clean/dirty journals, fragmented, sparse and unwritten
-   files, complementing synthetic fixtures. Expand cross-tree and metadata-LSN
-   validation and support larger directories with bounded streaming or caching.
+2. Validate clean unmounts from an actual IRIX system, complementing the
+   synthetic legacy journals and Linux-generated v1/v2 workloads.
+   Add SGI partition discovery before accepting whole-disk images.
+   Expand cross-tree and metadata-LSN validation and support larger
+   directories with bounded streaming or caching.
    Port transaction reservations, logging/recovery and allocation in user
    space before enabling writes. Require crash/replay tests and xfstests
    coverage, including concurrency and forced-shutdown paths.

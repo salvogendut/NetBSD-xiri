@@ -45,6 +45,7 @@ if [ "${1:-}" = --images ]; then
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_paths.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_dir_indexes.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_log.py" "$xfs_build/xfs_probe"
+	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_log_v1.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_attrs.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_acl_images.py" "$xfs_build/xfs_probe"
 fi

@@ -83,12 +83,21 @@ follow xfs_sb.c and the pinned xfs_fs.h limits. These adaptations deliberately:
   - reject nonmonotonic cycles, rollover and incomplete latest records,
     without trimming to an older record, replaying or clearing stale blocks;
   - bound sizes, require the record to end exactly at the head, verify its
-    UUID/LSNs/cycles and checksum, and restore cycle data only afterward;
+    LSNs/cycles, UUID and checksum when present, and restore cycle data only
+    afterward; v1 physical I/O rounds h_len up, as xlog_sync excludes padding;
   - require exactly one well-formed modern eight-byte unmount operation to
-    report CLEAN, with explicit little/big-endian payload decoding;
+    report CLEAN, with explicit little/big-endian payload decoding; v1 also
+    accepts the historical 20-byte string documented in xfs_log_format.h;
+  - accept IRIX-style zero format/UUID/size fields only on a v1 journal,
+    requiring the entire unused header suffix and checksum field to be zero;
+    known-format v1 headers require a matching UUID and verification of any
+    nonzero CRC32C;
+  - check every v1 operation header, payload bound and count without
+    interpreting transaction items, and reject extra data in clean records;
   - handle the special unchecksummed mkfs record only at cycle 1/block 0,
-    with canonical fields/padding and a verified wholly zero log suffix;
-  - return NEEDS_RECOVERY for a checksummed latest record without an unmount,
+    with canonical fields/padding and a verified unused log suffix (zero
+    blocks or canonical empty stale-block-clearing headers);
+  - return NEEDS_RECOVERY for a valid latest record without an unmount,
     and errors for unsupported/malformed journals, preserving output on error.
 
 The checksum covers the used extended-header regions, not entire 512-byte
@@ -96,6 +105,11 @@ header sectors. Both upstream header ABI sizes (324 and 328 bytes) are
 accepted. No transaction items are interpreted or replayed. Cleanliness
 does not imply global consistency, and metadata LSNs are not yet checked
 against the log. The caller must keep the entire image quiescent.
+The IRIX v1 identity exception follows xlog_header_check_mount. Unlike the
+v2 policy, v1 permits ordinary zero-checksum records; they cannot provide
+checksum integrity, and IRIX-style headers cannot bind a record to a UUID.
+Older nonzero legacy checksum algorithms remain unsupported. The exception
+does not apply to v5 superblocks or v2 logs.
 
 netbsd/xfs_ag.c adapts the following read-side checks to an explicit reader
 context, without creating placeholder Linux mount, buffer, or log objects:

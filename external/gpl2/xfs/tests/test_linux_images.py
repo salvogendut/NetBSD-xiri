@@ -64,7 +64,10 @@ def main():
         raise SystemExit("usage: test_linux_images.py xfs_probe FIXTURE-DIRECTORY")
     probe, directory = str(Path(sys.argv[1]).resolve()), Path(sys.argv[2])
     provenance = json.loads((directory / "provenance.json").read_text())
-    for version in (4, 5):
+    versions = ["4", "5"]
+    if (directory / "linux-v4-log1.img").exists():
+        versions.append("4-log1")
+    for version in versions:
         image = directory / f"linux-v{version}.img"
         dirty = directory / f"linux-v{version}-dirty.img"
         refs = json.loads((directory / f"linux-v{version}.json").read_text())
@@ -78,6 +81,8 @@ def main():
             require(match is not None and (info["tail"], info["head"]) == match.groups()[:2], upstream)
             require(info["state"] == state and info["initialized"] == "0" and
                     match[3] == ("CLEAN" if state == "clean" else "DIRTY"), str(info))
+            require(info["version"] == ("1" if version == "4-log1" else "2") and
+                    info["legacy"] == "0" and info["checksummed"] == "1", str(info))
         for row in refs:
             if row["type"] != "file":
                 continue

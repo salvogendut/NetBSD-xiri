@@ -22,6 +22,14 @@ The journal must contain a complete clean unmount record;
 dirty, ambiguous, malformed and unsupported journals are rejected.
 There is no journal replay or write support.
 .Pp
+Internal v1 and v2 journals are supported, including IRIX-style v1 headers
+without a filesystem UUID or checksum.
+V1 records undergo geometry, cycle, LSN and operation-layout checks;
+records without checksums cannot provide checksum-based corruption detection.
+A dirty IRIX journal requires recovery before this server can mount it.
+Only extracted regular filesystem images are accepted; SGI partition discovery
+and direct disk-device access are not implemented.
+.Pp
 The mount is always read-only, nodev, nosuid and noatime.
 The only accepted mount option is
 .Cm ro .

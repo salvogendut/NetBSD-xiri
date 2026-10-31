@@ -10,6 +10,7 @@
 #include "xfs_compat.h"
 
 #define XLOG_HEADER_MAGIC_NUM 0xfeedbabeU
+#define XLOG_VERSION_1 1
 #define XLOG_VERSION_2 2
 #define XLOG_MIN_RECORD_BSIZE (16 * 1024)
 #define XLOG_BIG_RECORD_BSIZE (32 * 1024)
@@ -20,6 +21,7 @@
 #define XFS_LOG 0xaa
 #define XLOG_UNMOUNT_TYPE 0x556e
 #define XLOG_UNMOUNT_TRANS 0x20
+#define XLOG_FMT_UNKNOWN 0
 #define XLOG_FMT_LINUX_LE 1
 #define XLOG_FMT_LINUX_BE 2
 #define XLOG_FMT_IRIX_BE 3
