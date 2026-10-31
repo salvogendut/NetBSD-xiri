@@ -24,7 +24,11 @@ mounting, opens the image read-only, and forces read-only/nodev/nosuid/noatime.
 There is no journal bypass or write path. Verified inline and external user attributes
 and the root directory's trusted xfs:autofsck property are supported. The
 property accepts none, check, optimize and repair, and is exposed as metadata
-without triggering any maintenance. Inodes with ACLs, security labels,
+without triggering any maintenance. POSIX access ACLs are enforced for
+owner, named-user, owning-group, named-group, mask and other entries.
+Directory default ACLs are validated and exposed as inheritance metadata;
+they do not grant or restrict access to the existing directory. Inodes with
+malformed/inconsistent ACLs, security labels,
 unknown trusted attributes, parent pointers, or incomplete attribute updates
 are rejected. Do not remove security attributes from user images to
 make them mountable.
@@ -49,19 +53,28 @@ binary values, truncated reads and both list delimiter formats are supported.
 Names are not prefixed or aliased: use "fixture" in the user namespace and
 "xfs:autofsck" in the system namespace. Linux user./trusted. name-prefix
 translation is not implemented. Missing names on accepted inodes return ENODATA.
+SGI_ACL_FILE and SGI_ACL_DEFAULT expose the original XFS ACL bytes in the
+privileged system namespace. Native ACL manipulation APIs and Linux ACL
+xattr-name translation are not implemented. IDs are interpreted numerically,
+without Linux user-namespace or mount-idmap translation.
 External leaf/node trees, attribute bmap trees and remote values up to 64 KiB
 are supported. The complete attribute set must fit the server's 8 MiB shared
 verification workspace, including block and name indexes. Larger sets fail
 with EMSGSIZE in the reader (EIO at the PUFFS boundary). Enumeration order
 is unspecified.
 
-Build and use libpuffs from this checkout: its dispatcher now reserves reply
-space for GETEXTATTR/LISTEXTATTR. The unpatched NetBSD 11.0 library can overrun
-its request buffer on large attributes. The native regression suite tests
-64 KiB values and 800-name lists through the corrected library.
+Build and use libpuffs from this checkout: its dispatcher reserves reply
+space for GETEXTATTR/LISTEXTATTR and translates kernel access modes into the
+public PUFFS_VREAD/VWRITE/VEXEC flags. The unpatched NetBSD 11.0 library can
+overrun its request buffer on large attributes and pass incorrect access bits
+to callbacks. The native regression suite tests 64 KiB values, 800-name lists
+and access(2) permission decisions through the corrected library.
 
 Callbacks are serialized, use synchronous pread, and never yield while using
 shared scratch. Name/page caches are disabled and attribute TTLs remain zero.
+Each node retains a private copy of its verified access ACL (at most 64 KiB),
+freed with the inode. File access, directory search and user-attribute checks
+use this ACL; existing descriptors retain read access across credential changes.
 Memory mapping and execution from the mount are unsupported. An advisory
 shared image lock is supplemental: callers must keep the image quiescent.
 Detected size/mtime/ctime changes permanently fail service with ESTALE;
@@ -114,8 +127,19 @@ rejected. Parent pointers and incomplete entries remain unsupported.
 Callback pointers are valid only during the callback: remote staging is reused.
 xfs_attrs_check_readonly applies the separate mount policy to every attribute
 before the adapter publishes an inode. An allowed property cannot conceal an
-unsupported ACL or a malformed later entry. The raw inode/path inspector
+unsupported security attribute or a malformed later entry. The raw inode/path inspector
 does not call this policy and is still not an access-control boundary.
+
+xfs_acl_validate checks the big-endian ACL count and fixed-size entries,
+required tags/order, unique named IDs, valid rwx bits, mask presence and
+inode-type compatibility. Access ACLs must agree with owner/mask-or-group/other
+mode bits. V4 permits 25 entries; v5 permits 5461 (64 KiB). Unused IDs and
+padding are ignored, and unsorted named IDs are accepted. xfs_acl_permission
+requires a previously validated immutable value. Owner and named-user entries
+take precedence; named users and groups are masked. A matching group class
+cannot fall back to other, and partial grants from separate groups are not
+combined to satisfy one request. PUFFS retains its privileged credential rules
+and returns EROFS for writes. Permission checking performs no I/O or allocation.
 
 xfs_read_file reads regular files through inline extents or multi-level
 bmap trees and reads local and remote symlink targets. It returns zeros for
@@ -254,7 +278,7 @@ forks, all flag combinations, truncation, duplicate names, binary/empty values,
 255-byte names/values, 255-entry lists in 2 KiB inodes, callback failures,
 and rejection before callbacks when a later entry is malformed. It also tests
 the root-property allowlist, inode identity/type, mixed allowed/denied
-attributes, and explicit rejection of ACLs, security labels and parent pointers.
+attributes, and explicit rejection of malformed ACLs, security labels and parent pointers.
 The external suite adds 1,146 checks for v4/v5 leaves, maximum-depth node
 trees, sparse attribute bmaps, all flag combinations, 64 KiB remote values,
 duplicate names, overlap/identity/checksum corruption, workspace boundaries,
@@ -263,10 +287,18 @@ when a later leaf or remote block is malformed.
 
 Six additional xfsprogs attribute images cover v4/v5 at 1/4/64 KiB block
 sizes, leaf splits/deletion holes, node traversal, 102 attributes with local
-and remote values, and external ACL rejection. Whole-image hashes verify
+and remote values, and malformed external ACL rejection. Whole-image hashes verify
 read-only behavior. A separate metadata-UUID change test uses the inspector's
 explicit --raw mode after xfs_admin resets the log; other attribute image
 reads use the clean-journal guard.
+
+The ACL suite adds 329,048 checks across v4/v5: full permission/mask and group
+membership combinations, owner/named-user precedence, no other fallback,
+complete-request group grants, maximum entry counts, unaligned bytes, malformed
+tags/counts/permissions, duplicate and unsorted IDs, required masks, mode
+consistency and directory-only default ACLs. Two further image fixtures exercise
+inline/leaf/remote ACLs, a 64 KiB ACL, default ACL metadata and rejection of
+inconsistent ACLs or a security label accompanying a valid ACL.
 
 The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
 and xfs_db, plus xfs_logprint and xfs_admin). It creates six disposable
@@ -302,7 +334,7 @@ explicit raw inspection and a synthetic wrapped record in a mkfs image.
 No journal fixture was captured from a running Linux mount yet; ordinary
 noninitial records and crash cases currently use synthetic data.
 
-The third compiles all fifteen port files, the CLI, PUFFS server and native
+The third compiles all sixteen port files, the CLI, PUFFS server and native
 test client with this checkout's
 NetBSD amd64 user-space headers and no host headers. It needs an amd64
 compiler. This verifies header/layout compatibility, not linking or running
@@ -325,6 +357,7 @@ To build a persistent image inspector on NetBSD or Linux:
         "$xfs_src/netbsd/xfs_read_inode.c" "$xfs_src/netbsd/xfs_read_file.c" \
         "$xfs_src/netbsd/xfs_inode_stat.c" "$xfs_src/netbsd/xfs_read_attr.c" \
         "$xfs_src/netbsd/xfs_read_attr_external.c" \
+        "$xfs_src/netbsd/xfs_read_acl.c" \
         "$xfs_src/netbsd/xfs_read_symlink.c" \
         "$xfs_src/netbsd/xfs_read_directory.c" "$xfs_src/netbsd/xfs_lookup_path.c" \
         "$xfs_src/tests/xfs_probe.c" \
@@ -373,10 +406,12 @@ Create fixtures on a host with Python 3.11+ and xfsprogs (tested with 7.1.1):
 
 The destination must be new. This creates v4/v5 images with the default
 autofsck property, readable inline/external user attributes, 64 KiB remote
-values and an 800-name list. Rejection cases cover inline/external ACLs,
-security labels, unknown trusted attributes and non-root properties. Other inodes
+values and an 800-name list. ACL cases include inline/external access ACLs,
+maximum-size v4/v5 ACLs, masked permissions, directory search and default ACLs.
+Rejection cases cover malformed/inconsistent ACLs, security labels (also with
+a valid ACL), unknown trusted attributes and non-root properties. Other inodes
 have malformed shortform attributes with valid CRCs. Four startup rejection
-images cover root ACLs, unknown trusted attributes, malformed attributes and
+images cover malformed root ACLs, unknown trusted attributes, malformed attributes and
 a bad journal. Only these disposable fixtures have inherited prototype
 SELinux labels removed; selected files receive explicit rejection fixtures.
 The root property is temporarily removed to add a synthetic hard link, then
@@ -394,6 +429,11 @@ permissions, directory search, inherited descriptors, hard-link lock identity,
 It checks native attribute sizes/values, empty and binary data, both list
 formats, 64 KiB remote values, 800-name lists, partial buffers, descriptor
 operations, permission checks, and attribute/ACL rejection on lookup and at startup.
+Ten credential/group configurations check ACL grants and denials through
+open/access/search and user attributes, including supplementary groups, masked
+named users, matching-group denial, root behavior and inherited descriptors.
+Default ACLs do not restrict access to existing children. ACL changes remain
+read-only errors, and raw ACL metadata uses the privileged system namespace.
 It checks read-only errors, busy/ordinary/signal unmounts, persistent ESTALE
 after a deliberate image timestamp change, startup refusal and unchanged
 whole-image SHA256 hashes. Use disposable fixtures only: their mtime changes.
@@ -411,8 +451,9 @@ remain untested.
 Remaining milestones
 --------------------
 
-1. Interpret ACL/security semantics explicitly,
-   so ordinary labelled images can be served without weakening permissions.
+1. Define and implement security-label policy explicitly before accepting
+   labelled images. POSIX access/default ACLs are supported; SELinux and other
+   security namespaces remain rejected.
    Expand runtime coverage for abrupt server death, parallel clients and
    node reclamation under memory pressure. Add bounded caching only with
    explicit consistency and lifetime contracts.

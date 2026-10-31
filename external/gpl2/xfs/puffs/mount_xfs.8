@@ -39,7 +39,14 @@ directory's trusted
 .Li xfs:autofsck
 property with values none, check, optimize or repair.
 The property triggers no maintenance operations.
-Inodes with ACLs, security labels, unknown trusted attributes, parent pointers
+POSIX access ACLs are enforced using the caller's numeric UID and groups.
+Owner and named-user entries take precedence; named users and groups are
+limited by the ACL mask.
+A matching entry cannot fall back to the other class after denial.
+Directory default ACLs are validated as inheritance metadata and do not
+control access to an existing directory.
+Inodes with malformed or mode-inconsistent ACLs, security labels,
+unknown trusted attributes, parent pointers
 or incomplete attribute updates are rejected.
 External leaf and node trees, attribute bmap trees and remote values up to
 65536 bytes are supported within an 8 MiB verification workspace.
@@ -58,8 +65,15 @@ privileged credentials, including for descriptor operations.
 Empty/binary values, size queries, truncated reads and both list delimiter
 formats are supported.
 Linux-style user./trusted. name-prefix translation is not provided.
-This server requires libpuffs with the GETEXTATTR/LISTEXTATTR reply-buffer
-allocation fix included in this source tree.
+Raw
+.Li SGI_ACL_FILE
+and
+.Li SGI_ACL_DEFAULT
+values are available in the privileged system namespace.
+Native ACL manipulation, inheritance on creation and Linux ID mappings are
+not implemented.
+This server requires libpuffs with the attribute reply-buffer allocation
+and access-mode translation fixes included in this source tree.
 .Pp
 The backing file is opened read-only and held under an advisory shared lock.
 It must remain unchanged for the entire mount.
@@ -70,6 +84,7 @@ This detection and the advisory lock do not provide snapshot isolation.
 .Pp
 The initial server uses synchronous reads and disables PUFFS name, attribute
 and page caches.
+Verified access ACLs are retained with each immutable inode.
 Memory mapping and execution of files from this mount are unsupported.
 Directory listing and lookup scan directory data linearly.
 Directory offsets are stable entry ordinals on the immutable image.

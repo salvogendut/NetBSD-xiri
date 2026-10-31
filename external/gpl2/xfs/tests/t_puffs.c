@@ -153,13 +153,13 @@ attributes(void)
 	CHECK(close(fd) == 0);
 	CHECK(extattr_list_file("hello", EXTATTR_NAMESPACE_USER, NULL, 0) == 0);
 	FAILS(extattr_get_file("hello", EXTATTR_NAMESPACE_USER, "absent", NULL, 0), ENODATA);
-	FAILS(stat("attributes/acl", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/acl", &st), EIO);
 	FAILS(stat("attributes/label", &st), EOPNOTSUPP);
 	FAILS(stat("attributes/trusted", &st), EOPNOTSUPP);
 	FAILS(stat("attributes/foreign", &st), EOPNOTSUPP);
 	external_attributes();
 	large_attribute_list();
-	FAILS(stat("attributes/external-acl", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/external-acl", &st), EIO);
 	FAILS(stat("attributes/external-label", &st), EOPNOTSUPP);
 	FAILS(stat("attributes/bad", &st), EIO);
 	FAILS(stat("attributes/duplicate", &st), EIO);
@@ -180,6 +180,80 @@ read_hello(const char *path, bool allowed)
 	CHECK(memcmp(data, hello, sizeof(hello) - 1) == 0);
 	CHECK(read(fd, data, sizeof(data)) == 0);
 	CHECK(close(fd) == 0);
+}
+
+static void
+acl_permissions(const char *version)
+{
+	static const struct {
+		uid_t uid;
+		gid_t gid, supplementary[2];
+		int ngroups;
+		bool read, masked, search, exec, combined;
+	} cases[] = {
+		{ 12, 34, {0, 0}, 0, true, true, true, false, false },
+		{ 99, 34, {0, 0}, 0, true, false, true, false, false },
+		{100, 77, {0, 0}, 0, false, false, false, false, false },
+		{101, 34, {0, 0}, 0, false, false, false, false, false },
+		{101, 77, {0, 0}, 0, true, false, true, false, false },
+		{101, 78, {0, 0}, 0, false, false, false, true, false },
+		{101, 99, {0, 0}, 0, true, true, true, false, false },
+		{101, 34, {77, 0}, 1, true, false, true, false, false },
+		{101, 99, {77, 78}, 2, true, false, true, true, false },
+		{  0, 34, {0, 0}, 0, true, true, true, true, true },
+	};
+	unsigned char data[65536];
+	unsigned int i;
+	int status, inherited;
+	struct stat st;
+	pid_t pid;
+	CHECK(stat("acls/access", &st) == 0 && (st.st_mode & 0777) == 0644);
+	CHECK(extattr_get_file("acls/access", EXTATTR_NAMESPACE_SYSTEM, "SGI_ACL_FILE", data, sizeof(data)) == 100);
+	CHECK(data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 8);
+	CHECK(extattr_get_file("acls/large", EXTATTR_NAMESPACE_SYSTEM, "SGI_ACL_FILE", data, sizeof(data)) ==
+	    (strcmp(version, "5") == 0 ? 65536 : 304));
+	CHECK(extattr_get_file("acls/defaults", EXTATTR_NAMESPACE_SYSTEM, "SGI_ACL_DEFAULT", NULL, 0) == 100);
+	FAILS(stat("acls/mismatch", &st), EIO);
+	FAILS(stat("acls/default-file", &st), EIO);
+	FAILS(stat("acls/label", &st), EOPNOTSUPP); /* a valid ACL cannot hide a label */
+	FAILS(extattr_set_file("acls/access", EXTATTR_NAMESPACE_SYSTEM, "SGI_ACL_FILE", data, 100), EROFS);
+	FAILS(extattr_delete_file("acls/access", EXTATTR_NAMESPACE_SYSTEM, "SGI_ACL_FILE"), EROFS);
+	FAILS(access("acls/access", X_OK), EACCES); /* root still needs an execute bit */
+	inherited = open("acls/access", O_RDONLY);
+	CHECK(inherited >= 0);
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		pid = fork(); CHECK(pid != -1);
+		if (pid == 0) {
+			CHECK(setgroups(cases[i].ngroups, cases[i].supplementary) == 0);
+			CHECK(setgid(cases[i].gid) == 0);
+			CHECK(setuid(cases[i].uid) == 0);
+			read_hello("acls/access", cases[i].read);
+			read_hello("acls/external", cases[i].read);
+			read_hello("acls/large", cases[i].read);
+			read_hello("acls/masked", cases[i].masked);
+			read_hello("acls/search/file", cases[i].search);
+			read_hello("acls/defaults/file", true); /* inheritance metadata only */
+			read_attr("acls/access", cases[i].read);
+			read_attr("acls/external", cases[i].read);
+			read_attr("acls/large", cases[i].read);
+			if (cases[i].read) CHECK(access("acls/access", R_OK) == 0);
+			else FAILS(access("acls/access", R_OK), EACCES);
+			if (cases[i].exec) CHECK(access("acls/execute", X_OK) == 0);
+			else FAILS(access("acls/execute", X_OK), EACCES);
+			if (cases[i].combined) CHECK(access("acls/execute", R_OK | X_OK) == 0);
+			else FAILS(access("acls/execute", R_OK | X_OK), EACCES);
+			FAILS(access("acls/access", W_OK), EROFS);
+			CHECK(pread(inherited, data, sizeof(data), 0) == sizeof(hello) - 1);
+			if (cases[i].read) CHECK(extattr_get_fd(inherited, EXTATTR_NAMESPACE_USER, "fixture", data, sizeof(data)) == 9);
+			else FAILS(extattr_get_fd(inherited, EXTATTR_NAMESPACE_USER, "fixture", data, sizeof(data)), EACCES);
+			if (cases[i].uid != 0)
+				FAILS(extattr_get_file("acls/access", EXTATTR_NAMESPACE_SYSTEM, "SGI_ACL_FILE", data, sizeof(data)), EPERM);
+			_exit(0);
+		}
+		CHECK(waitpid(pid, &status, 0) == pid);
+		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	}
+	CHECK(close(inherited) == 0);
 }
 
 static void
@@ -352,6 +426,7 @@ main(int argc, char **argv)
 	permissions(12, 34, true, true);
 	permissions(99, 34, false, true);
 	permissions(99, 99, false, false);
+	acl_permissions(argv[2]);
 	directories();
 	CHECK(statvfs(".", &vfs) == 0);
 	CHECK((vfs.f_flag & (ST_RDONLY | ST_NOSUID | ST_NODEV)) == (ST_RDONLY | ST_NOSUID | ST_NODEV));

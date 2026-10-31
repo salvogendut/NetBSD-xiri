@@ -183,14 +183,14 @@ main(void)
 		check_attrs(0, 1, EOPNOTSUPP);
 		reset_attrs(v, true);
 		add_attr(XFS_ATTR_ROOT, "SGI_ACL_FILE", 12, binary, sizeof(binary));
-		check_attrs(0, 1, EOPNOTSUPP);
+		check_attrs(0, 1, EINVAL);
 		reset_attrs(v, true);
 		add_attr(XFS_ATTR_SECURE, "selinux", 7, binary, sizeof(binary));
 		check_attrs(0, 1, EOPNOTSUPP);
 		reset_attrs(v, true);
 		add_attr(XFS_ATTR_ROOT, "xfs:autofsck", 12, "repair", 6);
 		add_attr(XFS_ATTR_ROOT, "SGI_ACL_DEFAULT", 15, binary, sizeof(binary));
-		check_attrs(0, 2, EOPNOTSUPP); /* no early success on the property */
+		check_attrs(0, 2, EINVAL); /* no early success on the property */
 		reset_attrs(v, false);
 		add_attr(0, "SGI_ACL_FILE", 12, binary, sizeof(binary));
 		check_attrs(0, 1, 0); /* namespace, not just spelling, defines ACLs */

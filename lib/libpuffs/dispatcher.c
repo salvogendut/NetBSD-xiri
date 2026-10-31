@@ -451,14 +451,29 @@ dispatch(struct puffs_cc *pcc)
 		{
 			struct puffs_vnmsg_access *auxt = auxbuf;
 			PUFFS_MAKECRED(pcr, &auxt->pvnr_cred);
+			int mode = 0;
 
 			if (pops->puffs_node_access == NULL) {
 				error = 0;
 				break;
 			}
 
+			/* The wire carries NetBSD accmode_t bits (VREAD/VWRITE/
+			 * VEXEC, equal to the owner mode bits). The public PUFFS
+			 * callback constants are 4/2/1. Do not silently ignore
+			 * unrepresentable access rights. */
+			if (auxt->pvnr_mode & ~(S_IRUSR | S_IWUSR | S_IXUSR)) {
+				error = EOPNOTSUPP;
+				break;
+			}
+			if (auxt->pvnr_mode & S_IRUSR)
+				mode |= PUFFS_VREAD;
+			if (auxt->pvnr_mode & S_IWUSR)
+				mode |= PUFFS_VWRITE;
+			if (auxt->pvnr_mode & S_IXUSR)
+				mode |= PUFFS_VEXEC;
 			error = pops->puffs_node_access(pu,
-			    opcookie, auxt->pvnr_mode, pcr);
+			    opcookie, mode, pcr);
 			break;
 		}
 

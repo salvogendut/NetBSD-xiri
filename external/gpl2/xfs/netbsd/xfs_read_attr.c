@@ -8,6 +8,7 @@
 /* Bounded adaptation of xfs_attr_shortform_verify in xfs_attr_leaf.c. */
 #include "xfs_read_internal.h"
 #include "xfs_attr.h"
+#include "xfs_acl.h"
 
 int
 xfs_read_attrs(const struct xfs_reader *reader, const struct xfs_inode_image *inode,
@@ -97,6 +98,9 @@ xfs_read_attrs(const struct xfs_reader *reader, const struct xfs_inode_image *in
 }
 
 struct attr_policy {
+	const struct xfs_reader *reader;
+	const struct xfs_inode_image *inode;
+	int acl_error;
 	bool root;
 	bool unsupported;
 };
@@ -110,6 +114,14 @@ check_readonly(void *cookie, uint8_t flags, const uint8_t *name, size_t namelen,
 	unsigned int i;
 	if (flags == 0)
 		return 0;
+	if (flags == XFS_ATTR_ROOT &&
+	    ((namelen == SGI_ACL_FILE_SIZE && memcmp(name, SGI_ACL_FILE, namelen) == 0) ||
+	    (namelen == SGI_ACL_DEFAULT_SIZE && memcmp(name, SGI_ACL_DEFAULT, namelen) == 0))) {
+		int error = xfs_acl_validate(&policy->reader->sb, value, valuelen,
+		    policy->inode->mode, namelen == SGI_ACL_DEFAULT_SIZE, NULL);
+		if (error != 0) policy->acl_error = error;
+		return 0;
+	}
 	if (policy->root && flags == XFS_ATTR_ROOT &&
 	    namelen == sizeof("xfs:autofsck") - 1 &&
 	    memcmp(name, "xfs:autofsck", namelen) == 0) {
@@ -126,13 +138,15 @@ xfs_attrs_check_readonly(const struct xfs_reader *reader,
     const struct xfs_inode_image *inode, void *workspace, size_t capacity,
     const char **why)
 {
-	struct attr_policy policy = { 0 };
+	struct attr_policy policy = { .reader = reader, .inode = inode };
 	int error;
 	if (reader != NULL && inode != NULL)
 		policy.root = inode->number == reader->sb.sb_rootino && S_ISDIR(inode->mode);
 	error = xfs_read_attrs(reader, inode, workspace, capacity, check_readonly, &policy, why);
+	if (error == 0 && policy.acl_error != 0)
+		return xfs_read_fail(why, policy.acl_error, "malformed or inconsistent POSIX ACL");
 	if (error == 0 && policy.unsupported)
 		return xfs_read_fail(why, EOPNOTSUPP,
-		    "ACL, security or unrecognized trusted attribute is unsupported");
+		    "security or unrecognized trusted attribute is unsupported");
 	return error;
 }

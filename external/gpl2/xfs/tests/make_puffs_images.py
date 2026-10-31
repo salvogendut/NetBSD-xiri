@@ -12,6 +12,76 @@ import sys
 from test_images import metadata_crc, require, run, values
 
 
+def encode_acl(entries):
+    return struct.pack(">I", len(entries)) + b"".join(
+        struct.pack(">IIHH", tag, identity, perm, 0) for tag, identity, perm in entries)
+
+
+def replace_attribute(image, ino, sb, version, name, value):
+    """Replace a fixture value of identical length, preserving block CRCs.
+
+    xfs_db allocates the actual shortform/leaf/remote storage first. This
+    helper only injects binary test data; it is not a filesystem writer.
+    """
+    bs = sb['blocksize']
+    def address(fsb):
+        return ((fsb >> sb['agblklog']) * sb['agblocks'] +
+                (fsb & ((1 << sb['agblklog']) - 1))) * bs
+    offset = address(ino >> sb['inopblog']) + (ino & ((1 << sb['inopblog']) - 1)) * sb['inodesize']
+    with image.open('r+b') as f:
+        f.seek(offset)
+        inode = bytearray(f.read(sb['inodesize']))
+        core = 176 if version == 5 else 100
+        start = core + inode[82] * 8
+        if inode[83] == 1:
+            cursor = start + 4
+            for _ in range(inode[start + 2]):
+                nl, vl, flags = inode[cursor:cursor + 3]
+                if flags == 2 and inode[cursor + 3:cursor + 3 + nl] == name:
+                    require(vl == len(value), "inline replacement length")
+                    inode[cursor + 3 + nl:cursor + 3 + nl + vl] = value
+                    if version == 5: metadata_crc(inode, 100)
+                    f.seek(offset); f.write(inode)
+                    return 'inline'
+                cursor += 3 + nl + vl
+        mappings = run('xfs_db', '-r', '-c', f'inode {ino}', '-c', 'bmap -a', str(image))
+        blocks = {}
+        for start, fsb, length in re.findall(r'attr offset (\d+) startblock (\d+) \([^)]*\) count (\d+)', mappings):
+            blocks.update({int(start) + i: address(int(fsb) + i) for i in range(int(length))})
+        for where in blocks.values():
+            f.seek(where)
+            data = bytearray(f.read(bs))
+            if struct.unpack_from('>H', data, 8)[0] != (0x3bee if version == 5 else 0xfbee):
+                continue
+            info, header = (56, 80) if version == 5 else (12, 32)
+            for i in range(struct.unpack_from('>H', data, info)[0]):
+                idx, flags = struct.unpack_from('>HB', data, header + i * 8 + 4)
+                if flags & 14 != 2: continue
+                if flags & 1:
+                    vl, nl = struct.unpack_from('>HB', data, idx)
+                    at = idx + 3
+                else:
+                    logical, vl, nl = struct.unpack_from('>IIB', data, idx)
+                    at = idx + 9
+                if data[at:at + nl] != name: continue
+                require(vl == len(value), 'external replacement length')
+                if flags & 1:
+                    data[at + nl:at + nl + vl] = value
+                    if version == 5: metadata_crc(data, 12)
+                    f.seek(where); f.write(data)
+                    return 'leaf'
+                done, h = 0, 56 if version == 5 else 0
+                while done < vl:
+                    part = min(vl - done, bs - h)
+                    f.seek(blocks[logical]); remote = bytearray(f.read(bs))
+                    remote[h:h + part] = value[done:done + part]
+                    if version == 5: metadata_crc(remote, 12)
+                    f.seek(blocks[logical]); f.write(remote)
+                    done += part; logical += 1
+                return 'remote'
+    raise RuntimeError(f'attribute {name!r} not found in fixture inode {ino}')
+
+
 def external_attributes(image, ino):
     """Use xfsprogs to build a node tree and two remote values."""
     commands = [f"inode {ino}", "attr_set -u big " + "B" * 8192,
@@ -41,6 +111,12 @@ def main():
           ("user", "acl", "label", "trusted", "foreign", "external", "external-list", "external-acl",
            "external-label", "bad", "duplicate", "incomplete")),
         "$",
+        "acls d--755 12 34",
+        *(f"{name} ---{mode} 12 34 {root / 'hello'}" for name, mode in
+          (("access", "644"), ("external", "644"), ("large", "644"), ("label", "644"),
+           ("masked", "604"), ("execute", "654"), ("mismatch", "640"), ("default-file", "644"))),
+        "search d--755 12 34", f"file ---644 12 34 {root / 'hello'}", "$",
+        "defaults d--755 12 34", f"file ---644 12 34 {root / 'hello'}", "$", "$",
         "link l--777 12 34 hello",
         "longlink l--777 12 34 " + "/" * 990,
         "locked d--700 12 34", f"file ---644 12 34 {root / 'hello'}", "$",
@@ -69,12 +145,43 @@ def main():
         if "security.selinux" in os.listxattr(root / "hello"):
             commands = []
             for name, number in names.items():
-                if name in ("hello", "public", "private", "locked/file") or name.startswith("many/f") or (name.startswith("attributes/") and not name.endswith("/.")):
+                if name in ("hello", "public", "private", "locked/file") or name.startswith("many/f") or (name.startswith(("attributes/", "acls/")) and not name.endswith("/.")):
                     commands.extend((f"inode {number}", "attr_remove -s selinux"))
             subprocess.run(["xfs_db", "-x", str(image)], input="\n".join(commands) + "\n",
                            text=True, capture_output=True, check=True)
         def attr(path, command):
             run("xfs_db", "-x", "-c", f"inode {names[path]}", "-c", command, str(image))
+
+        # Numeric tags follow the disk format: owner, named users, owning
+        # group, named groups, mask, other. No setfacl or host mount is used.
+        entries = [(1, 0xffffffff, 6), (2, 99, 4), (2, 100, 0), (4, 0xffffffff, 0),
+                   (8, 77, 4), (8, 78, 2), (16, 0xffffffff, 4), (32, 0xffffffff, 4)]
+        acl_values = {}
+        for path in ('access', 'external', 'large', 'label', 'masked', 'execute', 'mismatch', 'default-file', 'search/.', 'defaults/.'):
+            current = list(entries)
+            if path == 'masked': current[-2] = (16, 0xffffffff, 0)
+            if path == 'execute':
+                current[-3] = (8, 78, 1)
+                current[-2] = (16, 0xffffffff, 5)
+            if path == 'search/.':
+                current[0] = (1, 0xffffffff, 7)
+                current[1] = (2, 99, 5)
+                current[4] = (8, 77, 5)
+                current[-2] = (16, 0xffffffff, 5)
+                current[-1] = (32, 0xffffffff, 5)
+            if path == 'large':
+                current[3:3] = [(2, i, 0) for i in range(1000, 1000 + (5453 if version == 5 else 17))]
+            name = 'SGI_ACL_DEFAULT' if path in ('defaults/.', 'default-file') else 'SGI_ACL_FILE'
+            value = encode_acl(current)
+            attr('acls/' + path, f'attr_set -r -v {len(value)} {name}')
+            storage = replace_attribute(image, names['acls/' + path], sb, version, name.encode(), value)
+            if path == 'large' and version == 5: require(storage == 'remote', 'large ACL must be remote')
+            acl_values[path] = value.hex()
+        for path in ('access', 'external', 'large', 'masked'):
+            attr('acls/' + path, 'attr_set -u fixture supported')
+        attr('acls/external', 'attr_set -u big ' + 'B' * 8192)
+        attr('acls/label', 'attr_set -s selinux denied')
+        (root / f'v{version}-acls.json').write_text(json.dumps(acl_values) + '\n')
 
         for path in ("attributes/user", "private"):
             attr(path, "attr_set -u fixture supported")

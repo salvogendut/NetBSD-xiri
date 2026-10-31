@@ -86,8 +86,8 @@ def main():
                     f.seek(where); f.write(original)
                 run("xfs_db", "-x", "-c", f"inode {ino}", "-c", "attr_set -r SGI_ACL_FILE denied", str(image))
                 result = subprocess.run([probe, "-X", "/file", str(image)], capture_output=True)
-                require(result.returncode == 1 and not result.stdout and b"unsupported" in result.stderr,
-                        "external ACL was accepted")
+                require(result.returncode == 1 and not result.stdout and b"ACL" in result.stderr,
+                        "malformed external ACL was accepted")
                 commands = [f"inode {ino}", "attr_remove -r SGI_ACL_FILE"]
                 commands += [f"attr_remove -u n{i:03d}" for i in range(0, 100, 2)]
                 subprocess.run(["xfs_db", "-x", str(image)], input="\n".join(commands) + "\n",

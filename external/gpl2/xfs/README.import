@@ -38,11 +38,12 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_attr_leaf.c
     xfs_attr_remote.c
 
-dist/xfs_dir2_readdir.c, dist/xfs_log.c and dist/xfs_log_recover.c come from
+dist/xfs_dir2_readdir.c, dist/xfs_log.c, dist/xfs_log_recover.c and xfs_acl.c come from
 fs/xfs/ (outside libxfs/) at that commit.
+dist/posix_acl.c comes from fs/posix_acl.c at the same commit.
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these twenty-eight upstream files. Verify them with
+SHA256 records the hashes of these thirty upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
@@ -178,13 +179,40 @@ Pointers passed to callbacks are valid only during that callback; a remote
 value reuses staging space. Enumeration order is unspecified. The checks do
 not establish global allocation ownership or validate LSNs against the log.
 
-The separate xfs_attrs_check_readonly policy accepts user attributes and only
-the root directory's trusted xfs:autofsck property with values none, check,
-optimize or repair. It rejects ACLs, security attributes, unknown trusted
+The separate xfs_attrs_check_readonly policy accepts user attributes, valid
+POSIX access/default ACLs, and the root directory's trusted xfs:autofsck
+property with values none, check, optimize or repair. It rejects malformed or
+inconsistent ACLs, security attributes, unknown trusted
 attributes, unknown property values, and the same property on other inodes.
 The property is exposed as metadata; it triggers no scanning or repair.
 Its layout/meaning follows the XFS filesystem-property documentation:
 https://kernel.googlesource.com/pub/scm/fs/xfs/xfs-documentation/+/master/design/XFS_Filesystem_Structure/fs_properties.asciidoc
+
+netbsd/xfs_read_acl.c adapts xfs_acl_from_disk from fs/xfs/xfs_acl.c and
+posix_acl_valid, posix_acl_equiv_mode and posix_acl_permission from fs/posix_acl.c.
+It reads the XFS big-endian count and 12-byte entries without allocation or
+unaligned dereferences. The v4 limit is 25 entries; v5 allows 5461 (64 KiB).
+It requires the exact value size, valid full-width tags, owner/group/other
+entries in order, a mask for named entries, permission bits within rwx,
+unique named IDs and no undefined named ID. Unused IDs and padding are ignored.
+Unsorted named IDs are accepted; duplicate detection uses a bounded scan
+only when an ID does not exceed the previous maximum. Access ACL mode bits
+must agree with inode owner/mask-or-group/other bits. Default ACLs are allowed
+only on directories and do not control existing directory access.
+
+Permission checks preserve upstream owner/named-user precedence, masking,
+matching-group denial without other fallback, and the requirement that one
+matching group grant the complete request. Numeric IDs have no Linux idmap
+or user-namespace translation. PUFFS handles privileged credentials with its
+existing root/kernel rules and rejects writes on the read-only mount.
+An accepted access ACL is copied into per-node storage and freed with the
+immutable inode, including all node-creation failure paths. No pointers into
+attribute scratch survive a callback. Search, access, open and user-attribute
+checks use the ACL. Existing file descriptors retain read access after a
+credential change; user-attribute requests recheck current credentials.
+ACLs are exposed as raw SGI_ACL_FILE/SGI_ACL_DEFAULT system attributes to
+privileged callers; this does not implement a native ACL manipulation API,
+inheritance/writes or Linux security-label policy.
 
 netbsd/xfs_read_btree.c adapts xfs_btree_{agblock,fsblock}_v5hdr_verify,
 xfs_btree_{agblock,fsblock}_verify, xfs_inobt_verify and xfs_bmbt_verify.
@@ -270,10 +298,14 @@ operation/error handling using NetBSD's public libpuffs API. getextattr and
 listextattr expose raw names through NetBSD's user/system namespaces, checking
 file read permissions for user attributes and privileged credentials for
 system attributes. There is no Linux-style name-prefix translation.
-The accompanying BSD-licensed lib/libpuffs/dispatcher.c change reserves
+The accompanying BSD-licensed lib/libpuffs/dispatcher.c changes reserve
 reply capacity for GETEXTATTR/LISTEXTATTR, matching READ/READDIR. Without it,
 large attribute callbacks can overrun the received header-sized frame. This
-is a libpuffs allocation fix; no GPL code is incorporated into libpuffs.
+is a libpuffs allocation fix. The dispatcher also translates the kernel's
+0400/0200/0100 access bits into the documented PUFFS_VREAD/VWRITE/VEXEC
+callback values (4/2/1), rejecting unrepresentable rights. This fixes native
+access(2) decisions without changing callback constants or the wire protocol.
+No GPL code is incorporated into libpuffs.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
 No SGI/Linux code has been relicensed as BSD code. This directory is not wired

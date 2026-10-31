@@ -27,9 +27,11 @@ typedef int (*xfs_attr_emit_fn)(void *, uint8_t, const uint8_t *, size_t,
 int xfs_read_attrs(const struct xfs_reader *, const struct xfs_inode_image *,
     void *, size_t, xfs_attr_emit_fn, void *, const char **);
 
-/* Mount policy, separate from structural decoding: permit user attributes
- * and known root-directory xfs:autofsck values only. Reject ACLs, security
- * labels and unknown trusted attributes before making a node accessible.
+/* Mount policy, separate from structural decoding: permit user attributes,
+ * valid POSIX ACLs and known root-directory xfs:autofsck values. The caller
+ * MUST enforce access ACLs using xfs_acl_permission; successful validation
+ * alone does not authorize access. Default ACLs are directory metadata only
+ * on a read-only mount. Reject security labels and unknown trusted attrs.
  */
 int xfs_attrs_check_readonly(const struct xfs_reader *,
     const struct xfs_inode_image *, void *, size_t, const char **);

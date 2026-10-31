@@ -82,8 +82,8 @@ for xfs_bad in root-attr root-acl root-bad-attr bad-log; do
 	fi
 	xfs_pid=
 	case $xfs_bad in
-	root-attr|root-acl) grep -q 'unrecognized trusted attribute' "$xfs_build/server.log" ;;
-	root-bad-attr) grep -q 'attribute' "$xfs_build/server.log" ;;
+	root-attr) grep -q 'unrecognized trusted attribute' "$xfs_build/server.log" ;;
+	root-bad-attr|root-acl) grep -q 'attribute\|ACL' "$xfs_build/server.log" ;;
 	bad-log) grep -q 'log\|journal' "$xfs_build/server.log" ;;
 	esac
 	cat "$xfs_build/server.log"

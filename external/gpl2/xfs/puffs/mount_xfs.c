@@ -20,6 +20,7 @@
 #include "xfs_directory.h"
 #include "xfs_log.h"
 #include "xfs_attr.h"
+#include "xfs_acl.h"
 
 #define NODE_BUCKETS 256
 #define MOUNT_FLAGS (MNT_RDONLY | MNT_NODEV | MNT_NOSUID | MNT_NOATIME)
@@ -28,6 +29,8 @@ struct xfs_node {
 	struct xfs_node *next;
 	struct puffs_node *pn;
 	struct xfs_inode_image inode;
+	uint8_t *acl;
+	size_t acl_length;
 };
 
 struct xfs_server {
@@ -87,6 +90,21 @@ io_error(int error)
 }
 
 static int
+save_access_acl(void *cookie, uint8_t flags, const uint8_t *name, size_t namelen,
+    const uint8_t *value, size_t length)
+{
+	struct xfs_node *node = cookie;
+	if (flags != XFS_ATTR_ROOT || namelen != SGI_ACL_FILE_SIZE ||
+	    memcmp(name, SGI_ACL_FILE, namelen) != 0)
+		return 0;
+	node->acl = malloc(length);
+	if (node->acl == NULL) return ENOMEM;
+	memcpy(node->acl, value, length);
+	node->acl_length = length;
+	return 0;
+}
+
+static int
 attributes(struct xfs_server *fs, struct xfs_node *node, struct vattr *va,
     const char **why)
 {
@@ -96,6 +114,12 @@ attributes(struct xfs_server *fs, struct xfs_node *node, struct vattr *va,
 		return error;
 	error = xfs_attrs_check_readonly(&fs->reader, &node->inode,
 	    fs->scratch, fs->capacity, why);
+	if (error != 0)
+		return error;
+	/* Retain only the verified access ACL, with the same lifetime as the
+	 * immutable inode. Remote callback storage is reused by the reader. */
+	error = xfs_read_attrs(&fs->reader, &node->inode, fs->scratch, fs->capacity,
+	    save_access_acl, node, why);
 	if (error != 0)
 		return error;
 	if (!S_ISREG(node->inode.mode) && !S_ISDIR(node->inode.mode) && !S_ISLNK(node->inode.mode)) {
@@ -174,11 +198,13 @@ get_node(struct puffs_usermount *pu, uint64_t ino, struct puffs_node **result,
 	if (error == 0)
 		error = attributes(fs, node, &va, why);
 	if (error != 0) {
+		free(node->acl);
 		free(node);
 		return error;
 	}
 	node->pn = puffs_pn_new(pu, node);
 	if (node->pn == NULL) {
+		free(node->acl);
 		free(node);
 		*why = "cannot allocate PUFFS node";
 		return ENOMEM;
@@ -191,16 +217,36 @@ get_node(struct puffs_usermount *pu, uint64_t ino, struct puffs_node **result,
 	return 0;
 }
 
+struct acl_cred { const struct puffs_cred *cred; };
+
+static bool
+acl_hasgroup(void *cookie, uint32_t gid)
+{
+	struct acl_cred *caller = cookie;
+	return puffs_cred_hasgroup(caller->cred, (gid_t)gid);
+}
+
 static int
 node_access(struct puffs_usermount *pu, puffs_cookie_t cookie, int mode,
     const struct puffs_cred *cred)
 {
 	struct puffs_node *pn = cookie;
+	struct xfs_node *node = pn->pn_data;
+	struct acl_cred caller = { cred };
+	uid_t uid;
 	int error = image_unchanged(puffs_getspecific(pu));
 	if (error != 0)
 		return error;
 	if (mode & PUFFS_VWRITE)
 		return EROFS;
+	if (node->acl != NULL && !puffs_cred_isjuggernaut(cred)) {
+		if ((mode & ~(PUFFS_VREAD | PUFFS_VWRITE | PUFFS_VEXEC)) ||
+		    puffs_cred_getuid(cred, &uid) == -1)
+			return EACCES;
+		return xfs_acl_permission(node->acl, node->acl_length,
+		    pn->pn_va.va_uid, pn->pn_va.va_gid, uid, acl_hasgroup, &caller,
+		    (unsigned int)mode);
+	}
 	return puffs_access(pn->pn_va.va_type, pn->pn_va.va_mode,
 	    pn->pn_va.va_uid, pn->pn_va.va_gid, mode, cred);
 }
@@ -522,6 +568,7 @@ free_node(struct xfs_server *fs, struct xfs_node *node)
 		link = &(*link)->next;
 	*link = node->next;
 	puffs_pn_put(node->pn);
+	free(node->acl);
 	free(node);
 }
 
