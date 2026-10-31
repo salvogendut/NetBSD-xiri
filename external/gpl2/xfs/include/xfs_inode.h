@@ -13,6 +13,25 @@ struct xfs_inode_image {
 	uint8_t disk[1U << XFS_DINODE_MAX_LOG];
 };
 
+struct xfs_inode_time {
+	int64_t seconds;
+	uint32_t nanoseconds;
+};
+struct xfs_inode_stat {
+	uint32_t uid, gid, nlink, generation;
+	uint64_t allocated_bytes, change_count;
+	struct xfs_inode_time atime, mtime, ctime, birthtime;
+	uint16_t flags; /* XFS_DIFLAG_*; translate explicitly for the host. */
+	bool has_birthtime, has_attributes;
+};
+
+/* Decode attributes of a verified inode. Reject invalid timestamps and
+ * allocation-byte overflow. Output is unchanged on failure. Attribute forks
+ * are reported, not interpreted; callers must not ignore ACL semantics.
+ */
+int xfs_inode_getattr(const struct xfs_reader *, const struct xfs_inode_image *,
+    struct xfs_inode_stat *, const char **);
+
 /*
  * Verify allocation in the inode btree, then read and verify the inode.
  * scratch must hold sb_blocksize bytes and must not overlap result.

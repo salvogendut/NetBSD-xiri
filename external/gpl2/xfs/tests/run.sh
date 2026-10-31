@@ -24,6 +24,7 @@ for program in t_probe t_io t_inode t_directory t_log xfs_probe; do
 	    "$xfs_root/netbsd/xfs_read_log.c" \
 	    "$xfs_root/netbsd/xfs_read_btree.c" \
 	    "$xfs_root/netbsd/xfs_read_inode.c" "$xfs_root/netbsd/xfs_read_file.c" \
+	    "$xfs_root/netbsd/xfs_inode_stat.c" \
 	    "$xfs_root/netbsd/xfs_read_symlink.c" \
 	    "$xfs_root/netbsd/xfs_read_directory.c" "$xfs_root/netbsd/xfs_lookup_path.c" \
 	    "$xfs_root/tests/$program.c" -o "$xfs_build/$program"

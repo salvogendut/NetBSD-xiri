@@ -121,7 +121,9 @@ xfs_tree_child(const struct xfs_sb *sb, const uint8_t *keys,
 		    (i == 0 && exact && key != *low))
 			return xfs_read_fail(why, EINVAL, "btree keys out of order or parent range");
 		if (!bmap) {
-			if (ptr >= sb->sb_agblocks || (key & 63) != 0)
+			/* Match the leaf record's within-block chunk alignment. */
+			if (ptr >= sb->sb_agblocks ||
+			    (key & ((sb->sb_inopblock - 1) & 63)) != 0)
 				return xfs_read_fail(why, EINVAL, "invalid inode btree key or pointer");
 			ptr |= (uint64_t)agno << sb->sb_agblklog;
 		}

@@ -127,6 +127,16 @@ xfs_inobt_irec_to_allocmask from xfs_ialloc_btree.c. The port always checks
 allocation, including for image-supplied inode numbers. It copies disk data
 to aligned structures, verifies v3 CRCs before trusting inode identity, and
 publishes a caller-owned inode image only after the selected checks pass.
+Inode-tree leaf records and interior keys use within-block chunk alignment,
+as in xfs_dialloc's XFS_AGINO_TO_OFFSET assertions; the 64-inode record width
+does not imply 64-inode start alignment on legacy layouts.
+
+netbsd/xfs_inode_stat.c adapts xfs_inode_from_disk and xfs_inode_from_disk_ts
+from xfs_inode_buf.c. It decodes ownership, v1/v2 link counts, allocation,
+generation, flags, changecount and legacy/bigtime timestamps into portable
+values. It rejects nanoseconds outside [0, 1000000000), bigtime seconds past
+XFS_BIGTIME_TIME_MAX and allocated byte counts exceeding INT64_MAX. It
+reports the presence of an attribute fork without interpreting its contents.
 
 netbsd/xfs_read_btree.c adapts xfs_btree_{agblock,fsblock}_v5hdr_verify,
 xfs_btree_{agblock,fsblock}_verify, xfs_inobt_verify and xfs_bmbt_verify.
@@ -193,12 +203,19 @@ implement credentials, access control or NetBSD namei/VFS integration.
 These readers are image-inspection adaptations, not a replacement for all
 live-kernel verifiers or xfs_repair. In particular they do not cross-check
 global extent/block counts, rmap ownership, other allocation trees, inode
-timestamps, external directory indexes, attribute contents, or log LSNs.
+timestamp consistency, external directory indexes, attribute contents, or log LSNs.
 Bmap blocks are verified lazily during file reads. Unknown read-only-compatible features
 block inode access even though the superblock probe permits inspection.
 Zero-length directories/symlinks are explicitly unsupported.
 No Linux cache, locking, transaction or recovery object is
-emulated; those contracts remain work for the PUFFS/recovery milestones.
+emulated; those contracts remain work for future caching/recovery milestones.
+
+puffs/mount_xfs.c is a new direct libpuffs adapter. It checks journal
+cleanliness before mounting and rejects every attribute fork, rather than
+silently ignoring ACL/security semantics. All engine I/O stays in user space
+through a read-only regular-file descriptor. The adapter supplies credentials,
+stable inode cookies, vattr translation, directory cookies and read-only
+operation/error handling using NetBSD's public libpuffs API.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
 No SGI/Linux code has been relicensed as BSD code. This directory is not wired

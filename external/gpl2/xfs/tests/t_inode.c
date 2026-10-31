@@ -2,6 +2,93 @@
 /* $NetBSD$ */
 #include "inode_fixture.h"
 
+static struct xfs_inode_stat
+expect_attributes(int expected)
+{
+	struct xfs_inode_stat st, before;
+	const char *why;
+	memset(&st, 0xa5, sizeof(st));
+	memcpy(&before, &st, sizeof(st));
+	CHECK(xfs_inode_getattr(&reader, &inode, &st, &why) == expected);
+	CHECK((why == NULL) == (expected == 0));
+	if (expected != 0)
+		CHECK(memcmp(&st, &before, sizeof(st)) == 0);
+	checks++;
+	return st;
+}
+
+static void
+attribute_checks(void)
+{
+	static const size_t times[] = {
+		offsetof(struct xfs_dinode, di_atime), offsetof(struct xfs_dinode, di_mtime),
+		offsetof(struct xfs_dinode, di_ctime), offsetof(struct xfs_dinode, di_crtime)
+	};
+	static const int64_t seconds[] = { INT32_MIN, -1, 0, INT32_MAX, INT64_C(4102444800) };
+	struct xfs_inode_stat st;
+	unsigned int v, big, i, j;
+	uint8_t *p;
+	uint64_t value;
+	const char *why;
+	for (v = 0; v <= 1; v++) {
+		for (big = 0; big <= v; big++) {
+			for (i = 0; i < (big ? 5U : 4U); i++) {
+				setup(v, 0, false);
+				p = disk + 16 * BS;
+				if (big) {
+					reader.sb.sb_features_incompat |= XFS_SB_FEAT_INCOMPAT_BIGTIME;
+					put64(p + offsetof(struct xfs_dinode, di_flags2), XFS_DIFLAG2_BIGTIME);
+				}
+				put32(p + offsetof(struct xfs_dinode, di_uid), 1234);
+				put32(p + offsetof(struct xfs_dinode, di_gid), 5678);
+				put32(p + offsetof(struct xfs_dinode, di_nlink), 3);
+				put32(p + offsetof(struct xfs_dinode, di_gen), 0xfedcba98);
+				value = big ? (uint64_t)(seconds[i] + INT64_C(2147483648)) * 1000000000 + 999999999 :
+				    (uint64_t)(uint32_t)seconds[i] << 32 | 999999999;
+				for (j = 0; j < (v ? 4U : 3U); j++)
+					put64(p + times[j], value);
+				inode_crc(); expect_inode(number, 0, NULL);
+				st = expect_attributes(0);
+				CHECK(st.uid == 1234 && st.gid == 5678 && st.nlink == 3);
+				CHECK(st.generation == 0xfedcba98 && st.allocated_bytes == 4 * BS);
+				CHECK(st.atime.seconds == seconds[i] && st.atime.nanoseconds == 999999999);
+				CHECK(st.mtime.seconds == seconds[i] && st.ctime.seconds == seconds[i]);
+				CHECK(st.has_birthtime == (v != 0) && !st.has_attributes);
+				if (v) CHECK(st.birthtime.seconds == seconds[i]);
+			}
+		}
+	}
+	for (i = 0; i < 4; i++) {
+		setup(true, 0, false);
+		put64(disk + 16 * BS + times[i], 1000000000);
+		inode_crc(); expect_inode(number, 0, NULL); expect_attributes(EINVAL);
+		setup(true, 0, false);
+		reader.sb.sb_features_incompat |= XFS_SB_FEAT_INCOMPAT_BIGTIME;
+		put64(disk + 16 * BS + offsetof(struct xfs_dinode, di_flags2), XFS_DIFLAG2_BIGTIME);
+		put64(disk + 16 * BS + times[i], UINT64_MAX);
+		inode_crc(); expect_inode(number, 0, NULL); expect_attributes(EINVAL);
+	}
+	setup(false, 0, false);
+	p = disk + 16 * BS;
+	p[offsetof(struct xfs_dinode, di_version)] = 1;
+	put16(p + offsetof(struct xfs_dinode, di_onlink), 123);
+	put32(p + offsetof(struct xfs_dinode, di_nlink), 456);
+	expect_inode(number, 0, NULL);
+	CHECK(expect_attributes(0).nlink == 123);
+	setup(true, 0, false);
+	put64(disk + 16 * BS + offsetof(struct xfs_dinode, di_nblocks), UINT64_MAX);
+	inode_crc(); expect_inode(number, 0, NULL); expect_attributes(EOVERFLOW);
+	setup(true, 0, false);
+	p = disk + 16 * BS;
+	p[offsetof(struct xfs_dinode, di_forkoff)] = 32;
+	p[offsetof(struct xfs_dinode, di_aformat)] = XFS_DINODE_FMT_LOCAL;
+	inode_crc(); expect_inode(number, 0, NULL);
+	CHECK(expect_attributes(0).has_attributes);
+	CHECK(xfs_inode_getattr(NULL, &inode, &st, &why) == EINVAL);
+	CHECK(xfs_inode_getattr(&reader, NULL, &st, &why) == EINVAL);
+	CHECK(xfs_inode_getattr(&reader, &inode, NULL, &why) == EINVAL);
+}
+
 int
 main(void)
 {
@@ -9,6 +96,40 @@ main(void)
 	uint8_t *p;
 	const char *why;
 	size_t done;
+
+	attribute_checks();
+	/* A 64-inode record need not start at a multiple of 64. Exercise
+	 * block-aligned chunks and their interior keys, as found in mkfs v4. */
+	for (v = 0; v <= 1; v++) {
+		setup(v, 0, false);
+		memcpy(disk + 20 * BS, disk + 16 * BS, BS);
+		number += 32;
+		if (v) {
+			put64(disk + 20 * BS + offsetof(struct xfs_dinode, di_ino), number);
+			metadata_checksum(disk + 20 * BS, 512, XFS_DINODE_CRC_OFF);
+		}
+		h = v ? XFS_BTREE_SBLOCK_CRC_LEN : XFS_BTREE_SBLOCK_LEN;
+		put32(disk + 3 * BS + h, 160);
+		tree_crc(3, false);
+		expect_inode(number, 0, NULL);
+		expect_inode(number + 1, ENOENT, "not allocated");
+		memcpy(disk + 4 * BS, disk + 3 * BS, BS);
+		if (v) put64(disk + 4 * BS + 16, (base + 4 * BS) / 512);
+		tree_crc(4, false);
+		h = tree(3, false, 1, 1);
+		put32(disk + 3 * BS + h, 160);
+		put32(disk + 3 * BS + h + ((BS - h) / 8) * 4, 4);
+		tree_crc(3, false);
+		put32(disk + 1024 + 24, 2);
+		if (v) metadata_checksum(disk + 1024, 512, XFS_AGI_CRC_OFF);
+		expect_inode(number, 0, NULL);
+		put32(disk + 4 * BS + h, 161);
+		tree_crc(4, false);
+		expect_inode(number, EINVAL, "chunk range");
+		put32(disk + 3 * BS + h, 161);
+		tree_crc(3, false);
+		expect_inode(number, EINVAL, "key or pointer");
+	}
 
 	for (v = 0; v < 2; v++) {
 		setup(v, 2, false);

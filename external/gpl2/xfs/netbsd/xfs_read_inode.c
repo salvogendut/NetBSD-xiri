@@ -72,7 +72,10 @@ inode_allocated(const struct xfs_reader *r, uint32_t agno, uint32_t agino,
 	previous = low;
 	for (i = 0; i < n; i++, p += sizeof(xfs_inobt_rec_t)) {
 		start = xfs_get32(p);
-		if ((start & 63) != 0 || start < previous || start >= high ||
+		/* Records cover 64 inodes, but a chunk may start at a smaller
+		 * filesystem-block boundary (e.g. legacy 8 KiB clusters). */
+		if ((start & ((sb->sb_inopblock - 1) & 63)) != 0 ||
+		    start < previous || start >= high ||
 		    high - start < 64 || (i == 0 && exact && start != low) ||
 		    xfs_data_address(sb, base | (start >> sb->sb_inopblog),
 		    1, &dummy) != 0)

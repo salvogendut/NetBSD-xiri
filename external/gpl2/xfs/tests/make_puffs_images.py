@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# $NetBSD$
+"""Create disposable PUFFS mount fixtures; output directory must be new."""
+from pathlib import Path
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+
+from test_images import metadata_crc, require, run, values
+
+
+def main():
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: make_puffs_images.py NEW-DIRECTORY")
+    root = Path(sys.argv[1]).resolve()
+    root.mkdir()  # Never replace user images.
+    (root / "hello").write_bytes(b"NetBSD XFS through PUFFS\n")
+    (root / "public").write_bytes(bytes(range(256)) * 512 + b"end")
+    proto = root / "prototype"
+    proto.write_text("\n".join([
+        "dummy", "0 0", "d--755 0 0",
+        f"hello ---640 12 34 {root / 'hello'}",
+        f"public ---644 12 34 {root / 'public'}",
+        f"private ---600 12 34 {root / 'hello'}",
+        f"attributes ---644 12 34 {root / 'hello'}",
+        "link l--777 12 34 hello",
+        "longlink l--777 12 34 " + "/" * 990,
+        "locked d--700 12 34", f"file ---644 12 34 {root / 'hello'}", "$",
+        "many d--755 12 34",
+        *(f"f{i:04d} ---644 12 34 {root / 'hello'}" for i in range(1800)),
+        "$", "$", ""
+    ]))
+    for version in (4, 5):
+        image = root / f"v{version}.img"
+        with image.open("xb") as f:
+            f.truncate(400 * 1024 * 1024)
+        run("mkfs.xfs", "-q", "-f", "-K", "-n", "parent=0", "-m",
+            f"crc={int(version == 5)}", "-p", str(proto), str(image))
+        sb = values(run("xfs_db", "-r", "-c", "sb 0", "-c",
+                        "p rootino blocksize agblocks agblklog inopblog inodesize logstart", str(image)))
+        # Recent xfsprogs adds a non-security autofsck property to the root.
+        # Remove it only from these newly generated fixtures; the server must
+        # reject any attribute fork on arbitrary user images.
+        run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
+            "-c", "attr_remove -r xfs:autofsck", str(image))
+        names = {}
+        for line in run("xfs_db", "-r", "-c", "blockget -n", "-c", "ncheck", str(image)).splitlines():
+            number, name = line.split(maxsplit=1)
+            names[name] = int(number)
+        # mkfs also copies SELinux labels from prototype source files. Remove
+        # those labels only inside our disposable fixture, never on host files.
+        if "security.selinux" in os.listxattr(root / "hello"):
+            commands = []
+            for name, number in names.items():
+                if name in ("hello", "public", "private", "attributes", "locked/file") or name.startswith("many/f"):
+                    commands.extend((f"inode {number}", "attr_remove -s selinux"))
+            subprocess.run(["xfs_db", "-x", str(image)], input="\n".join(commands) + "\n",
+                           text=True, capture_output=True, check=True)
+        run("xfs_db", "-x", "-c", f"inode {names['attributes']}",
+            "-c", "attr_set -u fixture rejected", str(image))
+        directory = run("xfs_db", "-r", "-c", f"inode {sb['rootino']}", "-c", "p u3", str(image))
+        # xfs_db calls v2 dir data 'u' on some older versions. Read names
+        # independently of the presentation prefix.
+        if "inumber" not in directory:
+            directory = run("xfs_db", "-r", "-c", f"inode {sb['rootino']}", "-c", "p u", str(image))
+        ino_match = re.search(r"list\[0\].inumber.i4 = (\d+)", directory)
+        require(ino_match is not None, directory)
+        hello = int(ino_match.group(1))
+
+        def read_inode(f, ino):
+            fsb = ino >> sb["inopblog"]
+            ag, agb = fsb >> sb["agblklog"], fsb & ((1 << sb["agblklog"]) - 1)
+            offset = (ag * sb["agblocks"] + agb) * sb["blocksize"]
+            offset += (ino & ((1 << sb["inopblog"]) - 1)) * sb["inodesize"]
+            f.seek(offset)
+            return offset, bytearray(f.read(sb["inodesize"]))
+
+        def write_inode(f, offset, data):
+            if version == 5:
+                metadata_crc(data, 100)
+            f.seek(offset)
+            f.write(data)
+
+        with image.open("r+b") as f:
+            offset, data = read_inode(f, sb["rootino"])
+            require(data[82] == 0, "test root still has an attribute fork")
+            core = 176 if version == 5 else 100
+            size = struct.unpack_from(">Q", data, 56)[0]
+            require(data[core + 1] == 0, "test requires 32-bit shortform inodes")
+            # Add a genuine second directory reference without allocating an
+            # orphan placeholder inode. This is a synthetic hard-link fixture.
+            cursor, last_offset, last_length = core + 6, 0, 0
+            for _ in range(data[core]):
+                last_length = data[cursor]
+                last_offset = struct.unpack_from(">H", data, cursor + 1)[0]
+                cursor += 3 + last_length + 1 + 4  # ftype enabled by mkfs
+            require(cursor == core + size, "unexpected shortform geometry")
+            entry_offset = last_offset + ((12 + last_length + 7) & ~7)
+            entry = bytes((5,)) + struct.pack(">H", entry_offset) + b"alias" + bytes((1,)) + struct.pack(">I", hello)
+            require(core + size + len(entry) <= len(data), "root fork full")
+            data[core + size:core + size + len(entry)] = entry
+            data[core] += 1
+            struct.pack_into(">Q", data, 56, size + len(entry))
+            write_inode(f, offset, data)
+            offset, data = read_inode(f, hello)
+            struct.pack_into(">I", data, 16, 2)
+            when = 4102444800 if version == 5 else -1
+            for time_offset in ((32, 40, 48, 144) if version == 5 else (32, 40, 48)):
+                encoded = ((when + (1 << 31)) * 1000000000 + 123456789) if version == 5 else (0xffffffff << 32 | 123456789)
+                struct.pack_into(">Q", data, time_offset, encoded)
+            if version == 5:
+                flags = struct.unpack_from(">Q", data, 120)[0]
+                struct.pack_into(">Q", data, 120, flags | 8)
+            write_inode(f, offset, data)
+        (root / f"v{version}.json").write_text(json.dumps({"hello": hello, "mtime": when}) + "\n")
+        print(f"Created {image}: 1800-entry directory, permissions, symlinks, hard link and timestamps")
+        if version == 5:
+            for name in ("root-attr.img", "bad-log.img"):
+                destination = root / name
+                with image.open("rb") as src, destination.open("xb") as dst:
+                    while data := src.read(1024 * 1024):
+                        if any(data):
+                            dst.write(data)
+                        else:
+                            dst.seek(len(data), 1)
+                    dst.truncate(src.tell())
+            run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
+                "-c", "attr_set -u fixture rejected", str(root / "root-attr.img"))
+            with (root / "bad-log.img").open("r+b") as f:
+                f.seek(sb["logstart"] * sb["blocksize"])
+                f.write(b"BAD!")
+
+
+if __name__ == "__main__":
+    main()

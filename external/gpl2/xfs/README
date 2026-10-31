@@ -12,11 +12,40 @@ The target is a user-space filesystem using NetBSD PUFFS/libpuffs. The GPL
 XFS reader and future recovery code run in a mount_xfs server, with the
 existing PUFFS kernel interface handling filesystem requests. The source
 has moved from sys/external/gpl2/xfs to external/gpl2/xfs for this purpose.
-The current milestone is the portable image-reading core; a PUFFS server
-has not been implemented yet. See the integration milestones below.
+The current milestone adds an experimental read-only mount_xfs server around
+the portable image reader. It is built explicitly, outside the default build.
 
 Current milestone
 -----------------
+
+puffs/mount_xfs.c serves regular files, directories and symlinks from a
+quiescent regular image through libpuffs. It requires a clean journal before
+mounting, opens the image read-only, and forces read-only/nodev/nosuid/noatime.
+There is no journal bypass or write path. Inodes with any attribute fork are
+rejected: ignoring an ACL or security label would change access semantics.
+This includes the root autofsck property added by recent mkfs.xfs versions.
+Attribute support is a separate remaining milestone; do not remove security
+attributes from user images to make them mountable.
+
+The adapter implements lookup/getattr/access/open/read/readdir/readlink,
+statvfs, sync, unmount and node reclamation. It preserves ownership, mode,
+link count, allocated bytes, generation and timestamps, including bigtime
+and v3 birth times. Legacy inodes do not acquire invented birth times.
+Search/access checks use the supplied PUFFS credentials. Hard links reuse
+one puffs_node per inode, and reads preserve access through existing file
+descriptors after a credential change. Kernel namei handles paths/symlinks.
+Directory offsets and cookies are entry ordinals on the immutable image;
+resumed reads scan the directory and verify it before publishing the result.
+All mutations return EROFS.
+
+Callbacks are serialized, use synchronous pread, and never yield while using
+shared scratch. Name/page caches are disabled and attribute TTLs remain zero.
+Memory mapping and execution from the mount are unsupported. An advisory
+shared image lock is supplemental: callers must keep the image quiescent.
+Detected size/mtime/ctime changes permanently fail service with ESTALE;
+this is not snapshot isolation. SIGINT/SIGTERM request forced unmounts.
+NetBSD currently overrides statvfs's name limit with libpuffs' initial
+MAXNAMLEN (511), despite the callback reporting XFS's actual 255-byte limit.
 
 The upstream superblock decoder, version checks and quota conversion run
 through a small NetBSD compatibility header. A read-only probe adds bounded
@@ -97,7 +126,7 @@ xfs_require_clean_log returns zero only for CLEAN. Call it before opening
 inodes for filesystem service; xfs_reader_open alone remains a raw metadata
 inspection API. The CLI now gates inode, file and pathname operations with
 this check. Its --raw option explicitly bypasses the guard for image analysis;
-the future mount_xfs server must provide no such bypass. A successful check
+the mount_xfs server provides no such bypass. A successful check
 does not establish global consistency or validate metadata LSNs.
 
 Journal scratch is XFS_LOG_SCRATCH_SIZE (260 KiB), caller-owned and reusable.
@@ -116,16 +145,18 @@ compatible and read-only-compatible bits do not prevent superblock inspection.
 Inode reads reject unknown read-only-compatible features. Recognizing a
 feature bit does not mean that all operations for that feature are ported.
 
-This is NOT a mountable filesystem or a complete filesystem verifier.
+This is an experimental mountable subset, not a complete filesystem verifier.
 It does not inspect external directory indexes or attribute contents,
 cross-check global tree counts or allocation ownership, or validate metadata LSNs
 against the log. Tree verification covers the visited paths;
 it does not check unvisited subtrees or reciprocal sibling links.
 Even a read-only mount can require recovery; a successful probe must never
 be used as evidence that replay can be skipped.
-There is no PUFFS mount helper or write path yet.
+There is no write or recovery path.
 The command-line probe accepts regular image files only and opens them
-read-only. No test mounts a filesystem or accesses a raw disk device.
+read-only. The ordinary host tests never mount a filesystem; the separate
+native PUFFS integration suite mounts disposable regular images on NetBSD.
+Neither suite accesses a raw disk device.
 Images must be quiescent for the entire inspection: this reader has no cache,
 locking, snapshot, or concurrent-growfs semantics. An AGF ring that upstream
 would reset is rejected rather than changed.
@@ -136,7 +167,8 @@ Layout
     dist/       Unmodified upstream files, retained for comparison.
     include/    Compatibility definitions and the probe interface.
     netbsd/     Selected upstream routines and NetBSD probe wrapper.
-    tests/      Host tests, image inspector and NetBSD user-space compile check.
+    puffs/      Native NetBSD mount_xfs server, explicit Makefile and manual.
+    tests/      Host tests, image inspector, header checks and native mount tests.
 
 Build and test from the src root
 -------------------------------
@@ -155,11 +187,14 @@ wrapped/full/empty free lists, legacy v4 slots, unaligned scratch buffers,
 and output preservation are covered. CC and CFLAGS can override the compiler
 and host-test flags.
 
-The inode suite adds 8,821 checks covering v4/v5, sparse inode chunks,
+The inode suite adds 8,879 checks covering v4/v5, sparse inode chunks,
 multi-level inode and bmap trees, non-power-of-two AG encoding, the shortened
 last AG, holes/unwritten data, local symlinks, empty files, offsets beyond
 4 GiB, EOF, unaligned buffers, checksum and semantic corruption, cycles,
-callback errors/short reads, and output preservation. Fragmented bmaps and
+callback errors/short reads, and output preservation. It also checks ownership,
+legacy/v3 link counts, allocation overflow, legacy/bigtime timestamps and
+block-aligned inode chunks that do not start at multiples of 64.
+Fragmented bmaps and
 sparse/unwritten layouts currently use synthetic fixtures.
 
 The namespace suite adds 8,350 checks for v4/v5 shortform and block/data
@@ -208,10 +243,11 @@ explicit raw inspection and a synthetic wrapped record in a mkfs image.
 No journal fixture was captured from a running Linux mount yet; ordinary
 noninitial records and crash cases currently use synthetic data.
 
-The third compiles all twelve port files and the CLI with this checkout's
+The third compiles all thirteen port files, the CLI, PUFFS server and native
+test client with this checkout's
 NetBSD amd64 user-space headers and no host headers. It needs an amd64
 compiler. This verifies header/layout compatibility, not linking or running
-on NetBSD. There is no PUFFS mount/runtime test yet.
+on NetBSD. Native testing is described below.
 
 An undefined-behavior check that does not require sanitizer runtime libraries:
 
@@ -228,6 +264,7 @@ To build a persistent image inspector on NetBSD or Linux:
         "$xfs_src/netbsd/xfs_read_log.c" \
         "$xfs_src/netbsd/xfs_read_btree.c" \
         "$xfs_src/netbsd/xfs_read_inode.c" "$xfs_src/netbsd/xfs_read_file.c" \
+        "$xfs_src/netbsd/xfs_inode_stat.c" \
         "$xfs_src/netbsd/xfs_read_symlink.c" \
         "$xfs_src/netbsd/xfs_read_directory.c" "$xfs_src/netbsd/xfs_lookup_path.c" \
         "$xfs_src/tests/xfs_probe.c" \
@@ -253,26 +290,53 @@ the canonical initial record was used. These addresses are log-relative
 guarded file/path commands reject that state. Use --raw before the other CLI
 options only when deliberately inspecting potentially unrecovered metadata.
 
-PUFFS integration milestones
-----------------------------
+Native PUFFS build and test
+--------------------------
 
-1. Implement a direct libpuffs mount_xfs server around this reader, initially
-   read-only and using quiescent regular image files. Require a clean journal
-   before puffs_mount. Extend inode decoding for truthful vattr values
-   (UID/GID, link count, allocated bytes, timestamps including bigtime),
-   and enforce credentials through puffs_access and directory search checks.
-   Reject unsupported ACL/security semantics explicitly.
-2. Implement lookup/getattr/access/open/read/readdir/readlink/statvfs and
-   node reclamation. Key puffs_node objects by inode number so hard links
-   share a cookie. PUFFS supplies component lookup and kernel pathname/symlink
-   handling; xfs_lookup_path remains an image-inspector convenience. Translate
-   file-read lengths to PUFFS residual counts and provide stable readdir
-   offsets/cookies, including partial buffers and resumed listings. Use
-   per-request workspace or serialized callbacks, with no shared scratch
-   across yielded requests. Reject mutations with EROFS. Start with explicit
-   read-only/nodev/nosuid mounts, then test unmount, error and server-exit paths
-   on NetBSD before adding the server to a default build.
-3. Add Linux-produced clean/dirty journals, fragmented, sparse and unwritten
+On NetBSD with the compiler set and libpuffs installed:
+
+    make -C external/gpl2/xfs/puffs
+    mkdir /tmp/xfs-mount
+    external/gpl2/xfs/puffs/mount_xfs -s -o ro /path/to/image /tmp/xfs-mount
+
+Run the mount command as root; -s stays in the foreground. In another shell,
+inspect the mounted files, then unmount with "umount /tmp/xfs-mount".
+Omit -s to detach. No helper is installed automatically.
+
+Create fixtures on a host with Python 3.11+ and xfsprogs (tested with 7.1.1):
+
+    PYTHONDONTWRITEBYTECODE=1 python3 external/gpl2/xfs/tests/make_puffs_images.py /tmp/xfs-mount-fixtures
+
+The destination must be new. This creates v4/v5 images plus root-attribute
+and malformed-journal startup rejection cases. Only these new test images
+have their mkfs autofsck property and inherited prototype SELinux labels
+removed. A separate file deliberately retains an attribute fork. Hard links
+and fixed legacy/bigtime timestamps are synthetic on-disk additions with
+checksums regenerated. Transfer the fixtures sparsely if testing in a VM.
+Then, as root on NetBSD:
+
+    sh external/gpl2/xfs/tests/run-puffs.sh /tmp/xfs-mount-fixtures
+
+The script builds the real server and client, mounts both versions, and tests
+file/partial/EOF reads, local/remote symlinks, timestamps, owner/group/other
+permissions, directory search, inherited descriptors, hard-link lock identity,
+1800-entry listings, telldir/seekdir and small-buffer getdents resumption.
+It checks read-only errors, busy/ordinary/signal unmounts, persistent ESTALE
+after a deliberate image timestamp change, startup refusal and unchanged
+whole-image SHA256 hashes. Use disposable fixtures only: their mtime changes.
+The native build and mount suite were validated on NetBSD 11.0/amd64 in QEMU,
+using the release's kernel, headers and libpuffs. The compile-only check also
+covers this checkout's headers; other architectures remain untested.
+
+Remaining milestones
+--------------------
+
+1. Interpret and verify attribute forks, including ACL/security semantics,
+   so ordinary labelled images can be served without weakening permissions.
+   Expand runtime coverage for abrupt server death, parallel clients and
+   node reclamation under memory pressure. Add bounded caching only with
+   explicit consistency and lifetime contracts.
+2. Add Linux-produced clean/dirty journals, fragmented, sparse and unwritten
    files, complementing synthetic fixtures. Port external directory index
    verifiers/hash lookup and expand cross-tree and metadata-LSN validation.
    Port transaction reservations, logging/recovery and allocation in user
@@ -288,7 +352,7 @@ Useful references
 
 NetBSD's lib/libpuffs/puffs.h, puffs_ops.3, puffs_node.3 and puffs_cred.3,
 share/examples/puffs, and usr.sbin/puffs supply the local integration contracts
-and examples. This will use libpuffs directly; the XFS engine stays in the
+and examples. The server uses libpuffs directly; the XFS engine stays in the
 user-space process. GPL provenance and the pinned upstream baseline remain
 unchanged. XFS transaction, locking and cache contracts still require explicit
 adaptation; the scalar compatibility header is not a substitute for that work.

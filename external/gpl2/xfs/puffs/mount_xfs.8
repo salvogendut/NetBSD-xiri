@@ -1,0 +1,73 @@
+.\" SPDX-License-Identifier: GPL-2.0-only
+.\" $NetBSD$
+.Dd October 31, 2026
+.Dt MOUNT_XFS 8
+.Os
+.Sh NAME
+.Nm mount_xfs
+.Nd experimental read-only XFS filesystem in user space
+.Sh SYNOPSIS
+.Nm
+.Op Fl s
+.Op Fl o Cm ro
+.Ar image mountpoint
+.Sh DESCRIPTION
+.Nm
+serves a quiescent XFS regular image file through
+.Xr puffs 4
+and
+.Xr puffs 3 .
+The XFS reader runs in the server process.
+The journal must contain a complete clean unmount record;
+dirty, ambiguous, malformed and unsupported journals are rejected.
+There is no journal replay or write support.
+.Pp
+The mount is always read-only, nodev, nosuid and noatime.
+The only accepted mount option is
+.Cm ro .
+The
+.Fl s
+option keeps the server in the foreground.
+Otherwise it detaches using
+.Fn puffs_daemon .
+.Pp
+Regular files, directories and symbolic links are supported.
+UIDs, GIDs and mode bits are preserved, and directory search and access
+checks use the credentials supplied by PUFFS.
+Inodes with attribute forks are rejected because ACL and security attribute
+interpretation is not implemented.
+Special files, external logs and realtime devices are unsupported.
+.Pp
+The backing file is opened read-only and held under an advisory shared lock.
+It must remain unchanged for the entire mount.
+A detected size, modification-time or change-time change causes subsequent
+operations to fail with
+.Er ESTALE .
+This detection and the advisory lock do not provide snapshot isolation.
+.Pp
+The initial server uses synchronous reads and disables PUFFS name, attribute
+and page caches.
+Memory mapping and execution of files from this mount are unsupported.
+Directory listing and lookup scan directory data linearly.
+Directory offsets are stable entry ordinals on the immutable image.
+External directory indexes and global allocation consistency are not verified.
+.Pp
+Use
+.Xr umount 8
+to unmount.
+SIGINT and SIGTERM request an unmount through libpuffs.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+mount_xfs -s -o ro /var/tmp/test.xfs /mnt/xfs
+ls /mnt/xfs
+umount /mnt/xfs
+.Ed
+.Sh SEE ALSO
+.Xr puffs 3 ,
+.Xr puffs 4 ,
+.Xr mount 8 ,
+.Xr umount 8
+.Sh HISTORY
+This experimental GPL port uses SGI/Linux XFS sources pinned to Linux v6.12.
+It is built explicitly from external/gpl2/xfs/puffs and is not part of the
+default base-system build.
