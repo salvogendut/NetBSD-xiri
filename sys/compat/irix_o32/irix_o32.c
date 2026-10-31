@@ -83,6 +83,7 @@
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/filio.h>
+#include <sys/kauth.h>
 #include <sys/ktrace.h>
 #include <sys/mbuf.h>
 #include <sys/mman.h>
@@ -508,6 +509,65 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
 	SCARG(&native, mode) = SCARG(uap, mode);
 	return sys_open(l, &native, rval);
+}
+
+struct irix_access_args {
+	syscallarg(uint32_t) path;
+	syscallarg(int32_t) mode;
+};
+
+static int
+irix_access(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_access_args *uap = args;
+	const int mode = SCARG(uap, mode);
+	struct nameidata nd;
+	struct pathbuf *pb;
+	kauth_cred_t cred;
+	char path[MAXPATHLEN];
+	size_t len;
+	int error, vmode = 0;
+
+	CTASSERT(MAXPATHLEN == 1024);
+	if ((mode & ~(R_OK | W_OK | X_OK)) != 0)
+		return EINVAL;
+	error = copyinstr(irix_pointer(SCARG(uap, path)), path,
+	    sizeof(path), &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	pb = pathbuf_create(path);
+	if (pb == NULL)
+		return ENOMEM;
+	/* As in native access, both pathname search and the leaf check use
+	 * real IDs. Keep supplementary groups and the process's own credentials
+	 * intact; native vnode authorization remains authoritative. */
+	cred = kauth_cred_dup(l->l_cred);
+	kauth_cred_seteuid(cred, kauth_cred_getuid(l->l_cred));
+	kauth_cred_setegid(cred, kauth_cred_getgid(l->l_cred));
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | LOCKSHARED | TRYEMULROOT, pb);
+	nd.ni_cnd.cn_cred = cred;
+	error = namei(&nd);
+	if (error == 0) {
+		if (mode & R_OK)
+			vmode |= VREAD;
+		if (mode & W_OK)
+			vmode |= VWRITE;
+		if (mode & X_OK)
+			vmode |= VEXEC;
+		if (vmode != 0) {
+			error = VOP_ACCESS(nd.ni_vp, vmode, cred);
+			if (error == 0 && (vmode & VWRITE))
+				error = vn_writechk(nd.ni_vp);
+		}
+		vput(nd.ni_vp);
+	}
+	kauth_cred_free(cred);
+	pathbuf_destroy(pb);
+	if (error == 0)
+		*rval = 0;
+	return error;
 }
 
 /* IRIX checks the path before the version selector and output buffer. */
@@ -1530,6 +1590,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_call = irix_o32_break,
 	},
 	[24] = { .sy_call = (sy_call_t *)sys_getuid_with_euid },
+	[33] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_access_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_access,
+	},
 	[40] = {
 		.sy_narg = 4,
 		.sy_argsize = sizeof(struct irix_o32_syssgi_args),
