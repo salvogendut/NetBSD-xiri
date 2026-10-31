@@ -210,9 +210,66 @@ struct irix_o32_syssgi_args {
 	syscallarg(uint32_t) arg3;
 };
 
-/* Linked-address, two-load ELF mapping. Unlike MAP_FIXED mmap, the exec
- * helpers never replace existing mappings. Journal only mappings we created,
- * including a partial data page before its file read can fail. */
+/* Preserve requested placement unless an actual load range is occupied.
+ * Relocate the complete layout into one free span, preserving a common
+ * displacement modulo every p_align. Only the caller's local copy changes.
+ * No mappings are inserted here, and gaps remain unmapped by the vmcmds. */
+static int
+irix_o32_elfmap_address(struct vm_map *map, Elf32_Phdr ph[2])
+{
+	struct vm_map_entry *entry;
+	vaddr_t found, start, end;
+	const vaddr_t limit = 0x40000000;
+	const vsize_t span = ph[1].p_vaddr + round_page(ph[1].p_memsz) -
+	    ph[0].p_vaddr;
+	const vsize_t align = MAX(ph[0].p_align, ph[1].p_align);
+	const vaddr_t residue = ph[0].p_vaddr & (align - 1);
+	bool collision = false;
+	int error = 0;
+
+	vm_map_lock_read(map);
+	for (unsigned i = 0; i < 2; i++) {
+		if (uvm_map_findspace(map, ph[i].p_vaddr,
+		    round_page(ph[i].p_memsz), &found, NULL, 0, 0,
+		    UVM_FLAG_FIXED) == NULL)
+			collision = true;
+	}
+	if (!collision)
+		goto out;
+
+	/* A bounded bottom-up search, independent of VM_MAP_TOPDOWN. The
+	 * historical IRIX personality also used 0x04000000 as its hint.
+	 * Jump past occupied entries; do not scan or reserve the whole window. */
+	start = 0x04000000 + residue;
+	for (;;) {
+		if (start > limit - span) {
+			error = ENOMEM;
+			goto out;
+		}
+		if (uvm_map_findspace(map, start, span, &found, NULL, 0, 0,
+		    UVM_FLAG_FIXED) != NULL)
+			break;
+		if (!uvm_map_lookup_entry(map, start, &entry))
+			entry = entry->next;
+		if (entry == &map->header || entry->end > limit) {
+			error = ENOMEM;
+			goto out;
+		}
+		end = entry->end;
+		KASSERT(end > start);
+		/* end <= limit and align <= 1 MiB bound this rounding on o32. */
+		start = roundup(end - residue, align) + residue;
+	}
+	ph[1].p_vaddr = start + (ph[1].p_vaddr - ph[0].p_vaddr);
+	ph[0].p_vaddr = start;
+out:
+	vm_map_unlock_read(map);
+	return error;
+}
+
+/* Two-load ELF mapping. Unlike MAP_FIXED mmap, the exec helpers never replace
+ * existing mappings. Journal only mappings we created, including a partial
+ * data page before its file read can fail. */
 static int
 irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
     register_t *rval)
@@ -291,6 +348,8 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		error = ENOMEM;
 		goto out;
 	}
+	if ((error = irix_o32_elfmap_address(map, ph)) != 0)
+		goto out;
 	vn_lock(vp, LK_SHARED | LK_RETRY);
 	if ((vp->v_mount->mnt_flag & MNT_NOEXEC) != 0)
 		error = EACCES;

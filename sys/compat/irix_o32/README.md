@@ -202,8 +202,9 @@ below advances this boundary without patching vendor files.
 Branch `xiri/irix-o32-elfmap` extends query commit
 `dc08d65a8e7b3e6cdbd7ca978a200b6f50a42ad5`. Request 68 accepts exactly two
 ELF32 program headers, copied once into a fixed-size kernel array. It returns
-the first linked virtual address. It does not relocate or replace existing
-mappings and does not inspect an ELF header in the file: the caller supplies
+the actual first load address. The original checkpoint used only linked
+addresses; branch `xiri/irix-elfmap-relocation` adds collision relocation. It
+never replaces existing mappings or inspects an ELF header in the file: the caller supplies
 the load descriptions, as in the original interface.
 
 The subset requires ordered PT_LOAD headers, RX text at file offset zero
@@ -232,8 +233,17 @@ journal includes a partial page before its read can fail, and unmaps only
 ranges successfully created by this request. The single, unshared vmspace
 requirement prevents another user thread from replacing journaled mappings.
 This provides all-or-nothing completion for the supported process model, not
-a general multithreaded mapping transaction. Collisions return ENOMEM rather
-than the original system's relocation behavior.
+a general multithreaded mapping transaction.
+
+Before insertion, the relocation extension checks each rounded load range
+under the VM map read lock. An occupant solely in the inter-segment gap does
+not force a move. On collision it searches whole-layout gaps from 0x04000000
+upward, bounded by 0x40000000, preserving the first address's residue modulo
+the largest segment alignment. Only the kernel-local header addresses change;
+the returned first load address lets the runtime relocate its own objects.
+This is placement of segments, not a kernel ELF symbol relocator. An exhausted
+search returns ENOMEM. Other insertion failures keep their errors and roll
+back owned mappings without retrying elsewhere.
 
 The companion tests exercise executable code, initialized bytes, partial and
 whole BSS, pure BSS, private writes and fresh contents after unmap/remap, text
