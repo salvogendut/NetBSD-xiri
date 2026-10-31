@@ -34,6 +34,8 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_dir2_priv.h
     xfs_dir2_sf.c
     xfs_dir2_data.c
+    xfs_dir2_leaf.c
+    xfs_dir2_node.c
     xfs_symlink_remote.c
     xfs_attr_leaf.c
     xfs_attr_remote.c
@@ -43,7 +45,7 @@ fs/xfs/ (outside libxfs/) at that commit.
 dist/posix_acl.c comes from fs/posix_acl.c at the same commit.
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these thirty upstream files. Verify them with
+SHA256 records the hashes of these thirty-two upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
