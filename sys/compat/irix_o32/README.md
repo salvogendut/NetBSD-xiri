@@ -39,7 +39,8 @@ its existing priority; the foreign probe does not change process ABI state.
 The selected o32/n32 ABI is committed in `setregs` after selection succeeds.
 
 Direct IRIX trap numbers 1001 (`exit`), 1003 (`read`), 1004 (`write`), 1005
-(`open`), 1006 (`close`), 1017 (`break`), 1024 (`getuid`/`geteuid`), 1047 (`getgid`/`getegid`),
+(`open`), 1006 (`close`), 1015 (`chmod`), 1016 (`chown`), 1017 (`break`),
+1024 (`getuid`/`geteuid`), 1047 (`getgid`/`getegid`),
 1056 (`sysmp`, MP_PGSIZE only), 1134 (`mmap`), 1135 (`munmap`), and 1136 (`mprotect`)
 are implemented using current native operations and `sy_invoke`. Trap 1040
 implements the bounded `syssgi` queries below. Trap 1000 dispatches one level of
@@ -64,12 +65,12 @@ native `off_t` and initializes the native argument padding.
   The o32 stack remains aligned to its native eight-byte requirement. The
   separate dynamic auxv contract is described below. Native `setregs` supplies
   the entry PC, t9, and stack; this has only been observed with the selected libc.
-- Open accepts IRIX access modes 0/1/2, APPEND `0x8`, NONBLOCK `0x80`, CREAT
-  `0x100`, TRUNC `0x200`, and EXCL `0x400`, translating them individually to
+- Open accepts IRIX access modes 0/1/2, NDELAY `0x4`, APPEND `0x8`, NONBLOCK
+  `0x80`, CREAT `0x100`, TRUNC `0x200`, EXCL `0x400`, and NOCTTY `0x800`, translating them to
   native flags. Access mode 3 or other flag bits return `EINVAL`. Current NetBSD
   emulation-root lookup uses `/emul/irix`, with its normal native-path fallback.
-  This is not a chroot. No IRIX device adaptation is provided. Native mode/umask
-  and descriptor behavior are used.
+  This is not a chroot. Native mode/umask and descriptor behavior are used;
+  the bounded PTY adaptation is described below.
 - Mmap supports positive-length private non-fixed mappings with address
   hints below VM_MAXUSER_ADDRESS, page-aligned nonnegative 32-bit file offsets, and basic R/W/X protection
   bits. `/dev/zero` supplies zero-filled memory through the normal host device
@@ -370,8 +371,8 @@ and vendor controls. Toolchest still needs version-2 xstat for its menu check.
 
 ### Experimental SIOCNREAD (1054, 0x4004730a)
 
-The ioctl adapter decodes three explicit 32-bit arguments and implements only
-IRIX_SIOCNREAD for IPv4 TCP streams. It keeps a native file reference and uses
+The ioctl adapter decodes three explicit 32-bit arguments. Its SIOCNREAD path
+supports IPv4 TCP streams. It keeps a native file reference and uses
 a kernel-owned integer with native FIONREAD under the socket lock. Exactly
 four bytes are copied out after releasing the socket lock. Counts are snapshots;
 the query never consumes queued data or changes nonblocking mode.
@@ -383,10 +384,44 @@ output is accepted; page-crossing faults retain the copied accessible prefix.
 Regular files/directories reject this socket selector with ENOTTY; FIFO and
 /dev/null reject it with EINVAL. No socket ioctl is forwarded to a device.
 
-Other selectors retain ENOSYS, including TCGETA, altered size/group encodings,
+Except for the PTY request below, other selectors retain ENOSYS, including
+TCGETA, altered size/group encodings,
 and 0x4004667f (which original IRIX also accepts for bytes-readable). This is an
 explicit bounded-policy difference, including invalid-fd unknown commands.
 AF_UNIX, datagrams, listening sockets, urgent data, resets, concurrent changes,
 large queue counts, inherited unsupported descriptor types and general ioctl
 translation are outside this qualification. The companion irix-siocnread lab
 holds the original synthetic fixtures and reviewed observations.
+
+### Experimental PTY allocation
+
+Open and F_SETFL accept IRIX O_NDELAY (4), canonicalized to native O_NONBLOCK.
+F_GETFL reports 0x80, including when the original call used only the legacy
+bit. This intentionally does not reproduce IRIX's distinct legacy empty-read
+semantics. Open also translates O_NOCTTY (0x800). chmod (1015) and chown (1016)
+decode explicit 32-bit arguments, then use native vnode/credential checks and
+emulation-root pathname lookup; no privilege bypass is supplied. Native chown
+rejects unprivileged file giveaways that the supplied IRIX installation
+permits, leaving ownership unchanged on EPERM.
+
+Only actual native PTY character devices with minor below 400 receive IRIX
+master/slave majors 14/15 in st_rdev. Filesystem IDs and other devices retain
+their prior encoding, and native ownership/mode stay authoritative. The
+companion lab provisions a native ptm clone node, ptyfs with group 0/mode 0600,
+a nullfs view inside /emul/irix/dev/pts, and the first 400 IRIX q/r aliases.
+Native clone allocation grants the slave to the real UID. This disposable
+configuration is not a production session/device-namespace installer.
+
+ioctl I_STR (0x5308) accepts only the four-word request {0x5002, 0, 0, 0}
+emitted by original libc's UNLKPT helper, on an actual native PTY master.
+Descriptor validation precedes the 16-byte copyin: an absent descriptor gives
+EBADF, another descriptor type ENOTTY, and bad request storage EFAULT. Other
+inner commands or fields give ENOSYS. No foreign ioctl encoding is forwarded
+to a device. NetBSD has no corresponding slave-lock state; this validated
+unlock is a no-op and never changes ownership or permissions.
+
+Original libc can allocate a master and open its slave under root and an
+ordinary UID. Its next terminal-attribute ioctl (0x54d5) remains ENOSYS;
+original xwsh instead reaches unsupported fork after allocation. General
+STREAMS, higher PTY banks, concurrent lifecycle, IRIX slave-lock isolation,
+termios, signals, shell execution and interactive winterm are not qualified.
