@@ -464,19 +464,16 @@ irix_stat_device(dev_t dev)
 	return ((major(dev) & 0x3fffU) << 18) | (minor(dev) & 0x3ffffU);
 }
 
+/* Shared fixed-width serialization; callers establish native metadata first. */
 static int
-irix_xstat(struct lwp *l, const void *args, register_t *rval)
+irix_stat_copyout(struct lwp *l, const struct stat *st, int32_t stat_version,
+    uint32_t buf, register_t *rval)
 {
-	const struct irix_xstat_args *uap = args;
 	union {
 		struct irix_stat_small small;
 		struct irix_stat_wide wide;
 	} out;
-	struct stat st;
-	struct nameidata nd;
-	struct pathbuf *pb;
-	char path[MAXPATHLEN];
-	size_t len, bytes;
+	size_t bytes;
 	int error;
 	bool wide;
 
@@ -487,6 +484,64 @@ irix_xstat(struct lwp *l, const void *args, register_t *rval)
 	CTASSERT(offsetof(struct irix_stat_wide, atim) == 68);
 	CTASSERT(offsetof(struct irix_stat_wide, blocks) == 96);
 	CTASSERT(offsetof(struct irix_stat_wide, fstype) == 104);
+	if (stat_version != 2 && stat_version != 3)
+		return EINVAL;
+	wide = stat_version == 3 ||
+	    l->l_proc->p_md.md_abi == _MIPS_BSD_API_N32;
+	memset(&out, 0, sizeof(out));
+	/* Both layouts have the same named fields but different widths/offsets.
+	 * Filesystem identities/allocation come from the native vnode. IRIX
+	 * project IDs are unavailable; fstype explicitly describes that gap. */
+#define IRIX_STAT_FIELDS(dst) do { \
+	(dst).dev = irix_stat_device(st->st_dev); \
+	(dst).ino = st->st_ino; \
+	(dst).mode = st->st_mode; \
+	(dst).nlink = st->st_nlink; \
+	(dst).uid = st->st_uid; \
+	(dst).gid = st->st_gid; \
+	(dst).rdev = S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode) ? \
+	    irix_stat_device(st->st_rdev) : 0; \
+	(dst).atim.sec = st->st_atimespec.tv_sec; \
+	(dst).atim.nsec = st->st_atimespec.tv_nsec; \
+	(dst).mtim.sec = st->st_mtimespec.tv_sec; \
+	(dst).mtim.nsec = st->st_mtimespec.tv_nsec; \
+	(dst).ctim.sec = st->st_ctimespec.tv_sec; \
+	(dst).ctim.nsec = st->st_ctimespec.tv_nsec; \
+	(dst).blksize = st->st_blksize; \
+	strlcpy((dst).fstype, "unknown", sizeof((dst).fstype)); \
+} while (0)
+	if (wide) {
+		IRIX_STAT_FIELDS(out.wide);
+		out.wide.size = st->st_size;
+		out.wide.blocks = st->st_blocks;
+		bytes = sizeof(out.wide);
+	} else {
+		IRIX_STAT_FIELDS(out.small);
+		/* The measured o32 version-2 interface saturates large file sizes. */
+		out.small.size = MIN(st->st_size, INT32_MAX);
+		out.small.blocks = st->st_blocks;
+		bytes = sizeof(out.small);
+	}
+#undef IRIX_STAT_FIELDS
+	/* Unaligned buffers are accepted, and a page fault can leave the
+	 * accessible prefix copied. Do not preflight or roll back copyout. */
+	error = copyout(&out, irix_pointer(buf), bytes);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+static int
+irix_xstat(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_xstat_args *uap = args;
+	struct stat st;
+	struct nameidata nd;
+	struct pathbuf *pb;
+	char path[MAXPATHLEN];
+	size_t len;
+	int error;
+
 	CTASSERT(MAXPATHLEN == 1024);
 	error = copyinstr(irix_pointer(SCARG(uap, path)), path,
 	    sizeof(path), &len);
@@ -508,51 +563,29 @@ irix_xstat(struct lwp *l, const void *args, register_t *rval)
 	pathbuf_destroy(pb);
 	if (error != 0)
 		return error;
-	if (SCARG(uap, version) != 2 && SCARG(uap, version) != 3)
-		return EINVAL;
-	wide = SCARG(uap, version) == 3 ||
-	    l->l_proc->p_md.md_abi == _MIPS_BSD_API_N32;
-	memset(&out, 0, sizeof(out));
-	/* Both layouts have the same named fields but different widths/offsets.
-	 * Filesystem identities/allocation come from the native vnode. IRIX
-	 * project IDs are unavailable; fstype explicitly describes that gap. */
-#define IRIX_STAT_FIELDS(dst) do { \
-	(dst).dev = irix_stat_device(st.st_dev); \
-	(dst).ino = st.st_ino; \
-	(dst).mode = st.st_mode; \
-	(dst).nlink = st.st_nlink; \
-	(dst).uid = st.st_uid; \
-	(dst).gid = st.st_gid; \
-	(dst).rdev = S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode) ? \
-	    irix_stat_device(st.st_rdev) : 0; \
-	(dst).atim.sec = st.st_atimespec.tv_sec; \
-	(dst).atim.nsec = st.st_atimespec.tv_nsec; \
-	(dst).mtim.sec = st.st_mtimespec.tv_sec; \
-	(dst).mtim.nsec = st.st_mtimespec.tv_nsec; \
-	(dst).ctim.sec = st.st_ctimespec.tv_sec; \
-	(dst).ctim.nsec = st.st_ctimespec.tv_nsec; \
-	(dst).blksize = st.st_blksize; \
-	strlcpy((dst).fstype, "unknown", sizeof((dst).fstype)); \
-} while (0)
-	if (wide) {
-		IRIX_STAT_FIELDS(out.wide);
-		out.wide.size = st.st_size;
-		out.wide.blocks = st.st_blocks;
-		bytes = sizeof(out.wide);
-	} else {
-		IRIX_STAT_FIELDS(out.small);
-		/* The measured o32 version-2 interface saturates large file sizes. */
-		out.small.size = MIN(st.st_size, INT32_MAX);
-		out.small.blocks = st.st_blocks;
-		bytes = sizeof(out.small);
-	}
-#undef IRIX_STAT_FIELDS
-	/* Unaligned buffers are accepted, and a page fault can leave the
-	 * accessible prefix copied. Do not preflight or roll back copyout. */
-	error = copyout(&out, irix_pointer(SCARG(uap, buf)), bytes);
-	if (error == 0)
-		*rval = 0;
-	return error;
+	return irix_stat_copyout(l, &st, SCARG(uap, version),
+	    SCARG(uap, buf), rval);
+}
+
+struct irix_fxstat_args {
+	syscallarg(int32_t) version;
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) buf;
+};
+
+static int
+irix_fxstat(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_fxstat_args *uap = args;
+	struct stat st;
+	int error;
+
+	/* Native descriptor ownership and file operations remain authoritative. */
+	error = do_sys_fstat(SCARG(uap, fd), &st);
+	if (error != 0)
+		return error;
+	return irix_stat_copyout(l, &st, SCARG(uap, version),
+	    SCARG(uap, buf), rval);
 }
 
 /* Both supported IRIX ABIs use 32-bit fd-mask words and timeval fields. */
@@ -1459,6 +1492,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_xstat,
 	},
+	[160] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_fxstat_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_fxstat,
+	},
 	[134] = {
 		.sy_narg = 6,
 		.sy_argsize = sizeof(struct irix_o32_mmap_args),
@@ -1484,7 +1523,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
-	[136] = "mprotect", [158] = "xstat", [82] = "sginap", [91] = "connect",
+	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
 	[102] = "sendmsg", [105] = "setsockopt",
@@ -1557,6 +1596,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
 	case 1158: code = 158; break;
+	case 1160: code = 160; break;
 	default: code = 0; break;
 	}
 	const size_t nargs = irix_o32_sysent[code].sy_narg;
