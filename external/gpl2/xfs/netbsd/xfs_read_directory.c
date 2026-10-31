@@ -8,7 +8,7 @@
  * All Rights Reserved.
  */
 /* $NetBSD$ */
-/* Selected shortform/data verifiers and the data-only readdir scan. */
+/* Shortform/block verifiers; external directories use xfs_read_dir_index. */
 #include "xfs_read_internal.h"
 #include "xfs_directory.h"
 #include "xfs_dir_layout.h"
@@ -26,8 +26,8 @@ has_ftype(const struct xfs_sb *sb)
 	    (sb->sb_features2 & XFS_SB_VERSION2_FTYPE);
 }
 
-static unsigned int
-entry_size(const struct xfs_sb *sb, unsigned int namelen)
+unsigned int
+xfs_dir_entry_size(const struct xfs_sb *sb, unsigned int namelen)
 {
 	return (9 + namelen + has_ftype(sb) + 2 + 7) & ~7U;
 }
@@ -55,8 +55,8 @@ valid_ino(const struct xfs_sb *sb, uint64_t ino)
 	    xfs_data_address(sb, ino >> sb->sb_inopblog, 1, &offset) == 0;
 }
 
-static uint32_t
-name_hash(const uint8_t *p, unsigned int n)
+uint32_t
+xfs_dir_name_hash(const uint8_t *p, unsigned int n)
 {
 	uint32_t hash = 0;
 	while (n-- != 0)
@@ -96,7 +96,7 @@ shortform(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 	if (!valid_ino(sb, parent) || (dir->number == sb->sb_rootino && parent != dir->number))
 		return xfs_read_fail(why, EINVAL, "invalid directory parent inode");
 	i8count = parent > UINT32_MAX;
-	next = header + entry_size(sb, 1) + entry_size(sb, 2);
+	next = header + xfs_dir_entry_size(sb, 1) + xfs_dir_entry_size(sb, 2);
 	pos = 2 + width;
 	/* Validate the entire shortform before emitting even the implicit dots. */
 	for (i = 0; i < count; i++) {
@@ -110,7 +110,7 @@ shortform(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 		offset = xfs_get16(p + 1);
 		if (offset < next || (offset & 7))
 			return xfs_read_fail(why, EINVAL, "invalid shortform entry offset");
-		next = offset + entry_size(sb, len);
+		next = offset + xfs_dir_entry_size(sb, len);
 		type = ftype ? p[3 + len] : 0;
 		p += 3 + len + ftype;
 		ino = width == 8 ? xfs_get64(p) : xfs_get32(p);
@@ -147,10 +147,11 @@ shortform(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 /* Verify complete data/free records and, for block directories, the embedded
  * hash index. A bitset proves each index pointer names a distinct live entry
  * start. It avoids quadratic scans and rejects pointers into name bytes. */
-static int
-verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
+int
+xfs_dir_verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
     const uint8_t *data, unsigned int bytes, uint64_t logical, uint64_t address,
-    unsigned int *data_end, const char **why)
+    unsigned int *data_end, uint8_t *entry_starts, unsigned int *entry_count,
+    const char **why)
 {
 	const struct xfs_sb *sb = &r->sb;
 	uint8_t starts[XFS_MAX_BLOCKSIZE / 8 / 8] = { 0 };
@@ -211,10 +212,10 @@ verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 			lastfree = true;
 			continue;
 		}
-		if (end - off < entry_size(sb, 1))
+		if (end - off < xfs_dir_entry_size(sb, 1))
 			return xfs_read_fail(why, EINVAL, "truncated directory entry");
 		nlen = data[off + 8];
-		len = entry_size(sb, nlen);
+		len = xfs_dir_entry_size(sb, nlen);
 		if (len > end - off || !valid_name(data + off + 9, nlen) ||
 		    xfs_get16(data + off + len - 2) != off)
 			return xfs_read_fail(why, EINVAL, "invalid directory entry name, length or tag");
@@ -223,12 +224,12 @@ verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 		if (!valid_ino(sb, ino) || type >= XFS_DIR3_FT_MAX)
 			return xfs_read_fail(why, EINVAL, "invalid directory inode or file type");
 		dot = dot_name(data + off + 9, nlen);
-		if (dot && (logical != 0 || off != header + (dot == 2 ? entry_size(sb, 1) : 0) ||
+		if (dot && (logical != 0 || off != header + (dot == 2 ? xfs_dir_entry_size(sb, 1) : 0) ||
 		    (dot == 1 && ino != dir->number) || (ftype && type != XFS_DIR3_FT_DIR) ||
 		    (dot == 2 && dir->number == sb->sb_rootino && ino != dir->number)))
 			return xfs_read_fail(why, EINVAL, "invalid directory dot entry");
 		if (logical == 0 && ((off == header && dot != 1) ||
-		    (off == header + entry_size(sb, 1) && dot != 2)))
+		    (off == header + xfs_dir_entry_size(sb, 1) && dot != 2)))
 			return xfs_read_fail(why, EINVAL, "missing directory dot entry");
 		starts[off / 64] |= 1U << ((off / 8) & 7);
 		live++;
@@ -238,8 +239,8 @@ verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 		return xfs_read_fail(why, EINVAL, "incomplete directory bestfree coverage");
 	/* The first two entries may not be marked free. */
 	if (logical == 0 && (!(starts[header / 64] & (1U << ((header / 8) & 7))) ||
-	    !(starts[(header + entry_size(sb, 1)) / 64] &
-	    (1U << (((header + entry_size(sb, 1)) / 8) & 7)))))
+	    !(starts[(header + xfs_dir_entry_size(sb, 1)) / 64] &
+	    (1U << (((header + xfs_dir_entry_size(sb, 1)) / 8) & 7)))))
 		return xfs_read_fail(why, EINVAL, "missing directory dot entries");
 	if (block) {
 		for (i = 0; i < n; i++) {
@@ -255,7 +256,7 @@ verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 			if (ptr >= end / 8 || !(starts[ptr / 8] & (1U << (ptr & 7))))
 				return xfs_read_fail(why, EINVAL, "invalid or duplicate directory leaf pointer");
 			off = ptr * 8;
-			if (hash != name_hash(data + off + 9, data[off + 8]))
+			if (hash != xfs_dir_name_hash(data + off + 9, data[off + 8]))
 				return xfs_read_fail(why, EINVAL, "directory name hash mismatch");
 			starts[ptr / 8] &= ~(1U << (ptr & 7));
 		}
@@ -263,18 +264,23 @@ verify_data(const struct xfs_reader *r, const struct xfs_inode_image *dir,
 			return xfs_read_fail(why, EINVAL, "directory leaf/live count mismatch");
 	}
 	*data_end = end;
+	if (entry_starts != NULL)
+		memcpy(entry_starts, starts, bytes / 64);
+	if (entry_count != NULL)
+		*entry_count = live;
 	return 0;
 }
 
 size_t
 xfs_directory_scratch_size(const struct xfs_reader *r)
 {
-	return r == NULL ? 0 : (r->sb.sb_blocksize << r->sb.sb_dirblklog) + r->sb.sb_blocksize;
+	return r == NULL ? 0 : XFS_DIR_WORKSPACE_SIZE;
 }
 
-int
-xfs_read_directory(const struct xfs_reader *r, const struct xfs_inode_image *dir,
-    void *scratch, size_t capacity, xfs_directory_emit emit, void *cookie, const char **why)
+static int
+read_directory(const struct xfs_reader *r, const struct xfs_inode_image *dir,
+    void *scratch, size_t capacity, xfs_directory_emit emit, void *cookie,
+    const void *name, size_t namelen, const char **why)
 {
 	const struct xfs_sb *sb;
 	uint8_t *data = scratch, *map_scratch;
@@ -327,7 +333,12 @@ xfs_read_directory(const struct xfs_reader *r, const struct xfs_inode_image *dir
 		}
 		if (i != blocks)
 			continue;
-		error = verify_data(r, dir, data, bytes, pos, first_address, &limit, why);
+		if (pos == 0 && xfs_get32(data) == (xfs_crc_enabled(sb) ?
+		    XFS_DIR3_DATA_MAGIC : XFS_DIR2_DATA_MAGIC))
+			return xfs_read_dir_index(r, dir, scratch, capacity, emit,
+			    cookie, name, namelen, why);
+		error = xfs_dir_verify_data(r, dir, data, bytes, pos, first_address,
+		    &limit, NULL, NULL, why);
 		if (error != 0)
 			return error;
 		for (off = xfs_crc_enabled(sb) ? 64 : 16; off < limit; off += len) {
@@ -335,7 +346,7 @@ xfs_read_directory(const struct xfs_reader *r, const struct xfs_inode_image *dir
 				len = xfs_get16(data + off + 2);
 				continue;
 			}
-			len = entry_size(sb, data[off + 8]);
+			len = xfs_dir_entry_size(sb, data[off + 8]);
 			type = has_ftype(sb) ? data[off + 9 + data[off + 8]] : 0;
 			error = emit_entry(emit, cookie, xfs_get64(data + off), type,
 			    data + off + 9, data[off + 8], why);
@@ -345,6 +356,14 @@ xfs_read_directory(const struct xfs_reader *r, const struct xfs_inode_image *dir
 		pos += bytes;
 	}
 	return 0;
+}
+
+int
+xfs_read_directory(const struct xfs_reader *r, const struct xfs_inode_image *dir,
+    void *scratch, size_t capacity, xfs_directory_emit emit, void *cookie,
+    const char **why)
+{
+	return read_directory(r, dir, scratch, capacity, emit, cookie, NULL, 0, why);
 }
 
 struct lookup {
@@ -378,7 +397,8 @@ xfs_directory_lookup(const struct xfs_reader *r, const struct xfs_inode_image *d
 	int error;
 	if (name == NULL || result == NULL || !valid_name(name, length))
 		return xfs_read_fail(why, EINVAL, "invalid lookup name or output");
-	error = xfs_read_directory(r, dir, scratch, capacity, lookup_entry, &l, why);
+	error = read_directory(r, dir, scratch, capacity, lookup_entry, &l,
+	    name, length, why);
 	if (error != 0)
 		return error;
 	if (!l.found)

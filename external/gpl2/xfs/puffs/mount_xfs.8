@@ -92,9 +92,15 @@ The initial server uses synchronous reads and disables PUFFS name, attribute
 and page caches.
 Verified access ACLs are retained with each immutable inode.
 Memory mapping and execution of files from this mount are unsupported.
-Directory listing and lookup scan directory data linearly.
+External directory data, hash trees and free-space indexes are verified
+before lookup or listing, including index-to-data agreement.
+Lookup follows the verified hash tree and handles hash collisions.
+Each operation still reads and verifies the complete directory.
+Mapped blocks and bookkeeping must fit in the 8 MiB workspace;
+oversized directories fail with
+.Er EIO .
 Directory offsets are stable entry ordinals on the immutable image.
-External directory indexes and global allocation consistency are not verified.
+Global allocation consistency and metadata LSNs are not verified.
 .Pp
 Use
 .Xr umount 8

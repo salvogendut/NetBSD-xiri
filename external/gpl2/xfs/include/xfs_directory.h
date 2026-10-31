@@ -6,20 +6,23 @@
 
 #define XFS_IMAGE_PATH_MAX 4096
 #define XFS_IMAGE_SYMLINK_LIMIT 40
+#define XFS_DIR_WORKSPACE_SIZE (8U * 1024U * 1024U)
 
 /* Names are byte strings, not NUL terminated. filetype uses XFS disk values
  * (0 unknown, 1 file, 2 directory, ... 7 symlink, 8 whiteout).
  * The callback must not retain name, alter the reader/inode/scratch, or
  * reenter using the same workspace. Return zero or a positive errno.
- * Entries from earlier verified blocks can be emitted before a later error.
+ * Metadata verification completes before the first callback. A callback
+ * failure can occur after earlier entries have been emitted.
  */
 typedef int (*xfs_directory_emit)(void *, uint64_t, uint8_t,
     const uint8_t *, size_t);
 
-/* Workspace size = directory block size + filesystem block size. Buffers
- * may be unaligned, but must not overlap the reader, inode, name or results.
- * External leaf/node hash and free-space indexes are not consulted: these
- * are linear inspection scans, not full directory consistency checks.
+/* The server supplies an 8 MiB workspace, including external directory data
+ * and indexes. Oversized directories fail with EMSGSIZE; no hidden allocation.
+ * Buffers may be unaligned, but must not overlap the reader, inode, name or results.
+ * External directories are fully verified before emitting entries or looking
+ * up a hash. The caller must keep the image immutable throughout the operation.
  */
 size_t xfs_directory_scratch_size(const struct xfs_reader *);
 int xfs_read_directory(const struct xfs_reader *, const struct xfs_inode_image *,

@@ -27,7 +27,8 @@ for program in t_probe t_io t_inode t_directory t_log t_attr t_attr_external t_a
 	    "$xfs_root/netbsd/xfs_inode_stat.c" "$xfs_root/netbsd/xfs_read_attr.c" \
 	    "$xfs_root/netbsd/xfs_read_acl.c" "$xfs_root/netbsd/xfs_read_attr_external.c" \
 	    "$xfs_root/netbsd/xfs_read_symlink.c" \
-	    "$xfs_root/netbsd/xfs_read_directory.c" "$xfs_root/netbsd/xfs_lookup_path.c" \
+	    "$xfs_root/netbsd/xfs_read_directory.c" "$xfs_root/netbsd/xfs_read_dir_index.c" \
+	    "$xfs_root/netbsd/xfs_lookup_path.c" \
 	    "$xfs_root/tests/$program.c" -o "$xfs_build/$program"
 done
 
@@ -42,6 +43,7 @@ done
 if [ "${1:-}" = --images ]; then
 	python3 "$xfs_root/tests/test_images.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_paths.py" "$xfs_build/xfs_probe"
+	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_dir_indexes.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_log.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_attrs.py" "$xfs_build/xfs_probe"
 	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_acl_images.py" "$xfs_build/xfs_probe"

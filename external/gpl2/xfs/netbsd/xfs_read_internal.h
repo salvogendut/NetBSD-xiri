@@ -4,6 +4,7 @@
 #define _XFS_READ_INTERNAL_H_
 #include "xfs_inode.h"
 #include "xfs_attr.h"
+#include "xfs_directory.h"
 #include <sys/errno.h>
 #include <sys/stat.h>
 
@@ -67,5 +68,12 @@ int xfs_read_attrs_external(const struct xfs_reader *, const struct xfs_inode_im
     xfs_attr_emit_fn, void *, const char **);
 int xfs_read_symlink_range(const struct xfs_reader *, const struct xfs_inode_image *,
     uint64_t, void *, size_t, void *, size_t, const char **);
+unsigned int xfs_dir_entry_size(const struct xfs_sb *, unsigned int);
+uint32_t xfs_dir_name_hash(const uint8_t *, unsigned int);
+int xfs_dir_verify_data(const struct xfs_reader *, const struct xfs_inode_image *,
+    const uint8_t *, unsigned int, uint64_t, uint64_t, unsigned int *, uint8_t *,
+    unsigned int *, const char **);
+int xfs_read_dir_index(const struct xfs_reader *, const struct xfs_inode_image *,
+    void *, size_t, xfs_directory_emit, void *, const void *, size_t, const char **);
 
 #endif

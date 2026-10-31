@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 from test_images import metadata_crc, require, run, values
+from test_dir_indexes import corrupt_node_fixture
 
 
 def encode_acl(entries):
@@ -285,7 +286,7 @@ def main():
         (root / f"v{version}.json").write_text(json.dumps({"hello": hello, "mtime": when}) + "\n")
         print(f"Created {image}: 1800-entry directory, permissions, symlinks, hard link and timestamps")
         if version == 5:
-            for name in ("root-attr.img", "root-acl.img", "root-bad-attr.img", "bad-log.img"):
+            for name in ("root-attr.img", "root-acl.img", "root-bad-attr.img", "bad-log.img", "bad-dir-index.img"):
                 destination = root / name
                 with image.open("rb") as src, destination.open("xb") as dst:
                     while data := src.read(1024 * 1024):
@@ -294,6 +295,7 @@ def main():
                         else:
                             dst.seek(len(data), 1)
                     dst.truncate(src.tell())
+            corrupt_node_fixture(root / "bad-dir-index.img")
             run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
                 "-c", "attr_set -r fixture rejected", str(root / "root-attr.img"))
             run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",

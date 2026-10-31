@@ -75,7 +75,8 @@ print_attr(void *cookie, uint8_t flags, const uint8_t *name, size_t nlen,
 int
 main(int argc, char **argv)
 {
-	uint8_t data[2 * XFS_MAX_BLOCKSIZE], output[XFS_MAX_BLOCKSIZE];
+	static uint8_t data[XFS_DIR_WORKSPACE_SIZE];
+	uint8_t output[XFS_MAX_BLOCKSIZE];
 	struct xfs_path_workspace path_work;
 	struct xfs_inode_image inode;
 	struct xfs_sb sb;

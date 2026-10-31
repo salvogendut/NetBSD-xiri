@@ -253,15 +253,29 @@ leaf and node directories both enumerate their data blocks. The port also:
     single-block directory's embedded hash index (including hash collisions);
   - assembles directory blocks from possibly fragmented filesystem blocks;
   - skips whole aligned holes, rejecting unwritten or partially missing data;
-  - implements exact-name lookup by scanning all entries, rejecting duplicate
-    matches and preserving the result when a later block fails verification.
+  - rejects duplicate queried names and preserves lookup results on error.
 
-External leaf/node hash indexes and free-space indexes are not read or
-verified. This deliberately uses the data-only readdir path for inspection
-lookup, not upstream's hash-index lookup algorithm. It cannot establish
-agreement with those indexes. ASCII case-insensitive directories are rejected.
-Directory callbacks see only entries from fully verified blocks, but callbacks
-from preceding blocks cannot be rolled back after a later error.
+netbsd/xfs_read_dir_index.c adapts xfs_dir3_leaf_check_int,
+xfs_dir3_leaf_verify/header_check, xfs_dir3_free_verify/header_check and
+xfs_da3_node_verify. Lookup follows xfs_dir2_leaf_search_hash and the
+equal-hash matching rules of xfs_dir2_leaf_lookup_int, xfs_da3_node_lookup_int
+and xfs_dir2_leafn_lookup_for_entry, including collisions crossing leaves.
+The implementation loads the complete external directory into caller workspace,
+with no hidden allocation or persistent cache. In addition to upstream header
+and identity checks, it bounds leaf bests/free arrays, verifies hash order and
+parent maxima, enforces decreasing tree levels and reciprocal sibling links,
+and rejects missing/shared/cyclic/orphan index blocks. Per-data-block bitmaps
+prove a bijection between live records and index pointers; pointers into free
+records, names, holes or duplicate entries are rejected. Free-space summaries
+must agree with verified data bestfree records, including holes.
+
+All external data/index verification and I/O precede lookup or enumeration.
+Lookup descends the verified hash tree with lower-bound searches; enumeration
+retains logical data-block order for stable PUFFS cookies. Both operations
+revalidate the complete directory on each call. The server and inspector use
+8 MiB workspaces and reject directories whose mapped blocks and bookkeeping
+exceed that capacity. ASCII case-insensitive directories remain unsupported.
+Metadata LSN checks and global allocation ownership remain outside this port.
 
 netbsd/xfs_read_symlink.c adapts xfs_symlink_remote_read, xfs_symlink_verify
 and xfs_symlink_hdr_ok. It verifies complete mapped buffers (one header per
@@ -281,7 +295,7 @@ implement credentials, access control or NetBSD namei/VFS integration.
 These readers are image-inspection adaptations, not a replacement for all
 live-kernel verifiers or xfs_repair. In particular they do not cross-check
 global extent/block counts, rmap ownership, other allocation trees, inode
-timestamp consistency, external directory indexes, or log LSNs.
+timestamp consistency or log LSNs.
 Inline and external attributes are verified separately by xfs_read_attrs;
 xfs_read_inode remains a structural inode/data-fork reader.
 Bmap blocks are verified lazily during file reads. Unknown read-only-compatible features

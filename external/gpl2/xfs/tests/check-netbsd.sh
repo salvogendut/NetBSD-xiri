@@ -27,7 +27,7 @@ ln -s "$xfs_src/lib/libpthread/pthread_types.h" "$xfs_build/pthread_types.h"
 ln -s "$xfs_src/common/include/prop" "$xfs_build/prop"
 
 for source in xfs_sb xfs_probe xfs_cksum xfs_io xfs_ag xfs_read_log xfs_read_btree \
-    xfs_read_inode xfs_inode_stat xfs_read_attr xfs_read_attr_external xfs_read_acl xfs_read_file xfs_read_symlink xfs_read_directory xfs_lookup_path; do
+    xfs_read_inode xfs_inode_stat xfs_read_attr xfs_read_attr_external xfs_read_acl xfs_read_file xfs_read_symlink xfs_read_directory xfs_read_dir_index xfs_lookup_path; do
 	${CC:-cc} -std=gnu11 -O2 -nostdinc \
 	    -D__NetBSD__ -U__linux__ -Wall -Wextra -Werror \
 	    -I "$xfs_build" -isystem "$xfs_src/include" -isystem "$xfs_src/sys" \

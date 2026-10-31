@@ -64,6 +64,15 @@ for xfs_version in 4 5; do
 	[ ! -e "$xfs_build/mnt/hello" ]
 done
 
+xfs_image="$xfs_images/bad-dir-index.img"
+xfs_before=$(cksum -a sha256 "$xfs_image")
+start_server "$xfs_image"
+"$xfs_build/t_puffs" "$xfs_build/mnt" bad-dir-index
+umount "$xfs_build/mnt"
+wait "$xfs_pid"
+xfs_pid=
+[ "$xfs_before" = "$(cksum -a sha256 "$xfs_image")" ]
+
 for xfs_bad in root-attr root-acl root-bad-attr bad-log; do
 	"$xfs_root/puffs/mount_xfs" -s "$xfs_images/$xfs_bad.img" "$xfs_build/mnt" > "$xfs_build/server.log" 2>&1 &
 	xfs_pid=$!

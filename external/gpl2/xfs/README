@@ -160,11 +160,15 @@ xfs_read_directory enumerates shortform, block, leaf and node directories.
 It verifies the data entries, names, file types, inode-number bounds, dots,
 free-space records, v3 identity/CRC, and a block directory's embedded hash
 index. Directory blocks up to 64 KiB can span multiple filesystem blocks.
-xfs_directory_lookup scans all data entries for an exact name, rejecting
-duplicate matches. External leaf/node hash indexes and free-space indexes
-are not consulted or verified; this uses the upstream data-only readdir
-approach. ASCII case-insensitive directories are unsupported. Scans are
-linear in directory data size and use no cache or readahead.
+xfs_directory_lookup uses hash-tree lookup for external leaf/node directories,
+including equal hashes spanning leaves, stale entries and duplicate queried
+names. External data, leaf/node indexes and free-space indexes are verified
+together before lookup or enumeration. Checks cover identity/CRC, bounds,
+hash order and parent maxima, decreasing levels, sibling links, orphan/cyclic
+blocks, one-to-one index/data agreement and free-space summaries. Enumeration
+keeps data order and existing PUFFS cookies. Every operation still verifies the
+complete directory; indexed lookup does not yet avoid that I/O or add caching.
+ASCII case-insensitive directories are unsupported.
 
 xfs_lookup_path resolves absolute image paths, repeated separators, dots,
 relative/absolute symlinks and trailing slashes. It checks selected inode
@@ -172,11 +176,14 @@ allocation, limits expanded paths to 4095 bytes and traversal to 40 symlinks.
 The caller can decline to follow the final symlink. Paths remain entirely
 inside the image. There are no host pathname operations or permission checks.
 
-Directory/path APIs require directory-block-size + filesystem-block-size
-scratch, from xfs_directory_scratch_size. Path resolution also takes a
+Directory/path APIs require the 8 MiB scratch size returned by
+xfs_directory_scratch_size. External directories keep their mapped data and
+index blocks plus bookkeeping in this caller-owned workspace and return
+EMSGSIZE if they do not fit. The server maps that error to EIO. Path resolution also takes a
 caller-owned xfs_path_workspace; use heap allocation in the server. Directory
-callbacks receive byte names valid only during that call. Earlier callbacks
-can have run when a later block fails. Lookup outputs are unchanged on error.
+callbacks receive byte names valid only during that call. Metadata verification
+finishes before any entry is emitted; callback failures can occur after earlier
+entries were emitted. Lookup outputs are unchanged on error.
 
 xfs_log_inspect scans the internal v2 journal's cycle stamps and checks the
 latest record's boundaries, UUID, LSNs, sector/stripe alignment and CRC32C.
@@ -212,8 +219,7 @@ Inode reads reject unknown read-only-compatible features. Recognizing a
 feature bit does not mean that all operations for that feature are ported.
 
 This is an experimental mountable subset, not a complete filesystem verifier.
-It does not inspect external directory indexes,
-cross-check global tree counts or allocation ownership, or validate metadata LSNs
+It does not cross-check global tree counts or allocation ownership, or validate metadata LSNs
 against the log. Inode/data-bmap verification covers the visited paths;
 it does not check unvisited subtrees or reciprocal sibling links. Attribute
 trees are traversed completely and their sibling chains are cross-checked.
@@ -264,12 +270,18 @@ block-aligned inode chunks that do not start at multiples of 64.
 Fragmented bmaps and
 sparse/unwritten layouts currently use synthetic fixtures.
 
-The namespace suite adds 8,350 checks for v4/v5 shortform and block/data
+The namespace suite adds 33,342 checks for v4/v5 shortform and block/data
 directories, 32/64-bit inode numbers, free entries, hash collisions, callbacks,
 holes, lookup output preservation, corruption with recomputed CRCs, and remote
 symlinks. Contiguous and fragmented two-block v5 symlinks with 1 KiB blocks
 are covered by synthetic fixtures, including corruption in an unrequested
 tail and insufficient scratch capacity.
+External index tests cover leaf1, one/two-level node trees, collisions across
+leaves, stale entries, holes, fragmented 8 KiB data/index blocks, bmap-backed
+directories, duplicate/missing pointers, sibling/parent inconsistencies,
+free-space summaries, orphan blocks, workspace exhaustion and every read's
+failure/short-read path. The directory suite also passes with undefined-behavior
+checks configured to trap.
 
 The journal suite adds 1,009 checks plus guard/argument checks for v4/v5
 superblocks, both endian formats, extended headers, wrapped records, skipped
@@ -325,6 +337,14 @@ trailing slashes, missing names, non-directories, long components, expansion
 limits and 24 directory/symlink corruption cases. Image hashes also cover
 restoration of the intentionally mutated disposable blocks.
 
+Four external-index image configurations add v4/v5 leaf/node lookup and
+enumeration, 1/4 KiB filesystem blocks, 4/8 KiB directory blocks and 96 index
+corruptions, including repaired checksums and corruption in unrequested leaves.
+Each corruption must fail lookup and listing without emitting an entry. Valid
+images and restored fixtures retain their SHA256 hashes. The native NetBSD
+suite additionally mounts a damaged-index fixture and requires EIO for lookup
+and readdir in that directory while unrelated files remain readable.
+
 xfsprogs 7.1.1's prototype writer produced a truncated remote symlink in the
 1 KiB-block test: a 990-byte inode size with only one 968-byte payload mapping.
 The reader correctly rejects that image. The mkfs test uses a shorter target
@@ -362,7 +382,8 @@ To build a persistent image inspector on NetBSD or Linux:
         "$xfs_src/netbsd/xfs_read_attr_external.c" \
         "$xfs_src/netbsd/xfs_read_acl.c" \
         "$xfs_src/netbsd/xfs_read_symlink.c" \
-        "$xfs_src/netbsd/xfs_read_directory.c" "$xfs_src/netbsd/xfs_lookup_path.c" \
+        "$xfs_src/netbsd/xfs_read_directory.c" "$xfs_src/netbsd/xfs_read_dir_index.c" \
+        "$xfs_src/netbsd/xfs_lookup_path.c" \
         "$xfs_src/tests/xfs_probe.c" \
         -o /tmp/xfs_probe
     /tmp/xfs_probe /path/to/image
@@ -414,8 +435,10 @@ maximum-size v4/v5 ACLs, masked permissions, directory search and default ACLs.
 Rejection cases cover malformed/inconsistent ACLs, security labels (also with
 a valid ACL), unknown trusted attributes and non-root properties. Other inodes
 have malformed shortform attributes with valid CRCs. Four startup rejection
-images cover malformed root ACLs, unknown trusted attributes, malformed attributes and
-a bad journal. Only these disposable fixtures have inherited prototype
+images cover malformed root ACLs, unknown trusted attributes, malformed attributes,
+a bad journal and a checksummed directory index with a missing child. The latter
+mounts successfully but rejects lookup/readdir within the damaged directory.
+Only these disposable fixtures have inherited prototype
 SELinux labels removed; selected files receive explicit rejection fixtures.
 The root property is temporarily removed to add a synthetic hard link, then
 restored through xfs_db. Hard links, fixed legacy/bigtime timestamps, binary
@@ -501,8 +524,8 @@ Remaining milestones
    Expand runtime coverage to prolonged workloads and allocator failures.
    Add bounded caching only with explicit consistency and lifetime contracts.
 2. Add Linux-produced clean/dirty journals, fragmented, sparse and unwritten
-   files, complementing synthetic fixtures. Port external directory index
-   verifiers/hash lookup and expand cross-tree and metadata-LSN validation.
+   files, complementing synthetic fixtures. Expand cross-tree and metadata-LSN
+   validation and support larger directories with bounded streaming or caching.
    Port transaction reservations, logging/recovery and allocation in user
    space before enabling writes. Require crash/replay tests and xfstests
    coverage, including concurrency and forced-shutdown paths.

@@ -381,6 +381,18 @@ main(int argc, char **argv)
 		return 0;
 	}
 	CHECK(chdir(argv[1]) == 0);
+	if (strcmp(argv[2], "bad-dir-index") == 0) {
+		read_hello("hello", true);
+		FAILS(stat("many/f0000", &st), EIO);
+		FAILS(stat("many/absent", &st), EIO);
+		fd = open("many", O_RDONLY);
+		CHECK(fd != -1);
+		FAILS(getdents(fd, (char *)data, sizeof(data)), EIO);
+		CHECK(close(fd) == 0);
+		read_hello("hello", true);
+		puts("Passed corrupted directory index rejection through PUFFS lookup/readdir");
+		return 0;
+	}
 	seconds = strcmp(argv[2], "5") == 0 ? INT64_C(4102444800) : -1;
 	CHECK(stat("hello", &st) == 0 && stat("alias", &alias) == 0);
 	CHECK(st.st_ino == alias.st_ino && st.st_dev == alias.st_dev);

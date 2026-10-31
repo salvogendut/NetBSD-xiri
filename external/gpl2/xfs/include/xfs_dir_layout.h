@@ -21,6 +21,24 @@
 #define XFS_DIR3_FT_MAX 9
 #define XFS_DIR2_DATA_FREE_TAG 0xffff
 #define XFS_DIR2_SPACE_SIZE (1ULL << 35)
+#define XFS_DIR2_LEAF1_MAGIC 0xd2f1
+#define XFS_DIR2_LEAFN_MAGIC 0xd2ff
+#define XFS_DIR3_LEAF1_MAGIC 0x3df1
+#define XFS_DIR3_LEAFN_MAGIC 0x3dff
+#define XFS_DIR2_FREE_MAGIC 0x58443246
+#define XFS_DIR3_FREE_MAGIC 0x58444633
+/* The common DA headers are also selected by the attribute reader. */
+#include "xfs_attr_layout.h"
+
+struct xfs_dir2_leaf_hdr {
+	struct xfs_attr_blkinfo info;
+	__be16 count, stale;
+};
+struct xfs_dir3_leaf_hdr {
+	struct xfs_attr3_blkinfo info;
+	__be16 count, stale;
+	__be32 pad;
+};
 
 struct xfs_dir2_data_free {
 	__be16 offset;
@@ -42,6 +60,13 @@ struct xfs_dir3_data_hdr {
 	struct xfs_dir3_blk_hdr hdr;
 	struct xfs_dir2_data_free best_free[3];
 	__be32 pad;
+};
+struct xfs_dir2_free_hdr {
+	__be32 magic, firstdb, nvalid, nused;
+};
+struct xfs_dir3_free_hdr {
+	struct xfs_dir3_blk_hdr hdr;
+	__be32 firstdb, nvalid, nused, pad;
 };
 struct xfs_dir2_leaf_entry {
 	__be32 hashval;
