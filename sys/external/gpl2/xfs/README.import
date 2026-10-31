@@ -5,10 +5,10 @@ Mirror: https://github.com/torvalds/linux
 Tag: v6.12
 Commit: adc218676eef25575469234709c2d87185ca223a
 Import date: 2026-10-31
-License: GPL version 2, as specified in each imported file.
+License: GPL-2.0 or GPL-2.0+, as specified in each imported file.
 
-This is a deliberately small, pinned source import for the first porting
-milestone. v6.12 supplies both v4 and v5 disk definitions and a reproducible
+This is a pinned source subset for the initial metadata-reading milestones.
+v6.12 supplies both v4 and v5 disk definitions and a reproducible
 baseline; this is not a claim to track the latest Linux XFS release.
 
 Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
@@ -18,9 +18,15 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_sb.c
     xfs_sb.h
     xfs_types.h
+    xfs_alloc.c
+    xfs_ialloc.c
+    xfs_cksum.h
+    xfs_btree.c
+    xfs_rmap_btree.c
+    xfs_refcount_btree.c
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these six upstream files. Verify them with
+SHA256 records the hashes of these twelve upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
@@ -40,6 +46,38 @@ Their original copyright notices and GPL identifiers are retained.
 include/xfs_compat.h supplies the scalar types, endian conversions, assertions
 and UUID-copy operation used by these routines. Linux's opaque UUID bytes
 remain distinct from NetBSD's structured UUID representation.
+
+netbsd/xfs_cksum.c adapts xfs_start_cksum_safe / xfs_verify_cksum from
+dist/xfs_cksum.h: the field offset is checked, unaligned checksum loads use
+memcpy, and a software Castagnoli CRC replaces Linux's crc32c service.
+No checksum-generation/write path is exposed.
+
+netbsd/xfs_ag.c adapts the following read-side checks to an explicit reader
+context, without creating placeholder Linux mount, buffer, or log objects:
+
+    xfs_agf_verify, xfs_agfl_verify, xfs_validate_ag_length,
+    xfs_agfl_needs_reset (xfs_alloc.c)
+    xfs_agi_verify (xfs_ialloc.c)
+    xfs_btree_compute_maxlevels, xfs_btree_space_to_height (xfs_btree.c)
+    xfs_rmapbt_compute_maxlevels (xfs_rmap_btree.c)
+    xfs_refcountbt_compute_maxlevels (xfs_refcount_btree.c)
+
+Unlike the unchanged superblock routines, these adaptations intentionally:
+
+  - return positive errno values and static diagnostics;
+  - require the exact AG length calculated from the primary superblock,
+    including the shortened last AG; concurrent growfs is unsupported;
+  - check tree-root block bounds, inode counters and active free-list slots;
+  - reject an inconsistent free-list ring instead of repairing/resetting it;
+  - check inactive v5 slots against the actual AG length, but ignore unused
+    v4 slots, which historical mkfs versions left uninitialized;
+  - interpret unlinked inode pointers as AG-relative inode numbers;
+  - do not call xfs_log_check_lsn: no log has been initialized or recovered.
+
+Tree-depth limits use upstream record sizes and fanout calculations, including
+the distinct reverse-map bound for reflink filesystems. The 64-block minimum
+AG size is XFS_MIN_AG_BLOCKS from libxfs/xfs_fs.h at the same pinned commit.
+These verifiers do not establish journal cleanliness or tree consistency.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
 No SGI/Linux code has been relicensed as BSD code. This directory is not wired

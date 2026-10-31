@@ -24,9 +24,10 @@ for header in stdint stddef stdbool; do
 	ln -s "$xfs_src/sys/sys/$header.h" "$xfs_build/$header.h"
 done
 
-for source in xfs_sb xfs_probe; do
+for source in xfs_sb xfs_probe xfs_cksum xfs_io xfs_ag; do
 	${CC:-cc} -std=gnu11 -O2 -ffreestanding -nostdinc \
 	    -D_KERNEL -D__NetBSD__ -U__linux__ -Wall -Wextra -Werror \
+	    -Wframe-larger-than=2048 \
 	    -I "$xfs_build" -isystem "$xfs_src/sys" \
 	    -I "$xfs_root/include" -isystem "$xfs_root/dist" \
 	    -c "$xfs_root/netbsd/$source.c" -o "$xfs_build/$source.o"

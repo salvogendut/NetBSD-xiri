@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* $NetBSD$ */
 
-#include "xfs_probe.h"
+#include "xfs_io.h"
 
 #ifdef _KERNEL
 #include <sys/errno.h>
@@ -16,23 +16,6 @@ reject(const char **why, int error, const char *message)
 	if (why != NULL)
 		*why = message;
 	return error;
-}
-
-/* Castagnoli CRC, with the on-disk checksum field treated as zero. */
-static uint32_t
-superblock_crc(const uint8_t *bytes, size_t length)
-{
-	uint32_t crc = UINT32_MAX;
-	size_t i;
-	unsigned int bit;
-
-	for (i = 0; i < length; i++) {
-		if (i < XFS_SB_CRC_OFF || i >= XFS_SB_CRC_OFF + 4)
-			crc ^= bytes[i];
-		for (bit = 0; bit < 8; bit++)
-			crc = (crc >> 1) ^ ((crc & 1) ? 0x82f63b78U : 0);
-	}
-	return ~crc;
 }
 
 static unsigned int
@@ -78,7 +61,7 @@ xfs_probe_superblock(const void *data, size_t length, uint64_t device_bytes,
 		return reject(why, EINVAL, "invalid sector geometry");
 	if (length < sb.sb_sectsize)
 		return reject(why, EMSGSIZE, "truncated superblock sector");
-	if (v5 && superblock_crc(data, sb.sb_sectsize) != le32toh(disk.sb_crc))
+	if (v5 && xfs_verify_metadata_crc(data, sb.sb_sectsize, XFS_SB_CRC_OFF))
 		return reject(why, EINVAL, "superblock CRC32C mismatch");
 	if (sb.sb_blocklog < XFS_MIN_BLOCKSIZE_LOG ||
 	    sb.sb_blocklog > XFS_MAX_BLOCKSIZE_LOG ||

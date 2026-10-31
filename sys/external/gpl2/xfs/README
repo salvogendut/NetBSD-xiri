@@ -19,6 +19,20 @@ input, checks disk-controlled shifts, and preserves the caller's output on
 failure. Filesystem block numbers are decoded as AG/block pairs, including
 when the allocation-group size is not a power of two.
 
+A bounded read callback now supplies data-device I/O. xfs_reader_open loads
+and validates the primary superblock; xfs_read_blocks checks encoded addresses
+and rejects reads crossing an AG boundary, the filesystem end, or the device
+end. Short reads and callback failures propagate as errors. The caller owns
+the read-only device and a sector-sized scratch buffer; there are no large
+kernel-stack buffers or hidden allocations.
+
+xfs_read_ag reads and verifies AGF, AGI and AGFL sectors, checking CRC32C,
+metadata UUID, sequence number, actual AG length, free-list ring, tree roots
+and depth limits, counters, and unlinked inode pointer bounds. Optional
+finobt/rmapbt/reflink/inobtcount fields follow the superblock feature bits.
+Unused v4 free-list slots are ignored; active slots are always checked. The
+verified output is published only after all three reads and verifiers succeed.
+
 The probe recognizes v4 superblocks with v2 directories and unwritten extent
 support, and v5 superblocks with the pinned upstream's feature definitions.
 It rejects unknown incompatible bits, NEEDSREPAIR, nonzero log-incompatible
@@ -27,13 +41,17 @@ compatible and read-only-compatible bits do not prevent superblock inspection.
 Recognizing a feature bit does not mean that its inode or btree format has
 been ported.
 
-This is NOT a mountable filesystem or a complete upstream superblock verifier.
-It does not check AG headers, inode allocation, directory contents, all log
-geometry, or journal cleanliness. Even a read-only mount can require recovery;
-a successful probe must never be used as evidence that replay can be skipped.
+This is NOT a mountable filesystem or a complete filesystem verifier.
+It does not traverse btrees, check inode allocation or directory contents,
+validate metadata LSNs against the log, or establish journal cleanliness.
+Even a read-only mount can require recovery; a successful probe must never
+be used as evidence that replay can be skipped.
 There is no VFS registration, mount helper, kernel module, or write path yet.
 The command-line probe accepts regular image files only and opens them
 read-only. No test mounts a filesystem or accesses a raw disk device.
+Images must be quiescent for the entire inspection: this reader has no cache,
+locking, snapshot, or concurrent-growfs semantics. An AGF ring that upstream
+would reset is rejected rather than changed.
 
 Layout
 ------
@@ -50,22 +68,29 @@ Build and test from the src root
     sh sys/external/gpl2/xfs/tests/run.sh --images
     sh sys/external/gpl2/xfs/tests/check-kernel.sh
 
-The first command needs a C compiler and runs 1,070 checks, including v4 quota
-translation, UUID selection, unaligned and short input, sector corruption,
+The first command needs a C compiler and runs 1,070 superblock checks, including
+v4 quota translation, UUID selection, unaligned and short input, sector corruption,
 invalid geometry and feature masks, and shortened final allocation groups.
-CC and CFLAGS can override the compiler and host-test flags.
+It also runs 1,600 AG validation cases and I/O boundary/failure checks: each
+header read is subjected to errors, short reads and incorrect byte counts;
+CRC-protected bytes, recomputed-checksum corruptions, UUIDs, optional trees,
+wrapped/full/empty free lists, legacy v4 slots, unaligned scratch buffers,
+and output preservation are covered. CC and CFLAGS can override the compiler
+and host-test flags.
 
 The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
-and xfs_db). It creates four disposable 400 MiB sparse images, compares the
-probe's fields with xfs_db, checks whole-image hashes before and after probing,
-and tests seven damaged/unsupported inputs. The image configurations cover
-defaults, 4 KiB sectors, 64 KiB blocks and 2 KiB inodes. Tests were run with
+and xfs_db). It creates six disposable 400 MiB sparse images, compares the
+superblock and all 24 AGs with xfs_db, checks whole-image hashes before and
+after probing, and tests seven bad superblocks plus twelve bad AG headers.
+The configurations cover defaults, 4 KiB sectors, 64 KiB blocks, 2 KiB inodes,
+a shortened final AG and disabled optional trees. Tests were run with
 xfsprogs 7.1.1. A future mkfs default may enable a newer, unsupported feature;
 review the upstream baseline rather than bypassing the rejection.
 
-The third compiles both port files with this checkout's NetBSD amd64 kernel
+The third compiles all five port files with this checkout's NetBSD amd64 kernel
 headers and no host system headers. It needs an amd64 compiler. This checks
-header/layout compatibility only, not linking, module loading or booting.
+header/layout compatibility and a 2 KiB per-frame stack limit, not linking,
+module loading or booting. There is no rump runtime test yet.
 
 An undefined-behavior check that does not require sanitizer runtime libraries:
 
@@ -77,25 +102,27 @@ To build a persistent image inspector on NetBSD or Linux:
     xfs_src=sys/external/gpl2/xfs
     cc -std=gnu11 -D_DEFAULT_SOURCE -O2 -I "$xfs_src/include" \
         -isystem "$xfs_src/dist" "$xfs_src/netbsd/xfs_sb.c" \
-        "$xfs_src/netbsd/xfs_probe.c" "$xfs_src/tests/xfs_probe.c" \
+        "$xfs_src/netbsd/xfs_probe.c" "$xfs_src/netbsd/xfs_cksum.c" \
+        "$xfs_src/netbsd/xfs_io.c" "$xfs_src/netbsd/xfs_ag.c" \
+        "$xfs_src/tests/xfs_probe.c" \
         -o /tmp/xfs_probe
     /tmp/xfs_probe /path/to/image
+    /tmp/xfs_probe -a 0 /path/to/image
 
 Next milestones
 ---------------
 
-1. Add an explicit block-I/O interface and port upstream AG and buffer
-   verifiers. Test reads, I/O errors, UUID/CRC mismatches and all block bounds
-   in userland/rump before connecting a live kernel device.
-2. Port inode, extent/bmap and directory readers. Test file data, sparse and
-   unwritten extents, symlinks, large files and corrupted metadata against
+1. Port inode, extent/bmap and directory readers using the bounded I/O layer.
+   Verify btree block checksums, UUIDs, owners, addresses and sibling bounds
+   before traversing them. Test file data, sparse and unwritten extents,
+   symlinks, large files and corrupted metadata against
    images populated with Linux XFS. Establish reliable clean-log detection;
    reject filesystems requiring replay until recovery is implemented.
-3. Add NetBSD VFS/vnode operations, vnode lifecycle/locking, UBC integration,
+2. Add NetBSD VFS/vnode operations, vnode lifecycle/locking, UBC integration,
    a rump component, a mount helper and an explicitly enabled GPL module.
    Start with read-only mounts and unmount/error-path tests. Unsupported
    formats and write requests must fail rather than use placeholder handlers.
-4. Port transaction reservations, logging/recovery and allocation before
+3. Port transaction reservations, logging/recovery and allocation before
    enabling any writes. Require crash/replay tests and xfstests coverage,
    including concurrency and forced-shutdown paths.
 
