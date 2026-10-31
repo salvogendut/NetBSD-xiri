@@ -82,12 +82,12 @@ check_attrs(int expected, unsigned int count, int policy_expected)
 	memcpy(&before, &inode, sizeof(inode));
 	reads = calls;
 	emitted = 0;
-	error = xfs_read_attrs(&reader, &inode, emit, &emitted, &why);
+	error = xfs_read_attrs(&reader, &inode, NULL, 0, emit, &emitted, &why);
 	if (error != expected)
 		fprintf(stderr, "attributes: expected %d, got %d (%s)\n", expected, error, why);
 	CHECK(error == expected && emitted == count);
 	CHECK((why == NULL) == (error == 0));
-	error = xfs_attrs_check_readonly(&reader, &inode, &why);
+	error = xfs_attrs_check_readonly(&reader, &inode, NULL, 0, &why);
 	if (error != policy_expected)
 		fprintf(stderr, "policy: expected %d, got %d (%s), case %u\n",
 		    policy_expected, error, why, checks);
@@ -206,11 +206,11 @@ main(void)
 		check_attrs(0, 0, 0); /* a retained, empty fork */
 		put16(disk + 16 * BS + offsetof(struct xfs_dinode, di_anextents), 1);
 		put64(disk + 16 * BS + offsetof(struct xfs_dinode, di_nblocks), 5);
-		check_attrs(EOPNOTSUPP, 0, EOPNOTSUPP);
+		check_attrs(EMSGSIZE, 0, EMSGSIZE);
 		disk[16 * BS + offsetof(struct xfs_dinode, di_aformat)] = XFS_DINODE_FMT_BTREE;
 		put16(disk + 16 * BS + offsetof(struct xfs_dinode, di_anextents), 32);
 		put64(disk + 16 * BS + offsetof(struct xfs_dinode, di_nblocks), 36);
-		check_attrs(EOPNOTSUPP, 0, EOPNOTSUPP);
+		check_attrs(EMSGSIZE, 0, EMSGSIZE);
 		/* Largest on-disk count, in a 2 KiB inode: all 255 byte names. */
 		reset_attrs(v, false);
 		reader.sb.sb_inodesize = 2048;
@@ -229,13 +229,13 @@ main(void)
 		setup(v, 0, false);
 		expect_inode(number, 0, NULL);
 		emitted = 0;
-		CHECK(xfs_read_attrs(&reader, &inode, emit, &emitted, NULL) == 0 && emitted == 0);
+		CHECK(xfs_read_attrs(&reader, &inode, NULL, 0, emit, &emitted, NULL) == 0 && emitted == 0);
 	}
-	CHECK(xfs_read_attrs(NULL, &inode, emit, &emitted, &why) == EINVAL);
-	CHECK(xfs_read_attrs(&reader, NULL, emit, &emitted, &why) == EINVAL);
-	CHECK(xfs_read_attrs(&reader, &inode, NULL, NULL, &why) == EINVAL);
-	CHECK(xfs_attrs_check_readonly(NULL, &inode, NULL) == EINVAL);
-	CHECK(xfs_attrs_check_readonly(&reader, NULL, NULL) == EINVAL);
+	CHECK(xfs_read_attrs(NULL, &inode, NULL, 0, emit, &emitted, &why) == EINVAL);
+	CHECK(xfs_read_attrs(&reader, NULL, NULL, 0, emit, &emitted, &why) == EINVAL);
+	CHECK(xfs_read_attrs(&reader, &inode, NULL, 0, NULL, NULL, &why) == EINVAL);
+	CHECK(xfs_attrs_check_readonly(NULL, &inode, NULL, 0, NULL) == EINVAL);
+	CHECK(xfs_attrs_check_readonly(&reader, NULL, NULL, 0, NULL) == EINVAL);
 	printf("Passed %u inline attribute and mount-policy checks\n", checks);
 	return 0;
 }

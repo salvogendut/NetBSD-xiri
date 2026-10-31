@@ -3,6 +3,7 @@
 
 #include "xfs_directory.h"
 #include "xfs_log.h"
+#include "xfs_attr.h"
 
 #include <sys/stat.h>
 #include <errno.h>
@@ -57,6 +58,20 @@ print_entry(void *cookie, uint64_t ino, uint8_t type, const uint8_t *name, size_
 	return ferror(stdout) ? EIO : 0;
 }
 
+static int
+print_attr(void *cookie, uint8_t flags, const uint8_t *name, size_t nlen,
+    const uint8_t *value, size_t vlen)
+{
+	size_t i;
+	(void)cookie;
+	printf("{\"flags\":%u,\"name\":\"", flags);
+	for (i = 0; i < nlen; i++) printf("%02x", name[i]);
+	fputs("\",\"value\":\"", stdout);
+	for (i = 0; i < vlen; i++) printf("%02x", value[i]);
+	fputs("\"}\n", stdout);
+	return ferror(stdout) ? EIO : 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -75,6 +90,7 @@ main(int argc, char **argv)
 	bool inspect_ag = false, inspect_inode = false, read_file = false;
 	bool list_directory = false, read_link = false;
 	bool inspect_log = false, raw = false;
+	bool read_attrs = false, attr_policy = false;
 	int fd, error;
 
 	if (argc > 1 && strcmp(argv[1], "--raw") == 0) {
@@ -104,11 +120,14 @@ main(int argc, char **argv)
 		length = number(argv[4]);
 		path = argv[5];
 	} else if (argc == 4 && (strcmp(argv[1], "-p") == 0 ||
-	    strcmp(argv[1], "-l") == 0 || strcmp(argv[1], "-s") == 0)) {
+	    strcmp(argv[1], "-l") == 0 || strcmp(argv[1], "-s") == 0 ||
+	    strcmp(argv[1], "-x") == 0 || strcmp(argv[1], "-X") == 0)) {
 		inspect_inode = argv[1][1] == 'p';
 		list_directory = argv[1][1] == 'l';
 		read_link = argv[1][1] == 's';
 		read_file = read_link;
+		attr_policy = argv[1][1] == 'X';
+		read_attrs = argv[1][1] == 'x' || attr_policy;
 		length = XFS_SYMLINK_MAXLEN;
 		image_path = argv[2];
 		path = argv[3];
@@ -123,7 +142,8 @@ main(int argc, char **argv)
 	} else {
 		fprintf(stderr, "usage: xfs_probe [--raw] [-j | -a agno | -i ino] image\n"
 		    "       xfs_probe -r ino offset length image\n"
-		    "       xfs_probe {-p|-l|-s} /path/in/image image\n"
+		    "       xfs_probe {-p|-l|-s|-x|-X} /path/in/image image\n"
+		    "       -x dumps attributes as hex JSON; -X also applies mount policy\n"
 		    "       xfs_probe -R /path/in/image offset length image\n"
 		    "       --raw skips the clean-journal guard for image analysis\n");
 		return 2;
@@ -148,7 +168,7 @@ main(int argc, char **argv)
 	io.read = image_read;
 	error = xfs_reader_open(&io, data, sizeof(data), &reader, &why);
 	if (error == 0 && (inspect_log ||
-	    (!raw && (inspect_inode || read_file || list_directory)))) {
+	    (!raw && (inspect_inode || read_file || list_directory || read_attrs)))) {
 		void *log_scratch = malloc(XFS_LOG_SCRATCH_SIZE);
 		if (log_scratch == NULL) {
 			error = ENOMEM;
@@ -168,8 +188,27 @@ main(int argc, char **argv)
 	if (error == 0 && image_path != NULL)
 		error = xfs_lookup_path(&reader, image_path, strlen(image_path), !read_link,
 		    &path_work, data, sizeof(data), &ino, &why);
-	if (error == 0 && (inspect_inode || read_file || list_directory))
+	if (error == 0 && (inspect_inode || read_file || list_directory || read_attrs))
 		error = xfs_read_inode(&reader, ino, data, sizeof(data), &inode, &why);
+	if (error == 0 && read_attrs) {
+		void *work = malloc(XFS_ATTR_WORKSPACE_SIZE);
+		if (work == NULL) {
+			error = ENOMEM;
+			why = "cannot allocate attribute workspace";
+		} else {
+			if (attr_policy)
+				error = xfs_attrs_check_readonly(&reader, &inode, work,
+				    XFS_ATTR_WORKSPACE_SIZE, &why);
+			if (error == 0)
+				error = xfs_read_attrs(&reader, &inode, work, XFS_ATTR_WORKSPACE_SIZE,
+				    print_attr, NULL, &why);
+			free(work);
+		}
+		if (fflush(stdout) != 0 && error == 0) {
+			error = EIO;
+			why = "attribute output flush failed";
+		}
+	}
 	if (error == 0 && read_link && !S_ISLNK(inode.mode)) {
 		error = EINVAL;
 		why = "readlink requires a symlink";
@@ -206,7 +245,7 @@ main(int argc, char **argv)
 		fprintf(stderr, "xfs_probe: %s (%s)\n", why, strerror(error));
 		return 1;
 	}
-	if (read_file || list_directory)
+	if (read_file || list_directory || read_attrs)
 		return 0;
 	if (inspect_log) {
 		printf("state = %s\n", log.state == XFS_LOG_CLEAN ? "clean" : "needs-recovery");

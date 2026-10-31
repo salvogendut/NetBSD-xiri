@@ -132,7 +132,9 @@ dispatch(struct puffs_cc *pcc)
 	    preq->preq_optype == PUFFS_VFS_VPTOFH)) ||
 	    (PUFFSOP_OPCLASS(preq->preq_opclass) == PUFFSOP_VN &&
 	    (preq->preq_optype == PUFFS_VN_READDIR
-	    || preq->preq_optype == PUFFS_VN_READ))) {
+	    || preq->preq_optype == PUFFS_VN_READ
+	    || preq->preq_optype == PUFFS_VN_GETEXTATTR
+	    || preq->preq_optype == PUFFS_VN_LISTEXTATTR))) {
 		if (puffs_framebuf_reserve_space(pcc->pcc_pb,
 		    PUFFS_MSG_MAXSIZE) == -1)
 			error = errno;

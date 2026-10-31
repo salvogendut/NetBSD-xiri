@@ -11,7 +11,8 @@
 
 int
 xfs_read_attrs(const struct xfs_reader *reader, const struct xfs_inode_image *inode,
-    xfs_attr_emit_fn emit, void *cookie, const char **why)
+    void *workspace, size_t capacity, xfs_attr_emit_fn emit, void *cookie,
+    const char **why)
 {
 	struct xfs_dinode d;
 	const uint8_t *attrs, *entry, *prior;
@@ -42,8 +43,12 @@ xfs_read_attrs(const struct xfs_reader *reader, const struct xfs_inode_image *in
 	    be32_to_cpu(d.di_big_anextents) : be16_to_cpu(d.di_anextents);
 	if (d.di_aformat == XFS_DINODE_FMT_EXTENTS && nextents == 0)
 		return 0;
+	if (d.di_aformat == XFS_DINODE_FMT_EXTENTS || d.di_aformat == XFS_DINODE_FMT_BTREE)
+		return xfs_read_attrs_external(reader, inode,
+		    xfs_dinode_size(d.di_version) + offset, available, d.di_aformat,
+		    nextents, workspace, capacity, emit, cookie, why);
 	if (d.di_aformat != XFS_DINODE_FMT_LOCAL)
-		return xfs_read_fail(why, EOPNOTSUPP, "external attribute blocks are unsupported");
+		return xfs_read_fail(why, EINVAL, "invalid attribute fork format");
 	if (nextents != 0 || available < 4)
 		return xfs_read_fail(why, EINVAL, "invalid shortform attribute header");
 	total = xfs_get16(attrs);
@@ -118,13 +123,14 @@ check_readonly(void *cookie, uint8_t flags, const uint8_t *name, size_t namelen,
 
 int
 xfs_attrs_check_readonly(const struct xfs_reader *reader,
-    const struct xfs_inode_image *inode, const char **why)
+    const struct xfs_inode_image *inode, void *workspace, size_t capacity,
+    const char **why)
 {
 	struct attr_policy policy = { 0 };
 	int error;
 	if (reader != NULL && inode != NULL)
 		policy.root = inode->number == reader->sb.sb_rootino && S_ISDIR(inode->mode);
-	error = xfs_read_attrs(reader, inode, check_readonly, &policy, why);
+	error = xfs_read_attrs(reader, inode, workspace, capacity, check_readonly, &policy, why);
 	if (error == 0 && policy.unsupported)
 		return xfs_read_fail(why, EOPNOTSUPP,
 		    "ACL, security or unrecognized trusted attribute is unsupported");

@@ -36,12 +36,13 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_dir2_data.c
     xfs_symlink_remote.c
     xfs_attr_leaf.c
+    xfs_attr_remote.c
 
 dist/xfs_dir2_readdir.c, dist/xfs_log.c and dist/xfs_log_recover.c come from
 fs/xfs/ (outside libxfs/) at that commit.
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these twenty-seven upstream files. Verify them with
+SHA256 records the hashes of these twenty-eight upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
@@ -147,9 +148,35 @@ local/incomplete bits. The unused header padding is ignored as upstream does.
 It additionally rejects embedded NUL names and duplicate byte names within
 each namespace. All structural checks precede callbacks, including corruption
 in later entries; iteration uses bounded stack offsets and allocates nothing.
-Empty retained extent forks are accepted, but nonempty external forks and
-parent-pointer attributes are unsupported. Parent-pointer duplicate-name
+Empty retained extent forks are accepted. Parent-pointer attributes remain
+unsupported. Parent-pointer duplicate-name
 semantics are not treated as ordinary xattr semantics.
+
+netbsd/xfs_read_attr_external.c adapts the read-side leaf verification, node
+traversal and remote-value decoding from xfs_attr_leaf.c, xfs_da_btree.c and
+xfs_attr_remote.c. include/xfs_attr_layout.h selects their on-disk layouts
+from xfs_da_format.h. The shared bmap reader now accepts attribute forks with
+32-bit logical block addresses. Attribute mappings must match the inode's
+extent count; holes are allowed between objects, unwritten mappings are not.
+Mapped blocks, indexes and a 64 KiB value staging area occupy caller-owned
+workspace (8 MiB in mount_xfs). No allocator or Linux buffer cache is emulated.
+
+The reader verifies all mapped attribute blocks before callbacks. It checks
+tree depth, parent hashes, exact sibling chains, namespace/name/hash validity,
+record and free-map bounds/overlaps, used-byte counts, duplicate names and
+remote-value coverage. Leaf firstused may lag when holes are present, as in
+upstream split/move operations. It preserves the historical remote-name size
+round_up(11 + namelen, 4). On v5 it checks full-block CRC32C, metadata UUID,
+owner and physical address for tree and remote blocks, plus exact remote
+offsets/lengths. Remote headers occupy 56 bytes per filesystem block. V4
+remote blocks have no headers. Values may be up to 65536 bytes.
+
+Incomplete entries, parent pointers, shared/aliased attribute data blocks,
+unreferenced mapped blocks and missing remote blocks are rejected. Sorted
+name indexes detect duplicates without quadratic hash-collision scans.
+Pointers passed to callbacks are valid only during that callback; a remote
+value reuses staging space. Enumeration order is unspecified. The checks do
+not establish global allocation ownership or validate LSNs against the log.
 
 The separate xfs_attrs_check_readonly policy accepts user attributes and only
 the root directory's trusted xfs:autofsck property with values none, check,
@@ -224,8 +251,8 @@ implement credentials, access control or NetBSD namei/VFS integration.
 These readers are image-inspection adaptations, not a replacement for all
 live-kernel verifiers or xfs_repair. In particular they do not cross-check
 global extent/block counts, rmap ownership, other allocation trees, inode
-timestamp consistency, external directory indexes, external attribute contents,
-or log LSNs. Inline attributes are verified separately by xfs_read_attrs;
+timestamp consistency, external directory indexes, or log LSNs.
+Inline and external attributes are verified separately by xfs_read_attrs;
 xfs_read_inode remains a structural inode/data-fork reader.
 Bmap blocks are verified lazily during file reads. Unknown read-only-compatible features
 block inode access even though the superblock probe permits inspection.
@@ -243,6 +270,10 @@ operation/error handling using NetBSD's public libpuffs API. getextattr and
 listextattr expose raw names through NetBSD's user/system namespaces, checking
 file read permissions for user attributes and privileged credentials for
 system attributes. There is no Linux-style name-prefix translation.
+The accompanying BSD-licensed lib/libpuffs/dispatcher.c change reserves
+reply capacity for GETEXTATTR/LISTEXTATTR, matching READ/READDIR. Without it,
+large attribute callbacks can overrun the received header-sized frame. This
+is a libpuffs allocation fix; no GPL code is incorporated into libpuffs.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
 No SGI/Linux code has been relicensed as BSD code. This directory is not wired

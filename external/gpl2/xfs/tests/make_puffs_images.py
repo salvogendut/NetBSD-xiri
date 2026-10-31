@@ -12,6 +12,17 @@ import sys
 from test_images import metadata_crc, require, run, values
 
 
+def external_attributes(image, ino):
+    """Use xfsprogs to build a node tree and two remote values."""
+    commands = [f"inode {ino}", "attr_set -u big " + "B" * 8192,
+                "attr_set -u max " + "M" * 65536]
+    commands += [f"attr_set -u n{i:03d} " + "N" * 1000 for i in range(100)]
+    result = subprocess.run(["xfs_db", "-x", str(image)], input="\n".join(commands) + "\n",
+                            text=True, capture_output=True, check=True)
+    require(not result.stdout.strip() and not result.stderr.strip(),
+            f"xfs_db attribute generation: {result.stdout} {result.stderr}")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: make_puffs_images.py NEW-DIRECTORY")
@@ -27,7 +38,8 @@ def main():
         f"private ---600 12 34 {root / 'hello'}",
         "attributes d--755 12 34",
         *(f"{name} ---640 12 34 {root / 'hello'}" for name in
-          ("user", "acl", "label", "trusted", "foreign", "external", "bad", "duplicate", "incomplete")),
+          ("user", "acl", "label", "trusted", "foreign", "external", "external-list", "external-acl",
+           "external-label", "bad", "duplicate", "incomplete")),
         "$",
         "link l--777 12 34 hello",
         "longlink l--777 12 34 " + "/" * 990,
@@ -72,7 +84,16 @@ def main():
         attr("attributes/label", "attr_set -s selinux denied")
         attr("attributes/trusted", "attr_set -r fixture denied")
         attr("attributes/foreign", "attr_set -r xfs:autofsck repair")
-        attr("attributes/external", "attr_set -u -v 8192 big")
+        external_attributes(image, names["attributes/external"])
+        commands = [f"inode {names['attributes/external-list']}"]
+        commands += [f"attr_set -u -v 0 l{i:04d}" for i in range(800)]
+        result = subprocess.run(["xfs_db", "-x", str(image)], input="\n".join(commands) + "\n",
+                                text=True, capture_output=True, check=True)
+        require(not result.stdout.strip() and not result.stderr.strip(), "large-list fixture generation failed")
+        for path, command in (("external-acl", "attr_set -r -v 4 SGI_ACL_FILE"),
+                              ("external-label", "attr_set -s selinux denied")):
+            attr(f"attributes/{path}", "attr_set -u big " + "B" * 8192)
+            attr(f"attributes/{path}", command)
         for path in ("attributes/bad", "attributes/duplicate", "attributes/incomplete"):
             attr(path, "attr_set -u one supported")
         attr("attributes/duplicate", "attr_set -u two supported")

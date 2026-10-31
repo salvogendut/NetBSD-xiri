@@ -70,23 +70,24 @@ xfs_bmap_root(const struct xfs_sb *sb, const uint8_t *root, unsigned int size,
 	    true, 0, target, false, low, high, child, why);
 }
 
-int
-xfs_file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
-    uint64_t target, void *scratch, size_t capacity, uint64_t *mapped,
+static int
+fork_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
+    const uint8_t *fork, unsigned int format, unsigned int size,
+    uint64_t nextents, uint64_t high, uint64_t target,
+    void *scratch, size_t capacity, uint64_t *mapped,
     uint64_t *end, bool *zero, const char **why)
 {
 	const struct xfs_sb *sb = &r->sb;
-	const uint8_t *fork = inode->disk + inode->data_offset;
-	uint64_t low = 0, high = UINT64_C(1) << 54, fsb;
+	uint64_t low = 0, fsb;
 	unsigned int level, h, n;
 	int error;
 
-	if (inode->format == XFS_DINODE_FMT_EXTENTS)
-		return xfs_extent_lookup(sb, fork, inode->nextents, target,
+	if (format == XFS_DINODE_FMT_EXTENTS)
+		return xfs_extent_lookup(sb, fork, nextents, target,
 		    false, low, high, mapped, end, zero, why);
-	if (inode->format != XFS_DINODE_FMT_BTREE)
+	if (format != XFS_DINODE_FMT_BTREE)
 		return xfs_read_fail(why, EOPNOTSUPP, "unsupported file data format");
-	error = xfs_bmap_root(sb, fork, inode->data_size, target,
+	error = xfs_bmap_root(sb, fork, size, target,
 	    &level, &low, &high, &fsb, why);
 	if (error != 0)
 		return error;
@@ -97,7 +98,7 @@ xfs_file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode
 		if (error != 0)
 			return error;
 		if (level == 0) {
-			if (n > inode->nextents)
+			if (n > nextents)
 				return xfs_read_fail(why, EINVAL, "bmap leaf exceeds inode extent count");
 			return xfs_extent_lookup(sb, (const uint8_t *)scratch + h,
 			    n, target, true, low, high, mapped, end, zero, why);
@@ -108,6 +109,26 @@ xfs_file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode
 		if (error != 0)
 			return error;
 	}
+}
+
+int
+xfs_file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
+    uint64_t target, void *scratch, size_t capacity, uint64_t *mapped,
+    uint64_t *end, bool *zero, const char **why)
+{
+	return fork_mapping(r, inode, inode->disk + inode->data_offset,
+	    inode->format, inode->data_size, inode->nextents, UINT64_C(1) << 54,
+	    target, scratch, capacity, mapped, end, zero, why);
+}
+
+int
+xfs_attr_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
+    unsigned int offset, unsigned int size, unsigned int format, uint64_t count,
+    uint64_t target, void *scratch, size_t capacity, uint64_t *mapped,
+    uint64_t *end, bool *zero, const char **why)
+{
+	return fork_mapping(r, inode, inode->disk + offset, format, size, count,
+	    UINT64_C(1) << 32, target, scratch, capacity, mapped, end, zero, why);
 }
 
 int

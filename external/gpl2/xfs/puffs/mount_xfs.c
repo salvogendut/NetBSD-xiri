@@ -94,7 +94,8 @@ attributes(struct xfs_server *fs, struct xfs_node *node, struct vattr *va,
 	int error = xfs_inode_getattr(&fs->reader, &node->inode, &st, why);
 	if (error != 0)
 		return error;
-	error = xfs_attrs_check_readonly(&fs->reader, &node->inode, why);
+	error = xfs_attrs_check_readonly(&fs->reader, &node->inode,
+	    fs->scratch, fs->capacity, why);
 	if (error != 0)
 		return error;
 	if (!S_ISREG(node->inode.mode) && !S_ISDIR(node->inode.mode) && !S_ISLNK(node->inode.mode)) {
@@ -278,8 +279,9 @@ attr_access(struct puffs_usermount *pu, puffs_cookie_t cookie, int ns,
 struct attr_get {
 	uint8_t flags;
 	const char *name;
-	size_t namelen, length;
-	const uint8_t *value;
+	size_t namelen, length, capacity, copied;
+	uint8_t *data;
+	bool found;
 };
 
 static int
@@ -289,8 +291,11 @@ find_attr(void *cookie, uint8_t flags, const uint8_t *name, size_t namelen,
 	struct attr_get *get = cookie;
 	if (flags == get->flags && namelen == get->namelen &&
 	    memcmp(name, get->name, namelen) == 0) {
-		get->value = value;
+		get->found = true;
 		get->length = length;
+		get->copied = get->capacity < length ? get->capacity : length;
+		if (get->copied != 0)
+			memcpy(get->data, value, get->copied);
 	}
 	return 0;
 }
@@ -304,27 +309,26 @@ node_getextattr(struct puffs_usermount *pu, puffs_cookie_t cookie, int ns,
 	struct puffs_node *pn = cookie;
 	struct xfs_node *node = pn->pn_data;
 	struct attr_get get = { .name = name, .namelen = strlen(name),
+	    .data = data, .capacity = data != NULL && resid != NULL ? *resid : 0,
 	    .flags = ns == EXTATTR_NAMESPACE_USER ? 0 : XFS_ATTR_ROOT };
 	const char *why;
-	size_t copy;
 	int error = attr_access(pu, cookie, ns, cred);
 	if (error != 0)
 		return error;
 	if (get.namelen == 0 || get.namelen > UINT8_MAX)
 		return EINVAL;
-	error = xfs_read_attrs(&fs->reader, &node->inode, find_attr, &get, &why);
+	error = xfs_read_attrs(&fs->reader, &node->inode, fs->scratch, fs->capacity,
+	    find_attr, &get, &why);
 	if (error != 0)
 		return io_error(error);
-	if (get.value == NULL)
+	if (!get.found)
 		return ENODATA;
 	if (size != NULL)
 		*size = get.length;
-	if (data != NULL && resid != NULL) {
-		/* Native extattr_get_* allows a truncated value, like read(2). */
-		copy = *resid < get.length ? *resid : get.length;
-		memcpy(data, get.value, copy);
-		*resid -= copy;
-	}
+	/* Native extattr_get_* allows a truncated value, like read(2).
+	 * The callback copies while remote-value staging is still valid. */
+	if (data != NULL && resid != NULL)
+		*resid -= get.copied;
 	return 0;
 }
 
@@ -380,7 +384,8 @@ node_listextattr(struct puffs_usermount *pu, puffs_cookie_t cookie, int ns,
 		return error;
 	if (flags & ~PUFFS_EXTATTR_LIST_LENPREFIX)
 		return EINVAL;
-	error = xfs_read_attrs(&fs->reader, &node->inode, list_attr, &list, &why);
+	error = xfs_read_attrs(&fs->reader, &node->inode, fs->scratch, fs->capacity,
+	    list_attr, &list, &why);
 	if (error != 0)
 		return io_error(error);
 	if (size != NULL)
@@ -666,7 +671,7 @@ main(int argc, char **argv)
 		errx(1, "input must be a quiescent regular image file");
 	if (flock(fs->fd, LOCK_SH | LOCK_NB) == -1)
 		err(1, "lock image");
-	fs->capacity = XFS_LOG_SCRATCH_SIZE;
+	fs->capacity = XFS_ATTR_WORKSPACE_SIZE;
 	fs->scratch = malloc(fs->capacity);
 	if (fs->scratch == NULL)
 		err(1, "reader workspace");

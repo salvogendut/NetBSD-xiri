@@ -44,6 +44,75 @@ read_attr(const char *path, bool allowed)
 }
 
 static void
+large_attribute_list(void)
+{
+	unsigned char names[4801];
+	bool seen[800] = { false };
+	char name[6];
+	unsigned int i, n;
+	CHECK(extattr_list_file("attributes/external-list", EXTATTR_NAMESPACE_USER, NULL, 0) == 4800);
+	memset(names, 0xaa, sizeof(names));
+	CHECK(extattr_list_file("attributes/external-list", EXTATTR_NAMESPACE_USER, names, sizeof(names)) == 4800);
+	CHECK(names[4800] == 0xaa);
+	for (i = 0; i < 4800; i += 6) {
+		CHECK(names[i] == 5 && names[i + 1] == 'l');
+		memcpy(name, names + i + 1, 5); name[5] = 0;
+		n = (unsigned int)strtoul(name + 1, NULL, 10);
+		CHECK(n < 800 && !seen[n]); seen[n] = true;
+	}
+	for (i = 0; i < 800; i++) CHECK(seen[i]);
+	memset(names, 0xaa, sizeof(names));
+	CHECK(listxattr("attributes/external-list", (char *)names, sizeof(names)) == 4800);
+	CHECK(names[4800] == 0xaa);
+	for (i = 0; i < 4800; i += 6) CHECK(names[i] == 'l' && names[i + 5] == 0);
+}
+
+static void
+external_attributes(void)
+{
+	unsigned char data[65537], names[508];
+	bool seen[100] = { false };
+	unsigned int i, n, big = 0, max = 0;
+	char name[8];
+	size_t pos = 0;
+	int fd = open("attributes/external", O_RDONLY);
+	CHECK(fd >= 0);
+	CHECK(extattr_list_fd(fd, EXTATTR_NAMESPACE_USER, NULL, 0) == sizeof(names));
+	CHECK(extattr_list_fd(fd, EXTATTR_NAMESPACE_USER, names, sizeof(names)) == sizeof(names));
+	while (pos < sizeof(names)) {
+		n = names[pos++];
+		CHECK(n < sizeof(name) && n <= sizeof(names) - pos);
+		memcpy(name, names + pos, n); name[n] = 0; pos += n;
+		if (strcmp(name, "big") == 0) big++;
+		else if (strcmp(name, "max") == 0) max++;
+		else {
+			CHECK(n == 4 && name[0] == 'n');
+			i = (unsigned int)strtoul(name + 1, NULL, 10);
+			CHECK(i < 100 && !seen[i]); seen[i] = true;
+			CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, name, data, sizeof(data)) == 1000);
+			for (n = 0; n < 1000; n++) CHECK(data[n] == 'N');
+		}
+	}
+	CHECK(big == 1 && max == 1);
+	for (i = 0; i < 100; i++) CHECK(seen[i]);
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "big", NULL, 0) == 8192);
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "big", data, sizeof(data)) == 8192);
+	for (i = 0; i < 8192; i++) CHECK(data[i] == 'B');
+	memset(data, 0xaa, sizeof(data));
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "max", NULL, 0) == 65536);
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "max", data, sizeof(data)) == 65536);
+	for (i = 0; i < 65536; i++) CHECK(data[i] == 'M');
+	CHECK(data[65536] == 0xaa);
+	memset(data, 0xaa, sizeof(data));
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "big", data, 17) == 17);
+	for (i = 0; i < 17; i++) CHECK(data[i] == 'B');
+	CHECK(data[17] == 0xaa);
+	FAILS(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "absent", NULL, 0), ENODATA);
+	FAILS(extattr_set_fd(fd, EXTATTR_NAMESPACE_USER, "big", "x", 1), EROFS);
+	CHECK(close(fd) == 0);
+}
+
+static void
 attributes(void)
 {
 	static const char names[] = "\007fixture\006binary\005empty";
@@ -88,7 +157,10 @@ attributes(void)
 	FAILS(stat("attributes/label", &st), EOPNOTSUPP);
 	FAILS(stat("attributes/trusted", &st), EOPNOTSUPP);
 	FAILS(stat("attributes/foreign", &st), EOPNOTSUPP);
-	FAILS(stat("attributes/external", &st), EOPNOTSUPP);
+	external_attributes();
+	large_attribute_list();
+	FAILS(stat("attributes/external-acl", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/external-label", &st), EOPNOTSUPP);
 	FAILS(stat("attributes/bad", &st), EIO);
 	FAILS(stat("attributes/duplicate", &st), EIO);
 	FAILS(stat("attributes/incomplete", &st), EIO);

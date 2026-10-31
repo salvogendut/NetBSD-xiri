@@ -3,6 +3,7 @@
 #ifndef _XFS_READ_INTERNAL_H_
 #define _XFS_READ_INTERNAL_H_
 #include "xfs_inode.h"
+#include "xfs_attr.h"
 #include <sys/errno.h>
 #include <sys/stat.h>
 
@@ -58,6 +59,12 @@ int xfs_bmap_root(const struct xfs_sb *, const uint8_t *, unsigned int,
     uint64_t, unsigned int *, uint64_t *, uint64_t *, uint64_t *, const char **);
 int xfs_file_mapping(const struct xfs_reader *, const struct xfs_inode_image *,
     uint64_t, void *, size_t, uint64_t *, uint64_t *, bool *, const char **);
+int xfs_attr_mapping(const struct xfs_reader *, const struct xfs_inode_image *,
+    unsigned int, unsigned int, unsigned int, uint64_t, uint64_t, void *, size_t,
+    uint64_t *, uint64_t *, bool *, const char **);
+int xfs_read_attrs_external(const struct xfs_reader *, const struct xfs_inode_image *,
+    unsigned int, unsigned int, unsigned int, uint64_t, void *, size_t,
+    xfs_attr_emit_fn, void *, const char **);
 int xfs_read_symlink_range(const struct xfs_reader *, const struct xfs_inode_image *,
     uint64_t, void *, size_t, void *, size_t, const char **);
 

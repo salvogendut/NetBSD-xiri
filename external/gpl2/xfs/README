@@ -21,12 +21,12 @@ Current milestone
 puffs/mount_xfs.c serves regular files, directories and symlinks from a
 quiescent regular image through libpuffs. It requires a clean journal before
 mounting, opens the image read-only, and forces read-only/nodev/nosuid/noatime.
-There is no journal bypass or write path. Verified inline user attributes
+There is no journal bypass or write path. Verified inline and external user attributes
 and the root directory's trusted xfs:autofsck property are supported. The
 property accepts none, check, optimize and repair, and is exposed as metadata
 without triggering any maintenance. Inodes with ACLs, security labels,
-unknown trusted attributes, parent pointers, or nonempty external attribute
-forks are rejected. Do not remove security attributes from user images to
+unknown trusted attributes, parent pointers, or incomplete attribute updates
+are rejected. Do not remove security attributes from user images to
 make them mountable.
 
 The adapter implements lookup/getattr/access/open/read/readdir/readlink,
@@ -49,6 +49,16 @@ binary values, truncated reads and both list delimiter formats are supported.
 Names are not prefixed or aliased: use "fixture" in the user namespace and
 "xfs:autofsck" in the system namespace. Linux user./trusted. name-prefix
 translation is not implemented. Missing names on accepted inodes return ENODATA.
+External leaf/node trees, attribute bmap trees and remote values up to 64 KiB
+are supported. The complete attribute set must fit the server's 8 MiB shared
+verification workspace, including block and name indexes. Larger sets fail
+with EMSGSIZE in the reader (EIO at the PUFFS boundary). Enumeration order
+is unspecified.
+
+Build and use libpuffs from this checkout: its dispatcher now reserves reply
+space for GETEXTATTR/LISTEXTATTR. The unpatched NetBSD 11.0 library can overrun
+its request buffer on large attributes. The native regression suite tests
+64 KiB values and 800-name lists through the corrected library.
 
 Callbacks are serialized, use synchronous pread, and never yield while using
 shared scratch. Name/page caches are disabled and attribute TTLs remain zero.
@@ -93,8 +103,15 @@ levels bound traversal even if corrupted pointers form a cycle.
 xfs_read_attrs verifies an inode's complete shortform attribute fork before
 emitting any entries: total size, count, entry bounds, namespace flags, NUL
 names and duplicate names. Values remain opaque bytes. An empty retained
-extent fork is accepted; external attribute blocks and parent pointers are
-unsupported. No additional I/O or allocation is needed after xfs_read_inode.
+extent fork is accepted. Inline forks need no additional I/O or allocation.
+External forks use caller-owned workspace to load every mapped attribute
+block and verify tree links, hashes, leaf records/free maps, duplicate names
+and remote coverage before emitting anything. V5 tree/remote blocks require
+valid CRC32C, UUID, owner and physical address; remote blocks also require
+exact offsets/lengths. V4 remote data has no checksum/header. Holes between
+objects are allowed; unwritten, aliased and unreferenced mapped blocks are
+rejected. Parent pointers and incomplete entries remain unsupported.
+Callback pointers are valid only during the callback: remote staging is reused.
 xfs_attrs_check_readonly applies the separate mount policy to every attribute
 before the adapter publishes an inode. An allowed property cannot conceal an
 unsupported ACL or a malformed later entry. The raw inode/path inspector
@@ -168,10 +185,11 @@ Inode reads reject unknown read-only-compatible features. Recognizing a
 feature bit does not mean that all operations for that feature are ported.
 
 This is an experimental mountable subset, not a complete filesystem verifier.
-It does not inspect external directory indexes or external attribute contents,
+It does not inspect external directory indexes,
 cross-check global tree counts or allocation ownership, or validate metadata LSNs
-against the log. Tree verification covers the visited paths;
-it does not check unvisited subtrees or reciprocal sibling links.
+against the log. Inode/data-bmap verification covers the visited paths;
+it does not check unvisited subtrees or reciprocal sibling links. Attribute
+trees are traversed completely and their sibling chains are cross-checked.
 Even a read-only mount can require recovery; a successful probe must never
 be used as evidence that replay can be skipped.
 There is no write or recovery path.
@@ -236,11 +254,22 @@ forks, all flag combinations, truncation, duplicate names, binary/empty values,
 255-byte names/values, 255-entry lists in 2 KiB inodes, callback failures,
 and rejection before callbacks when a later entry is malformed. It also tests
 the root-property allowlist, inode identity/type, mixed allowed/denied
-attributes, and explicit rejection of ACLs, security labels, parent pointers
-and external forks.
+attributes, and explicit rejection of ACLs, security labels and parent pointers.
+The external suite adds 1,146 checks for v4/v5 leaves, maximum-depth node
+trees, sparse attribute bmaps, all flag combinations, 64 KiB remote values,
+duplicate names, overlap/identity/checksum corruption, workspace boundaries,
+unaligned workspace, short reads and callback failures. No callbacks run
+when a later leaf or remote block is malformed.
+
+Six additional xfsprogs attribute images cover v4/v5 at 1/4/64 KiB block
+sizes, leaf splits/deletion holes, node traversal, 102 attributes with local
+and remote values, and external ACL rejection. Whole-image hashes verify
+read-only behavior. A separate metadata-UUID change test uses the inspector's
+explicit --raw mode after xfs_admin resets the log; other attribute image
+reads use the clean-journal guard.
 
 The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
-and xfs_db, plus xfs_logprint for the journal tests). It creates six disposable
+and xfs_db, plus xfs_logprint and xfs_admin). It creates six disposable
 400 MiB sparse images, compares the
 superblock, all 24 AGs and 30 populated inodes with xfs_db, checks regular-file
 and local/remote-symlink contents against mkfs prototype sources.
@@ -273,7 +302,7 @@ explicit raw inspection and a synthetic wrapped record in a mkfs image.
 No journal fixture was captured from a running Linux mount yet; ordinary
 noninitial records and crash cases currently use synthetic data.
 
-The third compiles all fourteen port files, the CLI, PUFFS server and native
+The third compiles all fifteen port files, the CLI, PUFFS server and native
 test client with this checkout's
 NetBSD amd64 user-space headers and no host headers. It needs an amd64
 compiler. This verifies header/layout compatibility, not linking or running
@@ -295,6 +324,7 @@ To build a persistent image inspector on NetBSD or Linux:
         "$xfs_src/netbsd/xfs_read_btree.c" \
         "$xfs_src/netbsd/xfs_read_inode.c" "$xfs_src/netbsd/xfs_read_file.c" \
         "$xfs_src/netbsd/xfs_inode_stat.c" "$xfs_src/netbsd/xfs_read_attr.c" \
+        "$xfs_src/netbsd/xfs_read_attr_external.c" \
         "$xfs_src/netbsd/xfs_read_symlink.c" \
         "$xfs_src/netbsd/xfs_read_directory.c" "$xfs_src/netbsd/xfs_lookup_path.c" \
         "$xfs_src/tests/xfs_probe.c" \
@@ -308,12 +338,16 @@ To build a persistent image inspector on NetBSD or Linux:
     /tmp/xfs_probe -p /directory/file /path/to/image
     /tmp/xfs_probe -R /directory/file 0 4096 /path/to/image > /tmp/file-prefix
     /tmp/xfs_probe -s /directory/symlink /path/to/image
+    /tmp/xfs_probe -X /directory/file /path/to/image
 
 Paths and inode numbers in these examples are illustrative. -l emits JSON
 lines with ino, type (XFS on-disk type) and name; non-ASCII/control name bytes
 are escaped as \u00xx. -p inspects metadata and -R reads bytes after following
 symlinks; -s returns the final symlink's target. -r, -R and -s emit raw bytes
 without a trailing newline. Discard partial output if a command fails.
+-x emits attribute JSON lines with flags, hexadecimal name and hexadecimal
+value. -X first applies the mount attribute policy. Neither implements path
+credentials; these are inspection commands, not an access-control boundary.
 -j prints journal state, head, tail, latest record, head cycle and whether
 the canonical initial record was used. These addresses are log-relative
 512-byte block numbers. An inspection can report needs-recovery successfully;
@@ -323,7 +357,7 @@ options only when deliberately inspecting potentially unrecovered metadata.
 Native PUFFS build and test
 --------------------------
 
-On NetBSD with the compiler set and libpuffs installed:
+On NetBSD with the compiler set and corrected libpuffs installed:
 
     make -C external/gpl2/xfs/puffs
     mkdir /tmp/xfs-mount
@@ -338,8 +372,9 @@ Create fixtures on a host with Python 3.11+ and xfsprogs (tested with 7.1.1):
     PYTHONDONTWRITEBYTECODE=1 python3 external/gpl2/xfs/tests/make_puffs_images.py /tmp/xfs-mount-fixtures
 
 The destination must be new. This creates v4/v5 images with the default
-autofsck property, readable user attributes, and rejected ACL/security,
-unknown trusted, non-root property and external-block examples. Other inodes
+autofsck property, readable inline/external user attributes, 64 KiB remote
+values and an 800-name list. Rejection cases cover inline/external ACLs,
+security labels, unknown trusted attributes and non-root properties. Other inodes
 have malformed shortform attributes with valid CRCs. Four startup rejection
 images cover root ACLs, unknown trusted attributes, malformed attributes and
 a bad journal. Only these disposable fixtures have inherited prototype
@@ -357,20 +392,26 @@ file/partial/EOF reads, local/remote symlinks, timestamps, owner/group/other
 permissions, directory search, inherited descriptors, hard-link lock identity,
 1800-entry listings, telldir/seekdir and small-buffer getdents resumption.
 It checks native attribute sizes/values, empty and binary data, both list
-formats, partial buffers, descriptor operations, permission checks, and
-attribute/ACL rejection on lookup and at startup.
+formats, 64 KiB remote values, 800-name lists, partial buffers, descriptor
+operations, permission checks, and attribute/ACL rejection on lookup and at startup.
 It checks read-only errors, busy/ordinary/signal unmounts, persistent ESTALE
 after a deliberate image timestamp change, startup refusal and unchanged
 whole-image SHA256 hashes. Use disposable fixtures only: their mtime changes.
 The native build and mount suite were validated on NetBSD 11.0/amd64 in QEMU,
-using the release's kernel, headers and libpuffs. The compile-only check also
-covers this checkout's headers; other architectures remain untested.
+using the release's kernel and headers, and libpuffs built from this checkout.
+For a temporary test library without installing it system-wide:
+
+    make -C lib/libpuffs MKMAN=no
+    LD_LIBRARY_PATH="$PWD/lib/libpuffs" \
+        sh external/gpl2/xfs/tests/run-puffs.sh /tmp/xfs-mount-fixtures
+
+The compile-only check also covers this checkout's headers; other architectures
+remain untested.
 
 Remaining milestones
 --------------------
 
-1. Extend attribute reading to external leaf/node blocks and remote values.
-   Interpret ACL/security semantics explicitly,
+1. Interpret ACL/security semantics explicitly,
    so ordinary labelled images can be served without weakening permissions.
    Expand runtime coverage for abrupt server death, parallel clients and
    node reclamation under memory pressure. Add bounded caching only with
