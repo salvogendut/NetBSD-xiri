@@ -79,6 +79,7 @@ main(int argc, char **argv)
 	uint8_t output[XFS_MAX_BLOCKSIZE];
 	struct xfs_path_workspace path_work;
 	struct xfs_inode_image inode;
+	struct xfs_inode_stat attributes;
 	struct xfs_sb sb;
 	struct xfs_reader reader;
 	struct xfs_io io;
@@ -191,6 +192,8 @@ main(int argc, char **argv)
 		    &path_work, data, sizeof(data), &ino, &why);
 	if (error == 0 && (inspect_inode || read_file || list_directory || read_attrs))
 		error = xfs_read_inode(&reader, ino, data, sizeof(data), &inode, &why);
+	if (error == 0 && inspect_inode)
+		error = xfs_inode_getattr(&reader, &inode, &attributes, &why);
 	if (error == 0 && read_attrs) {
 		void *work = malloc(XFS_ATTR_WORKSPACE_SIZE);
 		if (work == NULL) {
@@ -258,10 +261,17 @@ main(int argc, char **argv)
 		return 0;
 	}
 	if (inspect_inode) {
+		printf("ino = %" PRIu64 "\n", inode.number);
 		printf("mode = %u\n", inode.mode);
 		printf("size = %" PRIu64 "\n", inode.size);
 		printf("nextents = %" PRIu64 "\n", inode.nextents);
 		printf("format = %u\n", inode.format);
+		printf("uid = %" PRIu32 "\n", attributes.uid);
+		printf("gid = %" PRIu32 "\n", attributes.gid);
+		printf("nlink = %" PRIu32 "\n", attributes.nlink);
+		printf("allocated_bytes = %" PRIu64 "\n", attributes.allocated_bytes);
+		printf("mtime_sec = %" PRId64 "\n", attributes.mtime.seconds);
+		printf("mtime_nsec = %" PRIu32 "\n", attributes.mtime.nanoseconds);
 		return 0;
 	}
 	if (inspect_ag) {

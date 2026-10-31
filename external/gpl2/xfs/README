@@ -192,8 +192,12 @@ Only a complete, single unmount operation at the current head establishes
 CLEAN; a checksummed record without that operation reports NEEDS_RECOVERY.
 Malformed, ambiguous and unsupported logs return errors. The inspector
 does not trim partial writes, fall back to an older unmount, clear stale
-blocks or replay transactions. It accepts the special zero-CRC mkfs initial
-unmount only with its canonical fields, padding and wholly zero suffix.
+blocks or replay transactions. It accepts both Linux's zero-length unmount
+operation header and mkfs's eight-byte length, with their common payload
+validated. Canonical empty headers written by Linux to clear stale blocks
+are accepted in a cycle-zero suffix after checking their entire contents;
+they are never selected as transactions. The special zero-CRC mkfs initial
+unmount still requires its exact canonical fields and padding.
 
 xfs_require_clean_log returns zero only for CLEAN. Call it before opening
 inodes for filesystem service; xfs_reader_open alone remains a raw metadata
@@ -267,8 +271,8 @@ last AG, holes/unwritten data, local symlinks, empty files, offsets beyond
 callback errors/short reads, and output preservation. It also checks ownership,
 legacy/v3 link counts, allocation overflow, legacy/bigtime timestamps and
 block-aligned inode chunks that do not start at multiples of 64.
-Fragmented bmaps and
-sparse/unwritten layouts currently use synthetic fixtures.
+Multi-level fragmented bmaps use synthetic fixtures. Sparse, unwritten and
+physically fragmented extents also have Linux-generated fixtures described below.
 
 The namespace suite adds 33,342 checks for v4/v5 shortform and block/data
 directories, 32/64-bit inode numbers, free entries, hash collisions, callbacks,
@@ -283,7 +287,7 @@ free-space summaries, orphan blocks, workspace exhaustion and every read's
 failure/short-read path. The directory suite also passes with undefined-behavior
 checks configured to trap.
 
-The journal suite adds 1,009 checks plus guard/argument checks for v4/v5
+The journal suite adds 1,521 checks plus guard/argument checks for v4/v5
 superblocks, both endian formats, extended headers, wrapped records, skipped
 magic cycle numbers, record CRCs, canonical initialization, I/O failures,
 unaligned scratch, output preservation, torn writes and stale unmounts.
@@ -354,11 +358,11 @@ Six additional images compare journal head/tail and cleanliness with
 xfs_logprint, including v4, 4 KiB sectors and 64/256 KiB log stripe units.
 They test guarded root lookup, dirty/clean transitions, corrupt/torn records,
 explicit raw inspection and a synthetic wrapped record in a mkfs image.
-No journal fixture was captured from a running Linux mount yet; ordinary
-noninitial records and crash cases currently use synthetic data.
+Linux-generated clean unmounts and forced-shutdown journals are tested by
+the separate workload suite below.
 
-The third compiles all sixteen port files, the CLI, PUFFS server and native
-test client with this checkout's
+The third compiles all seventeen port files, the CLI, PUFFS server and native
+test clients with this checkout's
 NetBSD amd64 user-space headers and no host headers. It needs an amd64
 compiler. This verifies header/layout compatibility, not linking or running
 on NetBSD. Native testing is described below.
@@ -410,6 +414,60 @@ the canonical initial record was used. These addresses are log-relative
 512-byte block numbers. An inspection can report needs-recovery successfully;
 guarded file/path commands reject that state. Use --raw before the other CLI
 options only when deliberately inspecting potentially unrecovered metadata.
+
+Linux workload comparisons
+--------------------------
+
+The optional Linux workload suite runs a minimal PID-1 helper in disposable
+x86-64 QEMU guests. It attaches only newly created v4/v5 images, without
+networking or shared host directories. It never mounts an image on the host.
+Supply a Linux kernel and matching module directory with XFS, POSIX ACLs,
+virtio block, devtmpfs and gzip initramfs support. The generator needs Linux,
+Python 3.11+, cc, ldd, sha256sum, mkfs.xfs, cp and qemu-system-x86_64; zstd is
+needed if the modules use that compression. Dynamic libraries are copied
+into the initramfs, and module dependencies are loaded in order.
+
+    python3 external/gpl2/xfs/tests/make_linux_images.py \
+        --kernel /path/to/vmlinuz --modules /path/to/matching/modules \
+        /tmp/xfs-linux-fixtures
+    PYTHONDONTWRITEBYTECODE=1 python3 external/gpl2/xfs/tests/test_linux_images.py \
+        /tmp/xfs_probe /tmp/xfs-linux-fixtures
+
+The destination must not exist. The generator records kernel, module,
+helper and library hashes, tool versions, mkfs commands, serial logs,
+Linux reference JSON and image hashes. FIEMAP must demonstrate actual holes,
+unwritten extents and physical fragmentation. The workload also creates
+hard/symbolic links, inline/external attributes, access/default ACLs and a
+directory with 768 creations and 192 removals. Linux records stat fields,
+SHA256 contents, attributes and 24 access/open results using numeric users,
+primary groups and supplementary groups. Each clean image is unmounted in
+Linux; a copy is remounted, changed and fsynced before the supervisor kills
+QEMU without shutdown. This tests a completed log write requiring recovery,
+not arbitrary storage reordering or every possible power-failure boundary.
+
+The portable comparison checks metadata/content/partial reads, complete
+directory enumeration, symlinks and attribute/ACL bytes, and compares both
+journals with xfs_logprint. Dirty images must reject guarded operations with
+no output. All images must retain their recorded hashes. The comparison
+also writes native manifests beside the fixtures. Transfer the four images
+and two manifests to NetBSD (use a sparse archive), then run as root with
+the corrected libpuffs from this checkout:
+
+    sh external/gpl2/xfs/tests/run-linux-puffs.sh /path/to/linux-fixtures
+
+The native client compares mounted files with Linux's hashes and stat data,
+directory entries, links, attributes and all 24 permission decisions.
+The wrapper also verifies unchanged images and dirty-journal startup
+rejection. This suite has been exercised with Linux 7.2.8, xfsprogs 7.1.1
+and NetBSD 11.0/amd64. Multi-level bmaps, log wrapping and other crash shapes
+retain their separate synthetic regression coverage.
+
+A user-supplied IRIX 6.5 CHD image also permits raw inspection of its v4 XFS
+partition (4 KiB blocks, 256-byte inodes). Root enumeration and reads of
+/bin/ls and /unix succeed; their bytes agree with xfs_db's extent mappings.
+This is not a successful mount: its v1 journal is unsupported, and xfs_logprint
+reports a dirty log plus legacy UUID/format errors. The regular mount guard
+rejects it. The sample and its contents are not distributed in this tree.
 
 Native PUFFS build and test
 --------------------------

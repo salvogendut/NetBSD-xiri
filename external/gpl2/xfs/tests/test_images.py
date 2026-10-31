@@ -132,7 +132,7 @@ def main():
                     key, value = line.split(" = ")
                     key = key.removeprefix("core.")
                     expected_inode[key] = int(value.split()[0], 8 if key == "mode" else 10)
-                require(actual_inode == expected_inode,
+                require({key: actual_inode[key] for key in expected_inode} == expected_inode,
                         f"{name}/{entry}: {actual_inode} != {expected_inode}")
                 inode_comparisons += 1
                 result = subprocess.run((probe, "-r", str(ino), "0",

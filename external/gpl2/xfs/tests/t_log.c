@@ -192,7 +192,40 @@ main(void)
 			CHECK(xfs_require_clean_log(&reader, scratch, sizeof(scratch), &why) == EBUSY);
 			make_record(4, 1, 32768, 512, j, true, true);
 			CHECK(inspect(0).state == XFS_LOG_CLEAN);
+			/* Linux unmounts use zero oh_len, unlike mkfs's eight. */
+			put32(record + rec_hblocks * 512 + 4, 0);
+			seal(); publish();
+			CHECK(inspect(0).state == XFS_LOG_CLEAN);
 		}
+	}
+	/* Linux's xlog_clear_stale_blocks writes empty cycle-zero headers ahead
+	 * of the head on a second mount. They must never conceal a dirty record.
+	 */
+	setup(true);
+	make_record(0, 1, 32768, 512, 1, true, true);
+	make_record(2, 1, 32768, 512, 1, false, true);
+	{
+		struct xlog_rec_header cleared = { 0 };
+		uint8_t *p = disk + 4 * 512;
+		cleared.h_magicno = cpu_to_be32(XLOG_HEADER_MAGIC_NUM);
+		cleared.h_version = cpu_to_be32(2);
+		cleared.h_lsn = cpu_to_be64(4);
+		cleared.h_tail_lsn = cpu_to_be64(UINT64_C(1) << 32);
+		cleared.h_fmt = cpu_to_be32(1);
+		cleared.h_fs_uuid = reader.sb.sb_uuid;
+		memcpy(p, &cleared, sizeof(cleared));
+		CHECK(inspect(0).state == XFS_LOG_NEEDS_RECOVERY);
+		CHECK(xfs_require_clean_log(&reader, scratch, sizeof(scratch), &why) == EBUSY);
+		/* Reject mutations throughout the empty-header block, including UUID,
+		 * LSN, version, payload length, checksum and unchecked padding.
+		 */
+		for (i = 8; i < 512; i++) {
+			saved = p[i]; p[i] ^= 0x80;
+			inspect(EINVAL);
+			p[i] = saved;
+		}
+		put32(p + 28, 4); /* stale tail must precede the current head */
+		inspect(EINVAL);
 	}
 	/* Extended headers, wraps in headers and bodies, head exactly at zero. */
 	for (size = 16384; size <= 262144; size *= 2) {

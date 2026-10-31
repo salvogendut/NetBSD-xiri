@@ -44,7 +44,7 @@ ${CC:-cc} -std=gnu11 -O2 -nostdinc \
     -I "$xfs_build" -isystem "$xfs_src/include" -isystem "$xfs_src/sys" \
     -I "$xfs_src/lib/libpuffs" -I "$xfs_root/include" -isystem "$xfs_root/dist" \
     -c "$xfs_root/puffs/mount_xfs.c" -o "$xfs_build/mount_xfs.o"
-for client in t_puffs t_puffs_stress; do
+for client in t_puffs t_puffs_stress t_linux_puffs; do
 	${CC:-cc} -std=gnu11 -O2 -nostdinc \
 	    -D__NetBSD__ -U__linux__ -Wall -Wextra -Werror \
 	    -I "$xfs_build" -isystem "$xfs_src/include" -isystem "$xfs_src/sys" \

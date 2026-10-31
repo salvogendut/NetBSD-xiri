@@ -115,7 +115,30 @@ geometry(const struct xfs_reader *reader, struct log_geometry *log,
 	return 0;
 }
 
-/* Only A...A,previous(A)...previous(A), or cycle 1 followed by zeros. */
+/* Linux clears stale blocks with xlog_add_record, including at cycle zero.
+ * These are empty headers, not candidate transactions. Check the entire block
+ * against that exact layout before accepting one in the unwritten suffix.
+ */
+static bool
+cleared_block(const struct xfs_reader *reader, const uint8_t *data,
+    uint32_t block, uint32_t head)
+{
+	struct xlog_rec_header hdr = { 0 };
+	uint32_t fmt = get32(data + offsetof(struct xlog_rec_header, h_fmt));
+	uint32_t tail = get32(data + offsetof(struct xlog_rec_header, h_tail_lsn) + 4);
+	if ((fmt != XLOG_FMT_LINUX_LE && fmt != XLOG_FMT_LINUX_BE &&
+	    fmt != XLOG_FMT_IRIX_BE) || tail >= head)
+		return false;
+	hdr.h_magicno = cpu_to_be32(XLOG_HEADER_MAGIC_NUM);
+	hdr.h_version = cpu_to_be32(XLOG_VERSION_2);
+	hdr.h_lsn = cpu_to_be64(block);
+	hdr.h_tail_lsn = cpu_to_be64(UINT64_C(1) << 32 | tail);
+	hdr.h_fmt = cpu_to_be32(fmt);
+	hdr.h_fs_uuid = reader->sb.sb_uuid;
+	return memcmp(data, &hdr, 324) == 0 && zeroes(data + 324, 512 - 324);
+}
+
+/* Only A...A,previous(A)...previous(A), or cycle 1 followed by unused blocks. */
 static int
 find_head(const struct xfs_reader *reader, const struct log_geometry *log,
     uint8_t *scratch, struct log_head *head, const char **why)
@@ -152,8 +175,12 @@ find_head(const struct xfs_reader *reader, const struct log_geometry *log,
 				head->zero_tail = cycle == 0;
 				last = cycle;
 			}
-			if (cycle == 0 && !zeroes(p, 512))
-				return fail(why, EINVAL, "nonzero data in zero-cycle log suffix");
+			if (cycle == 0) {
+				if (!zeroes(p, 512) &&
+				    !cleared_block(reader, p, block + i, head->block))
+					return fail(why, EINVAL, "nonzero data in zero-cycle log suffix");
+				continue;
+			}
 			if (magic == XLOG_HEADER_MAGIC_NUM) {
 				if (block + i < head->block)
 					prefix_record = block + i;
@@ -277,7 +304,8 @@ verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
 		offset = group == 0 ? offsetof(struct xlog_rec_header, h_cycle_data) : 4;
 		memcpy(body + i * 512, data + group * 512 + offset + slot * 4, 4);
 	}
-	unmount = numops == 1 && get32(body + 4) == 8 &&
+	/* Linux writes oh_len == 0; mkfs writes the eight-byte payload length. */
+	unmount = numops == 1 && (get32(body + 4) == 0 || get32(body + 4) == 8) &&
 	    body[8] == XFS_LOG && body[9] == XLOG_UNMOUNT_TRANS &&
 	    zeroes(body + 10, 2) && zeroes(body + 14, 6) &&
 	    (fmt == XLOG_FMT_LINUX_LE ? (body[12] == 0x6e && body[13] == 0x55) :
@@ -292,7 +320,8 @@ verify_record(const struct xfs_reader *reader, const struct log_geometry *log,
 		    log->unit) * log->unit;
 		if (!head->zero_tail || head->record != 0 || cycle != 1 || tail != lsn ||
 		    prev != UINT32_MAX || size != init_size || blocks * 512 != init_bytes ||
-		    !unmount || get32(body) != 0xb0c0d0d0 || !zeroes(body + 20, length - 20) ||
+		    !unmount || get32(body + 4) != 8 || get32(body) != 0xb0c0d0d0 ||
+		    !zeroes(body + 20, length - 20) ||
 		    !zeroes(data + 48, 252) || !zeroes(data + 324, 512 - 324))
 			return fail(why, EOPNOTSUPP, "unchecksummed log is not a canonical initial unmount");
 		for (i = 1; i < hblocks; i++)
