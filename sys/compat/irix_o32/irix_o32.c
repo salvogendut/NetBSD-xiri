@@ -83,6 +83,7 @@
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/ktrace.h>
+#include <sys/mbuf.h>
 #include <sys/mman.h>
 #include <sys/module.h>
 #include <sys/mount.h>
@@ -902,6 +903,119 @@ irix_fcntl(struct lwp *l, const void *args, register_t *rval)
 	return 0;
 }
 
+struct irix_recvmsg_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) msg;
+	syscallarg(int32_t) flags;
+};
+
+static int
+irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_recvmsg_args *uap = args;
+	struct {
+		uint32_t name;
+		int32_t namelen;
+		uint32_t iov;
+		int32_t iovlen;
+		uint32_t rights;
+		int32_t rightslen;
+	} foreign;
+	struct { uint32_t base, len; } vector[16];
+	struct iovec iov[__arraycount(vector)];
+	struct msghdr native = { 0 };
+	struct mbuf *from = NULL, *data = NULL, *m;
+	struct socket *so;
+	uint32_t total = 0, zero = 0;
+	int error, flags = 0;
+
+	CTASSERT(sizeof(foreign) == 24);
+	CTASSERT(sizeof(vector[0]) == 8);
+	/* Unlike sendmsg, IRIX reads the header before validating the fd. */
+	error = copyin(irix_pointer(SCARG(uap, msg)), &foreign, sizeof(foreign));
+	if (error != 0)
+		return error;
+	if (foreign.iovlen <= 0 || (unsigned)foreign.iovlen > __arraycount(vector))
+		return EMSGSIZE;
+	error = copyin(irix_pointer(foreign.iov), vector,
+	    foreign.iovlen * sizeof(vector[0]));
+	if (error != 0)
+		return error;
+	error = fd_getsock(SCARG(uap, fd), &so);
+	if (error != 0)
+		return error;
+	if (so->so_proto->pr_domain->dom_family != AF_INET ||
+	    so->so_type != SOCK_STREAM || so->so_proto->pr_protocol != IPPROTO_TCP) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
+	/* Only legacy stream receives and peeking are qualified. */
+	if ((uint32_t)SCARG(uap, flags) & ~2U) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if (SCARG(uap, flags) & 2)
+		flags = MSG_PEEK;
+	for (int i = 0; i < foreign.iovlen; i++) {
+		if (vector[i].len > INT32_MAX - total) {
+			error = EINVAL;
+			goto out;
+		}
+		total += vector[i].len;
+		iov[i].iov_base = irix_pointer(vector[i].base);
+		iov[i].iov_len = vector[i].len;
+	}
+	*rval = 0;
+	if (flags & MSG_PEEK) {
+		native.msg_iov = iov;
+		native.msg_iovlen = foreign.iovlen;
+		native.msg_flags = MSG_PEEK;
+		error = do_sys_recvmsg_so(l, SCARG(uap, fd), so, &native,
+		    &from, NULL, rval);
+	} else {
+		struct uio receive = { .uio_resid = total };
+		struct uio copied = {
+			.uio_iov = iov, .uio_iovcnt = foreign.iovlen,
+			.uio_resid = total, .uio_rw = UIO_READ,
+			.uio_vmspace = l->l_proc->p_vmspace,
+		};
+
+		/* IRIX consumes received data before copying it to user buffers.
+		 * Native user-uio receives retain a faulting stream mbuf instead.
+		 * Request native-owned mbufs, then scatter-copy and release them;
+		 * this needs no allocation proportional to the foreign length. */
+		error = (*so->so_receive)(so, &from, &receive, &data, NULL, &flags);
+		if (receive.uio_resid != total &&
+		    (error == ERESTART || error == EINTR || error == EWOULDBLOCK))
+			error = 0;
+		if (error == 0) {
+			KASSERT(m_length(data) == total - receive.uio_resid);
+			for (m = data; m != NULL && error == 0; m = m->m_next)
+				error = uiomove(mtod(m, void *), m->m_len, &copied);
+			*rval = total - copied.uio_resid;
+		}
+	}
+	/* A later user-buffer fault returns the successfully copied prefix. */
+	if (error == EFAULT && *rval != 0)
+		error = 0;
+	if (error != 0)
+		goto out;
+	/* TCP supplies neither a sender address nor access rights. IRIX only
+	 * updates a length when its corresponding pointer is non-null, leaving
+	 * unused fields and the rest of the foreign header untouched. Measured
+	 * IRIX ignores faults when writing either output length, including
+	 * read-only headers whose receive buffers were successfully filled. */
+	if (foreign.name != 0)
+		(void)copyout(&zero, irix_pointer(SCARG(uap, msg) + 4U), sizeof(zero));
+	if (foreign.rights != 0)
+		(void)copyout(&zero, irix_pointer(SCARG(uap, msg) + 20U), sizeof(zero));
+out:
+	m_freem(from);
+	m_freem(data);
+	fd_putfile(SCARG(uap, fd));
+	return error;
+}
+
 struct irix_sendmsg_args {
 	syscallarg(int32_t) fd;
 	syscallarg(uint32_t) msg;
@@ -1097,6 +1211,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getsockname,
 	},
+	[99] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_recvmsg_args),
+		.sy_flags = SYCALL_ARG_PTR | SYCALL_RET_WIDE,
+		.sy_call = irix_recvmsg,
+	},
 	[102] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_sendmsg_args),
@@ -1152,7 +1272,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
-	[62] = "fcntl", [102] = "sendmsg", [105] = "setsockopt",
+	[62] = "fcntl", [99] = "recvmsg", [102] = "sendmsg", [105] = "setsockopt",
 	[106] = "shutdown", [107] = "socket", [108] = "gethostname",
 };
 
@@ -1211,6 +1331,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
 	case 1094: code = 94; break;
+	case 1099: code = 99; break;
 	case 1102: code = 102; break;
 	case 1105: code = 105; break;
 	case 1106: code = 106; break;
