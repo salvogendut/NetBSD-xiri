@@ -3,10 +3,12 @@
 /* Native NetBSD integration checks against an actual PUFFS mount. */
 #include <sys/types.h>
 #include <sys/file.h>
+#include <sys/extattr.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 
 #include <dirent.h>
 #include <err.h>
@@ -26,6 +28,71 @@
     CHECK(errno == (expected)); } while (0)
 
 static const char hello[] = "NetBSD XFS through PUFFS\n";
+
+static void
+read_attr(const char *path, bool allowed)
+{
+	char data[16];
+	if (!allowed) {
+		FAILS(extattr_get_file(path, EXTATTR_NAMESPACE_USER, "fixture", data, sizeof(data)), EACCES);
+		FAILS(extattr_list_file(path, EXTATTR_NAMESPACE_USER, NULL, 0), EACCES);
+		return;
+	}
+	CHECK(extattr_get_file(path, EXTATTR_NAMESPACE_USER, "fixture", NULL, 0) == 9);
+	CHECK(extattr_get_file(path, EXTATTR_NAMESPACE_USER, "fixture", data, sizeof(data)) == 9);
+	CHECK(memcmp(data, "supported", 9) == 0);
+}
+
+static void
+attributes(void)
+{
+	static const char names[] = "\007fixture\006binary\005empty";
+	static const char terminated[] = "fixture\0binary\0empty";
+	static const unsigned char binary[] = { 0, 255, 'x', 0 };
+	unsigned char data[64];
+	struct stat st;
+	int fd;
+	read_attr("attributes/user", true);
+	CHECK(extattr_get_file(".", EXTATTR_NAMESPACE_SYSTEM, "xfs:autofsck", data, sizeof(data)) == 6);
+	CHECK(memcmp(data, "repair", 6) == 0);
+	CHECK(extattr_list_file(".", EXTATTR_NAMESPACE_SYSTEM, data, sizeof(data)) == 13);
+	CHECK(data[0] == 12 && memcmp(data + 1, "xfs:autofsck", 12) == 0);
+	CHECK(extattr_list_file("attributes/user", EXTATTR_NAMESPACE_USER, NULL, 0) == sizeof(names) - 1);
+	CHECK(extattr_list_file("attributes/user", EXTATTR_NAMESPACE_USER, data, sizeof(data)) == sizeof(names) - 1);
+	CHECK(memcmp(data, names, sizeof(names) - 1) == 0);
+	memset(data, 0xaa, sizeof(data));
+	CHECK(extattr_list_file("attributes/user", EXTATTR_NAMESPACE_USER, data, 3) == 3);
+	CHECK(memcmp(data, names, 3) == 0 && data[3] == 0xaa);
+	/* listxattr requests NUL delimiters. Names stay raw, as in the native
+	 * extattr namespace API; no Linux user./trusted. prefix translation. */
+	CHECK(listxattr("attributes/user", NULL, 0) == sizeof(terminated));
+	CHECK(listxattr("attributes/user", (char *)data, sizeof(data)) == sizeof(terminated));
+	CHECK(memcmp(data, terminated, sizeof(terminated)) == 0);
+	fd = open("attributes/user", O_RDONLY);
+	CHECK(fd >= 0);
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "binary", data, sizeof(data)) == sizeof(binary));
+	CHECK(memcmp(data, binary, sizeof(binary)) == 0);
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "empty", data, sizeof(data)) == 0);
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "empty", NULL, 0) == 0);
+	memset(data, 0xaa, sizeof(data));
+	CHECK(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "fixture", data, 3) == 3);
+	CHECK(memcmp(data, "sup", 3) == 0 && data[3] == 0xaa);
+	CHECK(extattr_list_fd(fd, EXTATTR_NAMESPACE_USER, NULL, 0) == sizeof(names) - 1);
+	FAILS(extattr_get_fd(fd, EXTATTR_NAMESPACE_USER, "absent", data, sizeof(data)), ENODATA);
+	FAILS(extattr_set_fd(fd, EXTATTR_NAMESPACE_USER, "fixture", "x", 1), EROFS);
+	FAILS(extattr_delete_fd(fd, EXTATTR_NAMESPACE_USER, "fixture"), EROFS);
+	CHECK(close(fd) == 0);
+	CHECK(extattr_list_file("hello", EXTATTR_NAMESPACE_USER, NULL, 0) == 0);
+	FAILS(extattr_get_file("hello", EXTATTR_NAMESPACE_USER, "absent", NULL, 0), ENODATA);
+	FAILS(stat("attributes/acl", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/label", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/trusted", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/foreign", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/external", &st), EOPNOTSUPP);
+	FAILS(stat("attributes/bad", &st), EIO);
+	FAILS(stat("attributes/duplicate", &st), EIO);
+	FAILS(stat("attributes/incomplete", &st), EIO);
+}
 
 static void
 read_hello(const char *path, bool allowed)
@@ -60,6 +127,14 @@ permissions(uid_t uid, gid_t gid, bool owner, bool group)
 		read_hello("hello", owner || group);
 		read_hello("private", owner);
 		read_hello("locked/file", owner);
+		read_attr("attributes/user", owner || group);
+		read_attr("private", owner);
+		FAILS(extattr_get_file(".", EXTATTR_NAMESPACE_SYSTEM, "xfs:autofsck", data, sizeof(data)), EPERM);
+		FAILS(extattr_list_file(".", EXTATTR_NAMESPACE_SYSTEM, NULL, 0), EPERM);
+		if (owner)
+			CHECK(extattr_get_fd(inherited, EXTATTR_NAMESPACE_USER, "fixture", data, sizeof(data)) == 9);
+		else
+			FAILS(extattr_get_fd(inherited, EXTATTR_NAMESPACE_USER, "fixture", data, sizeof(data)), EACCES);
 		fd = open("public", O_RDONLY);
 		CHECK(fd >= 0);
 		CHECK(close(fd) == 0);
@@ -199,7 +274,7 @@ main(int argc, char **argv)
 	for (i = 0; i < 990; i++)
 		CHECK(target[i] == '/');
 	CHECK(readlink("longlink", target, 3) == 3);
-	FAILS(stat("attributes", &st), EOPNOTSUPP);
+	attributes();
 	FAILS(stat("missing", &st), ENOENT);
 	FAILS(stat("hello/child", &st), ENOTDIR);
 	permissions(12, 34, true, true);

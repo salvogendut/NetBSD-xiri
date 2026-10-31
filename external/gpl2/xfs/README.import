@@ -35,12 +35,13 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_dir2_sf.c
     xfs_dir2_data.c
     xfs_symlink_remote.c
+    xfs_attr_leaf.c
 
 dist/xfs_dir2_readdir.c, dist/xfs_log.c and dist/xfs_log_recover.c come from
 fs/xfs/ (outside libxfs/) at that commit.
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these twenty-six upstream files. Verify them with
+SHA256 records the hashes of these twenty-seven upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
@@ -138,6 +139,26 @@ values. It rejects nanoseconds outside [0, 1000000000), bigtime seconds past
 XFS_BIGTIME_TIME_MAX and allocated byte counts exceeding INT64_MAX. It
 reports the presence of an attribute fork without interpreting its contents.
 
+netbsd/xfs_read_attr.c adapts xfs_attr_shortform_verify from xfs_attr_leaf.c,
+using the packed header/entry layout and namespace flags from xfs_da_format.h.
+It bounds the declared total against the inode fork before traversing entries,
+checks the exact count/size, lengths, namespace combinations, and forbidden
+local/incomplete bits. The unused header padding is ignored as upstream does.
+It additionally rejects embedded NUL names and duplicate byte names within
+each namespace. All structural checks precede callbacks, including corruption
+in later entries; iteration uses bounded stack offsets and allocates nothing.
+Empty retained extent forks are accepted, but nonempty external forks and
+parent-pointer attributes are unsupported. Parent-pointer duplicate-name
+semantics are not treated as ordinary xattr semantics.
+
+The separate xfs_attrs_check_readonly policy accepts user attributes and only
+the root directory's trusted xfs:autofsck property with values none, check,
+optimize or repair. It rejects ACLs, security attributes, unknown trusted
+attributes, unknown property values, and the same property on other inodes.
+The property is exposed as metadata; it triggers no scanning or repair.
+Its layout/meaning follows the XFS filesystem-property documentation:
+https://kernel.googlesource.com/pub/scm/fs/xfs/xfs-documentation/+/master/design/XFS_Filesystem_Structure/fs_properties.asciidoc
+
 netbsd/xfs_read_btree.c adapts xfs_btree_{agblock,fsblock}_v5hdr_verify,
 xfs_btree_{agblock,fsblock}_verify, xfs_inobt_verify and xfs_bmbt_verify.
 The inode-tree and bmap traversals require exact owners and disk addresses,
@@ -203,7 +224,9 @@ implement credentials, access control or NetBSD namei/VFS integration.
 These readers are image-inspection adaptations, not a replacement for all
 live-kernel verifiers or xfs_repair. In particular they do not cross-check
 global extent/block counts, rmap ownership, other allocation trees, inode
-timestamp consistency, external directory indexes, attribute contents, or log LSNs.
+timestamp consistency, external directory indexes, external attribute contents,
+or log LSNs. Inline attributes are verified separately by xfs_read_attrs;
+xfs_read_inode remains a structural inode/data-fork reader.
 Bmap blocks are verified lazily during file reads. Unknown read-only-compatible features
 block inode access even though the superblock probe permits inspection.
 Zero-length directories/symlinks are explicitly unsupported.
@@ -211,11 +234,15 @@ No Linux cache, locking, transaction or recovery object is
 emulated; those contracts remain work for future caching/recovery milestones.
 
 puffs/mount_xfs.c is a new direct libpuffs adapter. It checks journal
-cleanliness before mounting and rejects every attribute fork, rather than
-silently ignoring ACL/security semantics. All engine I/O stays in user space
+cleanliness before mounting and applies the complete attribute mount policy
+before publishing each node, so unsupported access-control metadata cannot be
+silently ignored. All engine I/O stays in user space
 through a read-only regular-file descriptor. The adapter supplies credentials,
 stable inode cookies, vattr translation, directory cookies and read-only
-operation/error handling using NetBSD's public libpuffs API.
+operation/error handling using NetBSD's public libpuffs API. getextattr and
+listextattr expose raw names through NetBSD's user/system namespaces, checking
+file read permissions for user attributes and privileged credentials for
+system attributes. There is no Linux-style name-prefix translation.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
 No SGI/Linux code has been relicensed as BSD code. This directory is not wired

@@ -25,7 +25,10 @@ def main():
         f"hello ---640 12 34 {root / 'hello'}",
         f"public ---644 12 34 {root / 'public'}",
         f"private ---600 12 34 {root / 'hello'}",
-        f"attributes ---644 12 34 {root / 'hello'}",
+        "attributes d--755 12 34",
+        *(f"{name} ---640 12 34 {root / 'hello'}" for name in
+          ("user", "acl", "label", "trusted", "foreign", "external", "bad", "duplicate", "incomplete")),
+        "$",
         "link l--777 12 34 hello",
         "longlink l--777 12 34 " + "/" * 990,
         "locked d--700 12 34", f"file ---644 12 34 {root / 'hello'}", "$",
@@ -41,9 +44,8 @@ def main():
             f"crc={int(version == 5)}", "-p", str(proto), str(image))
         sb = values(run("xfs_db", "-r", "-c", "sb 0", "-c",
                         "p rootino blocksize agblocks agblklog inopblog inodesize logstart", str(image)))
-        # Recent xfsprogs adds a non-security autofsck property to the root.
-        # Remove it only from these newly generated fixtures; the server must
-        # reject any attribute fork on arbitrary user images.
+        # Temporarily make room for the synthetic hard-link entry. Restore
+        # the default property afterward; the PUFFS mount must accept it.
         run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
             "-c", "attr_remove -r xfs:autofsck", str(image))
         names = {}
@@ -55,12 +57,25 @@ def main():
         if "security.selinux" in os.listxattr(root / "hello"):
             commands = []
             for name, number in names.items():
-                if name in ("hello", "public", "private", "attributes", "locked/file") or name.startswith("many/f"):
+                if name in ("hello", "public", "private", "locked/file") or name.startswith("many/f") or (name.startswith("attributes/") and not name.endswith("/.")):
                     commands.extend((f"inode {number}", "attr_remove -s selinux"))
             subprocess.run(["xfs_db", "-x", str(image)], input="\n".join(commands) + "\n",
                            text=True, capture_output=True, check=True)
-        run("xfs_db", "-x", "-c", f"inode {names['attributes']}",
-            "-c", "attr_set -u fixture rejected", str(image))
+        def attr(path, command):
+            run("xfs_db", "-x", "-c", f"inode {names[path]}", "-c", command, str(image))
+
+        for path in ("attributes/user", "private"):
+            attr(path, "attr_set -u fixture supported")
+        attr("attributes/user", "attr_set -u -v 4 binary")
+        attr("attributes/user", "attr_set -u -v 0 empty")
+        attr("attributes/acl", "attr_set -r -v 4 SGI_ACL_FILE")
+        attr("attributes/label", "attr_set -s selinux denied")
+        attr("attributes/trusted", "attr_set -r fixture denied")
+        attr("attributes/foreign", "attr_set -r xfs:autofsck repair")
+        attr("attributes/external", "attr_set -u -v 8192 big")
+        for path in ("attributes/bad", "attributes/duplicate", "attributes/incomplete"):
+            attr(path, "attr_set -u one supported")
+        attr("attributes/duplicate", "attr_set -u two supported")
         directory = run("xfs_db", "-r", "-c", f"inode {sb['rootino']}", "-c", "p u3", str(image))
         # xfs_db calls v2 dir data 'u' on some older versions. Read names
         # independently of the presentation prefix.
@@ -105,6 +120,26 @@ def main():
             data[core] += 1
             struct.pack_into(">Q", data, 56, size + len(entry))
             write_inode(f, offset, data)
+            for path in ("attributes/user", "attributes/bad", "attributes/duplicate", "attributes/incomplete"):
+                offset, data = read_inode(f, names[path])
+                start = core + data[82] * 8
+                require(data[83] == 1, f"{path}: not shortform")
+                if path.endswith("/user"):
+                    cursor = start + 4
+                    for _ in range(data[start + 2]):
+                        nlen, vlen = data[cursor:cursor + 2]
+                        if data[cursor + 3:cursor + 3 + nlen] == b"binary":
+                            require(vlen == 4, "binary fixture length")
+                            data[cursor + 3 + nlen:cursor + 3 + nlen + vlen] = b"\0\xffx\0"
+                        cursor += 3 + nlen + vlen
+                elif path.endswith("/bad"):
+                    data[start + 2] += 1  # count runs beyond the encoded total
+                elif path.endswith("/duplicate"):
+                    second = start + 4 + 3 + data[start + 4] + data[start + 5]
+                    data[second + 3:second + 6] = b"one"
+                else:
+                    data[start + 6] = 0x80  # INCOMPLETE is invalid in shortform
+                write_inode(f, offset, data)
             offset, data = read_inode(f, hello)
             struct.pack_into(">I", data, 16, 2)
             when = 4102444800 if version == 5 else -1
@@ -115,10 +150,14 @@ def main():
                 flags = struct.unpack_from(">Q", data, 120)[0]
                 struct.pack_into(">Q", data, 120, flags | 8)
             write_inode(f, offset, data)
+        # Adding this property may convert the v4 root to a block directory;
+        # xfs_db performs that conversion, preserving the hard link above.
+        run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
+            "-c", "attr_set -r xfs:autofsck repair", str(image))
         (root / f"v{version}.json").write_text(json.dumps({"hello": hello, "mtime": when}) + "\n")
         print(f"Created {image}: 1800-entry directory, permissions, symlinks, hard link and timestamps")
         if version == 5:
-            for name in ("root-attr.img", "bad-log.img"):
+            for name in ("root-attr.img", "root-acl.img", "root-bad-attr.img", "bad-log.img"):
                 destination = root / name
                 with image.open("rb") as src, destination.open("xb") as dst:
                     while data := src.read(1024 * 1024):
@@ -128,7 +167,14 @@ def main():
                             dst.seek(len(data), 1)
                     dst.truncate(src.tell())
             run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
-                "-c", "attr_set -u fixture rejected", str(root / "root-attr.img"))
+                "-c", "attr_set -r fixture rejected", str(root / "root-attr.img"))
+            run("xfs_db", "-x", "-c", f"inode {sb['rootino']}",
+                "-c", "attr_set -r -v 4 SGI_ACL_FILE", str(root / "root-acl.img"))
+            with (root / "root-bad-attr.img").open("r+b") as f:
+                offset, data = read_inode(f, sb["rootino"])
+                require(data[83] == 1, "root attributes not shortform")
+                data[176 + data[82] * 8 + 2] += 1
+                write_inode(f, offset, data)
             with (root / "bad-log.img").open("r+b") as f:
                 f.seek(sb["logstart"] * sb["blocksize"])
                 f.write(b"BAD!")

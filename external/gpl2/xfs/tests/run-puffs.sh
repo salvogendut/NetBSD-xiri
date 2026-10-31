@@ -64,7 +64,7 @@ for xfs_version in 4 5; do
 	[ ! -e "$xfs_build/mnt/hello" ]
 done
 
-for xfs_bad in root-attr bad-log; do
+for xfs_bad in root-attr root-acl root-bad-attr bad-log; do
 	"$xfs_root/puffs/mount_xfs" -s "$xfs_images/$xfs_bad.img" "$xfs_build/mnt" > "$xfs_build/server.log" 2>&1 &
 	xfs_pid=$!
 	xfs_attempt=0
@@ -82,7 +82,8 @@ for xfs_bad in root-attr bad-log; do
 	fi
 	xfs_pid=
 	case $xfs_bad in
-	root-attr) grep -q 'attribute forks' "$xfs_build/server.log" ;;
+	root-attr|root-acl) grep -q 'unrecognized trusted attribute' "$xfs_build/server.log" ;;
+	root-bad-attr) grep -q 'attribute' "$xfs_build/server.log" ;;
 	bad-log) grep -q 'log\|journal' "$xfs_build/server.log" ;;
 	esac
 	cat "$xfs_build/server.log"

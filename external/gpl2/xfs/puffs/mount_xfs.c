@@ -3,6 +3,7 @@
 /* Experimental read-only PUFFS server. All XFS processing is in this process. */
 #include <sys/types.h>
 #include <sys/file.h>
+#include <sys/extattr.h>
 #include <sys/stat.h>
 
 #include <dirent.h>
@@ -18,6 +19,7 @@
 
 #include "xfs_directory.h"
 #include "xfs_log.h"
+#include "xfs_attr.h"
 
 #define NODE_BUCKETS 256
 #define MOUNT_FLAGS (MNT_RDONLY | MNT_NODEV | MNT_NOSUID | MNT_NOATIME)
@@ -92,10 +94,9 @@ attributes(struct xfs_server *fs, struct xfs_node *node, struct vattr *va,
 	int error = xfs_inode_getattr(&fs->reader, &node->inode, &st, why);
 	if (error != 0)
 		return error;
-	if (st.has_attributes) {
-		*why = "attribute forks (including ACLs/security attributes) are unsupported";
-		return EOPNOTSUPP;
-	}
+	error = xfs_attrs_check_readonly(&fs->reader, &node->inode, why);
+	if (error != 0)
+		return error;
 	if (!S_ISREG(node->inode.mode) && !S_ISDIR(node->inode.mode) && !S_ISLNK(node->inode.mode)) {
 		*why = "only regular files, directories and symlinks are supported";
 		return EOPNOTSUPP;
@@ -258,6 +259,135 @@ node_open(struct puffs_usermount *pu, puffs_cookie_t cookie, int flags,
 	if (flags & O_EXEC)
 		mode |= PUFFS_VEXEC;
 	return node_access(pu, cookie, mode, cred);
+}
+
+static int
+attr_access(struct puffs_usermount *pu, puffs_cookie_t cookie, int ns,
+    const struct puffs_cred *cred)
+{
+	int error = image_unchanged(puffs_getspecific(pu));
+	if (error != 0)
+		return error;
+	if (ns == EXTATTR_NAMESPACE_SYSTEM)
+		return puffs_cred_isjuggernaut(cred) ? 0 : EPERM;
+	if (ns == EXTATTR_NAMESPACE_USER)
+		return node_access(pu, cookie, PUFFS_VREAD, cred);
+	return EINVAL;
+}
+
+struct attr_get {
+	uint8_t flags;
+	const char *name;
+	size_t namelen, length;
+	const uint8_t *value;
+};
+
+static int
+find_attr(void *cookie, uint8_t flags, const uint8_t *name, size_t namelen,
+    const uint8_t *value, size_t length)
+{
+	struct attr_get *get = cookie;
+	if (flags == get->flags && namelen == get->namelen &&
+	    memcmp(name, get->name, namelen) == 0) {
+		get->value = value;
+		get->length = length;
+	}
+	return 0;
+}
+
+static int
+node_getextattr(struct puffs_usermount *pu, puffs_cookie_t cookie, int ns,
+    const char *name, size_t *size, uint8_t *data, size_t *resid,
+    const struct puffs_cred *cred)
+{
+	struct xfs_server *fs = puffs_getspecific(pu);
+	struct puffs_node *pn = cookie;
+	struct xfs_node *node = pn->pn_data;
+	struct attr_get get = { .name = name, .namelen = strlen(name),
+	    .flags = ns == EXTATTR_NAMESPACE_USER ? 0 : XFS_ATTR_ROOT };
+	const char *why;
+	size_t copy;
+	int error = attr_access(pu, cookie, ns, cred);
+	if (error != 0)
+		return error;
+	if (get.namelen == 0 || get.namelen > UINT8_MAX)
+		return EINVAL;
+	error = xfs_read_attrs(&fs->reader, &node->inode, find_attr, &get, &why);
+	if (error != 0)
+		return io_error(error);
+	if (get.value == NULL)
+		return ENODATA;
+	if (size != NULL)
+		*size = get.length;
+	if (data != NULL && resid != NULL) {
+		/* Native extattr_get_* allows a truncated value, like read(2). */
+		copy = *resid < get.length ? *resid : get.length;
+		memcpy(data, get.value, copy);
+		*resid -= copy;
+	}
+	return 0;
+}
+
+struct attr_list {
+	uint8_t flags, *data;
+	bool prefix;
+	size_t remaining, total;
+};
+
+static void
+append_attr_bytes(struct attr_list *list, const uint8_t *data, size_t length)
+{
+	size_t copy = list->remaining < length ? list->remaining : length;
+	if (copy != 0) {
+		memcpy(list->data, data, copy);
+		list->data += copy;
+		list->remaining -= copy;
+	}
+	list->total += length;
+}
+
+static int
+list_attr(void *cookie, uint8_t flags, const uint8_t *name, size_t namelen,
+    const uint8_t *value __unused, size_t length __unused)
+{
+	struct attr_list *list = cookie;
+	uint8_t marker = list->prefix ? (uint8_t)namelen : 0;
+	if (flags != list->flags)
+		return 0;
+	if (list->prefix)
+		append_attr_bytes(list, &marker, 1);
+	append_attr_bytes(list, name, namelen);
+	if (!list->prefix)
+		append_attr_bytes(list, &marker, 1);
+	return 0;
+}
+
+static int
+node_listextattr(struct puffs_usermount *pu, puffs_cookie_t cookie, int ns,
+    size_t *size, uint8_t *data, size_t *resid, int flags,
+    const struct puffs_cred *cred)
+{
+	struct xfs_server *fs = puffs_getspecific(pu);
+	struct puffs_node *pn = cookie;
+	struct xfs_node *node = pn->pn_data;
+	struct attr_list list = { .data = data,
+	    .remaining = data != NULL && resid != NULL ? *resid : 0,
+	    .prefix = (flags & PUFFS_EXTATTR_LIST_LENPREFIX) != 0,
+	    .flags = ns == EXTATTR_NAMESPACE_USER ? 0 : XFS_ATTR_ROOT };
+	const char *why;
+	int error = attr_access(pu, cookie, ns, cred);
+	if (error != 0)
+		return error;
+	if (flags & ~PUFFS_EXTATTR_LIST_LENPREFIX)
+		return EINVAL;
+	error = xfs_read_attrs(&fs->reader, &node->inode, list_attr, &list, &why);
+	if (error != 0)
+		return io_error(error);
+	if (size != NULL)
+		*size = list.total;
+	if (resid != NULL)
+		*resid = list.remaining;
+	return 0;
 }
 
 static int
@@ -564,6 +694,8 @@ main(int argc, char **argv)
 	ops->puffs_node_readlink = node_readlink;
 	ops->puffs_node_readdir = node_readdir;
 	ops->puffs_node_reclaim = node_reclaim;
+	ops->puffs_node_getextattr = node_getextattr;
+	ops->puffs_node_listextattr = node_listextattr;
 	ops->puffs_node_create = readonly_create;
 	ops->puffs_node_mknod = readonly_create;
 	ops->puffs_node_mkdir = readonly_create;

@@ -34,9 +34,27 @@ Otherwise it detaches using
 Regular files, directories and symbolic links are supported.
 UIDs, GIDs and mode bits are preserved, and directory search and access
 checks use the credentials supplied by PUFFS.
-Inodes with attribute forks are rejected because ACL and security attribute
-interpretation is not implemented.
+Verified inline user attributes are supported, along with the root
+directory's trusted
+.Li xfs:autofsck
+property with values none, check, optimize or repair.
+The property triggers no maintenance operations.
+Inodes with ACLs, security labels, unknown trusted attributes, parent pointers
+or nonempty external attribute forks are rejected.
 Special files, external logs and realtime devices are unsupported.
+.Pp
+Native
+.Xr extattr_get_file 2
+and
+.Xr extattr_list_file 2
+operations expose raw XFS names in the user namespace, and
+.Li xfs:autofsck
+in the system namespace.
+User attributes require file read permission; system attributes require
+privileged credentials, including for descriptor operations.
+Empty/binary values, size queries, truncated reads and both list delimiter
+formats are supported.
+Linux-style user./trusted. name-prefix translation is not provided.
 .Pp
 The backing file is opened read-only and held under an advisory shared lock.
 It must remain unchanged for the entire mount.
@@ -63,6 +81,8 @@ ls /mnt/xfs
 umount /mnt/xfs
 .Ed
 .Sh SEE ALSO
+.Xr extattr_get_file 2 ,
+.Xr extattr_list_file 2 ,
 .Xr puffs 3 ,
 .Xr puffs 4 ,
 .Xr mount 8 ,
