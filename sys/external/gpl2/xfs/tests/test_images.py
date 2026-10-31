@@ -74,12 +74,31 @@ def main():
     with tempfile.TemporaryDirectory(prefix="netbsd-xfs-images-") as directory:
         root = Path(directory)
         first_sector = None
+        first_inode = None
         ag_comparisons = 0
+        inode_comparisons = 0
+        contents = {
+            "empty": b"",
+            "small": bytes(range(256)) + b"end",
+            "large": bytes(range(256)) * 1024 + b"last partial block",
+            "link": b"/small",
+            "longlink": b"/" + b"a" * 999,
+        }
+        proto = root / "prototype"
+        lines = ["dummy", "0 0", "d--755 0 0"]
+        for name, content in contents.items():
+            if "link" in name:
+                lines.append(f"{name} l--777 0 0 {content.decode()}")
+            else:
+                source = root / name
+                source.write_bytes(content)
+                lines.append(f"{name} ---644 12 34 {source}")
+        proto.write_text("\n".join(lines + ["$", ""]))
         for name, options in variants:
             image = root / (name + ".img")
             with image.open("xb") as stream:
                 stream.truncate(image_size)
-            run("mkfs.xfs", "-q", "-f", "-K", *options, str(image))
+            run("mkfs.xfs", "-q", "-f", "-K", "-p", str(proto), *options, str(image))
             before = digest(image)
             actual = values(run(probe, str(image)))
             expected = values(run("xfs_db", "-r", "-c", "sb 0",
@@ -97,8 +116,48 @@ def main():
                 require(actual_ag == expected_ag,
                         f"{name} AG {agno}: {actual_ag} != {expected_ag}")
                 ag_comparisons += 1
+            listing = run("xfs_db", "-r", "-c", f"inode {actual['rootino']}",
+                          "-c", "ls", str(image))
+            entries = {parts[5]: int(parts[1]) for line in listing.splitlines()
+                       if len(parts := line.split()) >= 7}
+            require(contents.keys() <= entries.keys(), f"missing populated files: {listing}")
+            for entry, content in contents.items():
+                ino = entries[entry]
+                actual_inode = values(run(probe, "-i", str(ino), str(image)))
+                fields_inode = "core.mode core.size core.nextents core.format"
+                fields_raw = run("xfs_db", "-r", "-c", f"inode {ino}",
+                                 "-c", "p " + fields_inode, str(image))
+                expected_inode = {}
+                for line in fields_raw.splitlines():
+                    key, value = line.split(" = ")
+                    key = key.removeprefix("core.")
+                    expected_inode[key] = int(value.split()[0], 8 if key == "mode" else 10)
+                require(actual_inode == expected_inode,
+                        f"{name}/{entry}: {actual_inode} != {expected_inode}")
+                inode_comparisons += 1
+                remote = "link" in entry and actual_inode["format"] != 1
+                result = subprocess.run((probe, "-r", str(ino), "0",
+                                         str(len(content) + 100), str(image)), capture_output=True)
+                if remote:
+                    require(result.returncode == 1 and b"remote symlink" in result.stderr,
+                            f"{name}/{entry}: unsupported remote symlink accepted")
+                else:
+                    require(result.returncode == 0 and result.stdout == content,
+                            f"{name}/{entry}: wrong file contents: {result.stderr}")
+                    result = subprocess.run((probe, "-r", str(ino), "253", "8195",
+                                             str(image)), check=True, capture_output=True)
+                    require(result.stdout == content[253:8448], f"{name}/{entry}: wrong partial read")
+            if first_inode is None:
+                ino = entries["small"]
+                fsb = ino >> (actual["blocksize"].bit_length() - actual["inodesize"].bit_length())
+                agb_log = (actual["agblocks"] - 1).bit_length()
+                offset = (((fsb >> agb_log) * actual["agblocks"] +
+                           (fsb & ((1 << agb_log) - 1))) * actual["blocksize"] +
+                          (ino % (actual["blocksize"] // actual["inodesize"])) * actual["inodesize"])
+                with image.open("rb") as stream:
+                    first_inode = (ino, offset, actual["inodesize"], bytearray(stream.read(offset + 4096)))
             require(before == digest(image), f"{name}: probe changed the image")
-            print(f"PASS {name}: superblock and all AG headers match xfs_db; image unchanged")
+            print(f"PASS {name}: superblock, AGs and inodes match xfs_db; file bytes match; image unchanged")
             if first_sector is None:
                 with image.open("rb") as stream:
                     first_sector = bytearray(stream.read(32768))
@@ -181,8 +240,31 @@ def main():
         bad_ag("AGF-root", 1, 216, 16, 0xFFFFFFFF, "free-space btree")
         bad_ag("AGI-root", 2, 312, 20, 0xFFFFFFFF, "inode btree")
         bad_ag("AGFL-entry", 3, 32, 36, 0xFFFFFFFE, "out of bounds")
+        ino, offset, inode_size, pristine = first_inode
+        for case, field, value, message in (
+                ("crc", 500, b"\x80", "CRC32C"),
+                ("owner", 152, bytes(8), "number or UUID"),
+                ("uuid", 160, bytes(16), "number or UUID"),
+                ("size", 56, b"\xff" * 8, "size"),
+                ("fork", 82, b"\xff", "fork offset")):
+            data = pristine.copy()
+            raw_inode = data[offset:offset + inode_size]
+            raw_inode[field:field + len(value)] = value
+            if case != "crc":
+                metadata_crc(raw_inode, 100)
+            data[offset:offset + inode_size] = raw_inode
+            image = root / ("inode-" + case + ".img")
+            with image.open("xb") as stream:
+                stream.write(data)
+                stream.truncate(image_size)
+            result = subprocess.run((probe, "-i", str(ino), str(image)),
+                                    capture_output=True, text=True)
+            require(result.returncode == 1 and message in result.stderr,
+                    f"inode-{case}: {result.returncode}: {result.stderr}")
+            print(f"PASS inode-{case}: rejected ({message})")
     print(f"Passed {len(variants)} image comparisons, {ag_comparisons} AG comparisons, "
-          f"7 superblock and {ag_rejections} AG rejection cases")
+          f"{inode_comparisons} inode comparisons, file reads, "
+          f"7 superblock, {ag_rejections} AG and 5 inode rejection cases")
 
 
 if __name__ == "__main__":

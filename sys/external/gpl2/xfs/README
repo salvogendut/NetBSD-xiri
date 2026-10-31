@@ -33,17 +33,37 @@ finobt/rmapbt/reflink/inobtcount fields follow the superblock feature bits.
 Unused v4 free-list slots are ignored; active slots are always checked. The
 verified output is published only after all three reads and verifiers succeed.
 
+xfs_read_inode verifies allocation through the inode btree, including sparse
+chunks and the free-inode bitmap, before reading the inode. It checks inode
+identity, v3 CRC/UUID, fork geometry, extent counts, feature flags and extent
+hints. Inline extents are validated immediately; bmap roots are checked at
+inode load and external bmap blocks are verified as file reads traverse them.
+Both tree readers check CRCs, owners, physical addresses, UUIDs, sibling
+bounds, record counts, key order and parent/child ranges. Decreasing tree
+levels bound traversal even if corrupted pointers form a cycle.
+
+xfs_read_file reads regular files through inline extents or multi-level
+bmap trees and reads local symlink targets. It returns zeros for holes and
+unwritten extents, handles partial blocks and 64-bit offsets, and clamps reads
+at EOF. Inode/file APIs require a caller-owned block-sized scratch buffer
+(up to 64 KiB); their core routines allocate no memory. Keep the returned
+inode image immutable with its original reader and disjoint from scratch.
+Inode output is unchanged on error; a failed file read reports zero completed
+bytes but may have altered its destination. Remote symlinks are unsupported.
+
 The probe recognizes v4 superblocks with v2 directories and unwritten extent
 support, and v5 superblocks with the pinned upstream's feature definitions.
 It rejects unknown incompatible bits, NEEDSREPAIR, nonzero log-incompatible
 bits, incomplete mkfs state, external logs and realtime devices. Unknown
 compatible and read-only-compatible bits do not prevent superblock inspection.
-Recognizing a feature bit does not mean that its inode or btree format has
-been ported.
+Inode reads reject unknown read-only-compatible features. Recognizing a
+feature bit does not mean that all operations for that feature are ported.
 
 This is NOT a mountable filesystem or a complete filesystem verifier.
-It does not traverse btrees, check inode allocation or directory contents,
-validate metadata LSNs against the log, or establish journal cleanliness.
+It does not inspect directory/attribute contents, cross-check global tree
+counts or allocation ownership, validate metadata LSNs against the log, or
+establish journal cleanliness. Tree verification covers the visited paths;
+it does not check unvisited subtrees or reciprocal sibling links.
 Even a read-only mount can require recovery; a successful probe must never
 be used as evidence that replay can be skipped.
 There is no VFS registration, mount helper, kernel module, or write path yet.
@@ -78,16 +98,26 @@ wrapped/full/empty free lists, legacy v4 slots, unaligned scratch buffers,
 and output preservation are covered. CC and CFLAGS can override the compiler
 and host-test flags.
 
+The inode suite adds 8,821 checks covering v4/v5, sparse inode chunks,
+multi-level inode and bmap trees, non-power-of-two AG encoding, the shortened
+last AG, holes/unwritten data, local symlinks, empty files, offsets beyond
+4 GiB, EOF, unaligned buffers, checksum and semantic corruption, cycles,
+callback errors/short reads, and output preservation. Fragmented bmaps and
+sparse/unwritten layouts currently use synthetic fixtures.
+
 The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
 and xfs_db). It creates six disposable 400 MiB sparse images, compares the
-superblock and all 24 AGs with xfs_db, checks whole-image hashes before and
-after probing, and tests seven bad superblocks plus twelve bad AG headers.
+superblock, all 24 AGs and 30 populated inodes with xfs_db, checks regular-file
+and local-symlink contents against mkfs prototype sources, and tests remote
+symlink rejection. Whole-image hashes before and after inspection confirm
+unchanged contents. It also tests seven bad superblocks, twelve bad AG headers and five
+bad inodes, including corrupt metadata with recomputed checksums.
 The configurations cover defaults, 4 KiB sectors, 64 KiB blocks, 2 KiB inodes,
 a shortened final AG and disabled optional trees. Tests were run with
 xfsprogs 7.1.1. A future mkfs default may enable a newer, unsupported feature;
 review the upstream baseline rather than bypassing the rejection.
 
-The third compiles all five port files with this checkout's NetBSD amd64 kernel
+The third compiles all eight port files with this checkout's NetBSD amd64 kernel
 headers and no host system headers. It needs an amd64 compiler. This checks
 header/layout compatibility and a 2 KiB per-frame stack limit, not linking,
 module loading or booting. There is no rump runtime test yet.
@@ -104,19 +134,27 @@ To build a persistent image inspector on NetBSD or Linux:
         -isystem "$xfs_src/dist" "$xfs_src/netbsd/xfs_sb.c" \
         "$xfs_src/netbsd/xfs_probe.c" "$xfs_src/netbsd/xfs_cksum.c" \
         "$xfs_src/netbsd/xfs_io.c" "$xfs_src/netbsd/xfs_ag.c" \
+        "$xfs_src/netbsd/xfs_read_btree.c" \
+        "$xfs_src/netbsd/xfs_read_inode.c" "$xfs_src/netbsd/xfs_read_file.c" \
         "$xfs_src/tests/xfs_probe.c" \
         -o /tmp/xfs_probe
     /tmp/xfs_probe /path/to/image
     /tmp/xfs_probe -a 0 /path/to/image
+    /tmp/xfs_probe -i 131 /path/to/image
+    /tmp/xfs_probe -r 131 0 4096 /path/to/image > /tmp/file-prefix
+
+Inode numbers in these examples are illustrative. Use xfs_db's inode/ls
+commands to find a file's inode until directory lookup is ported. The -r
+command writes raw bytes to stdout; discard partial output if it fails.
 
 Next milestones
 ---------------
 
-1. Port inode, extent/bmap and directory readers using the bounded I/O layer.
-   Verify btree block checksums, UUIDs, owners, addresses and sibling bounds
-   before traversing them. Test file data, sparse and unwritten extents,
-   symlinks, large files and corrupted metadata against
-   images populated with Linux XFS. Establish reliable clean-log detection;
+1. Port directory lookup/readers and remote symlink verification. Add
+   fragmented, sparse and unwritten files produced by a running Linux XFS
+   filesystem, complementing the synthetic bmap tests and mkfs prototype
+   images. Expand cross-tree consistency and metadata validation coverage.
+   Establish reliable clean-log detection;
    reject filesystems requiring replay until recovery is implemented.
 2. Add NetBSD VFS/vnode operations, vnode lifecycle/locking, UBC integration,
    a rump component, a mount helper and an explicitly enabled GPL module.

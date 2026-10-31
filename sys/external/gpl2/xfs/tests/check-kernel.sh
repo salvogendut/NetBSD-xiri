@@ -24,7 +24,7 @@ for header in stdint stddef stdbool; do
 	ln -s "$xfs_src/sys/sys/$header.h" "$xfs_build/$header.h"
 done
 
-for source in xfs_sb xfs_probe xfs_cksum xfs_io xfs_ag; do
+for source in xfs_sb xfs_probe xfs_cksum xfs_io xfs_ag xfs_read_btree xfs_read_inode xfs_read_file; do
 	${CC:-cc} -std=gnu11 -O2 -ffreestanding -nostdinc \
 	    -D_KERNEL -D__NetBSD__ -U__linux__ -Wall -Wextra -Werror \
 	    -Wframe-larger-than=2048 \
