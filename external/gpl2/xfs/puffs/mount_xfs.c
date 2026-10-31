@@ -10,6 +10,7 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <puffs.h>
 #include <signal.h>
 #include <stdio.h>
@@ -41,6 +42,7 @@ struct xfs_server {
 	uint8_t *scratch;
 	size_t capacity;
 	bool stale;
+	bool debug;
 };
 
 /* Advisory locking is supplemental: callers must supply a quiescent image.
@@ -213,6 +215,9 @@ get_node(struct puffs_usermount *pu, uint64_t ino, struct puffs_node **result,
 	node->pn->pn_size = node->inode.size;
 	node->next = fs->nodes[bucket];
 	fs->nodes[bucket] = node;
+	if (fs->debug)
+		fprintf(stderr, "xfs-node create ino=%" PRIu64 " acl=%zu\n",
+		    ino, node->acl_length);
 	*result = node->pn;
 	return 0;
 }
@@ -561,12 +566,15 @@ node_readdir(struct puffs_usermount *pu, puffs_cookie_t cookie, struct dirent *d
 }
 
 static void
-free_node(struct xfs_server *fs, struct xfs_node *node)
+free_node(struct xfs_server *fs, struct xfs_node *node, const char *reason)
 {
 	struct xfs_node **link = &fs->nodes[node->inode.number % NODE_BUCKETS];
 	while (*link != node)
 		link = &(*link)->next;
 	*link = node->next;
+	if (fs->debug)
+		fprintf(stderr, "xfs-node %s ino=%" PRIu64 " acl=%zu\n",
+		    reason, node->inode.number, node->acl_length);
 	puffs_pn_put(node->pn);
 	free(node->acl);
 	free(node);
@@ -578,7 +586,7 @@ node_reclaim(struct puffs_usermount *pu, puffs_cookie_t cookie)
 	struct puffs_node *pn = cookie;
 	/* libpuffs handles lookup/reclaim races before calling this hook. */
 	if (pn != puffs_getroot(pu))
-		free_node(puffs_getspecific(pu), pn->pn_data);
+		free_node(puffs_getspecific(pu), pn->pn_data, "reclaim");
 	return 0;
 }
 
@@ -674,7 +682,7 @@ readonly_delextattr(struct puffs_usermount *pu __unused, puffs_cookie_t cookie _
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: mount_xfs [-s] [-o ro] image mountpoint\n");
+	fprintf(stderr, "usage: mount_xfs [-ds] [-o ro] image mountpoint\n");
 	exit(2);
 }
 
@@ -688,13 +696,14 @@ main(int argc, char **argv)
 	struct xfs_io io;
 	const char *why = NULL;
 	char *image;
-	bool foreground = false;
+	bool foreground = false, debug = false;
 	int ch, error;
 	unsigned int i;
 
 	setprogname(argv[0]);
-	while ((ch = getopt(argc, argv, "so:")) != -1) {
+	while ((ch = getopt(argc, argv, "dso:")) != -1) {
 		switch (ch) {
+		case 'd': debug = foreground = true; break;
 		case 's': foreground = true; break;
 		case 'o':
 			if (strcmp(optarg, "ro") != 0)
@@ -711,6 +720,7 @@ main(int argc, char **argv)
 	fs = calloc(1, sizeof(*fs));
 	if (fs == NULL)
 		err(1, "server allocation");
+	fs->debug = debug;
 	fs->fd = open(image, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (fs->fd == -1 || fstat(fs->fd, &fs->original) == -1)
 		err(1, "open image");
@@ -784,7 +794,7 @@ main(int argc, char **argv)
 		warn("puffs_mainloop");
 	for (i = 0; i < NODE_BUCKETS; i++)
 		while (fs->nodes[i] != NULL)
-			free_node(fs, fs->nodes[i]);
+			free_node(fs, fs->nodes[i], "shutdown");
 	close(fs->fd);
 	free(fs->scratch);
 	free(fs);

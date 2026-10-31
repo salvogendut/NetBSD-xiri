@@ -44,8 +44,10 @@ ${CC:-cc} -std=gnu11 -O2 -nostdinc \
     -I "$xfs_build" -isystem "$xfs_src/include" -isystem "$xfs_src/sys" \
     -I "$xfs_src/lib/libpuffs" -I "$xfs_root/include" -isystem "$xfs_root/dist" \
     -c "$xfs_root/puffs/mount_xfs.c" -o "$xfs_build/mount_xfs.o"
-${CC:-cc} -std=gnu11 -O2 -nostdinc \
-    -D__NetBSD__ -U__linux__ -Wall -Wextra -Werror \
-    -I "$xfs_build" -isystem "$xfs_src/include" -isystem "$xfs_src/sys" \
-    -c "$xfs_root/tests/t_puffs.c" -o "$xfs_build/t_puffs.o"
+for client in t_puffs t_puffs_stress; do
+	${CC:-cc} -std=gnu11 -O2 -nostdinc \
+	    -D__NetBSD__ -U__linux__ -Wall -Wextra -Werror \
+	    -I "$xfs_build" -isystem "$xfs_src/include" -isystem "$xfs_src/sys" \
+	    -c "$xfs_root/tests/$client.c" -o "$xfs_build/$client.o"
+done
 echo 'Passed NetBSD amd64 user-space header compilation (no link or runtime test)'

@@ -81,6 +81,9 @@ Detected size/mtime/ctime changes permanently fail service with ESTALE;
 this is not snapshot isolation. SIGINT/SIGTERM request forced unmounts.
 NetBSD currently overrides statvfs's name limit with libpuffs' initial
 MAXNAMLEN (511), despite the callback reporting XFS's actual 255-byte limit.
+The optional -d flag keeps mount_xfs in the foreground and logs inode creation,
+kernel reclamation and shutdown release to stderr, with inode numbers and
+retained ACL byte counts. It does not log attribute contents or credentials.
 
 The upstream superblock decoder, version checks and quota conversion run
 through a small NetBSD compatibility header. A read-only probe adds bounded
@@ -448,15 +451,55 @@ For a temporary test library without installing it system-wide:
 The compile-only check also covers this checkout's headers; other architectures
 remain untested.
 
+Native runtime stress
+---------------------
+
+The separate stress suite uses the same disposable v4/v5 fixtures and requires
+root on NetBSD, with the corrected libpuffs described above:
+
+    LD_LIBRARY_PATH="$PWD/lib/libpuffs" \
+        sh external/gpl2/xfs/tests/run-puffs-stress.sh /tmp/xfs-mount-fixtures
+
+Six clients start together with different owners, named users and groups.
+They check byte-exact reads, EOF, ACL grants and denials, directory search,
+attribute permissions/truncation and directory-cookie resumption. Two passes
+over 1,800 files check inode identity; an open descriptor pins an ACL inode
+during the first pass. Clean unmount must balance all logged inode allocations
+and releases, and retained ACL bytes.
+
+For explicit reclamation coverage, use a disposable NetBSD VM:
+
+    LD_LIBRARY_PATH="$PWD/lib/libpuffs" \
+        sh external/gpl2/xfs/tests/run-puffs-stress.sh --vnode-pressure /tmp/xfs-mount-fixtures
+
+This option temporarily sets the system-wide kern.maxvnodes to 1024, then
+restores the saved value on success, failure or a catchable shell signal.
+It requires observed kernel reclaim callbacks before unmount: a closed ACL
+inode must be reclaimed while the pinned inode survives; after closing the
+pinned descriptor, that inode's ACL storage must be released and loaded again
+on lookup. Without the option, the suite exercises churn but does not require
+reclamation. This is vnode-cache pressure, not a general low-memory/OOM test.
+
+The supervisor stops the server and confirms each client's PUFFS reply wait
+channel through KERN_PROC2 before injecting failures. It cancels one waiting
+client and verifies continued service, then kills the server with reads,
+attribute reads and directory reads pending. Each operation must return ENXIO.
+A fresh mount must pass concurrent access checks afterward. A watchdog bounds
+each image's run and kills the supervisor's private process group on timeout;
+failure logs are retained. Successful runs verify unchanged whole-image SHA256
+hashes. These are read-only server lifecycle checks, not journal replay or
+write crash-consistency tests.
+Both stress modes passed on NetBSD 11.0/amd64 in QEMU with v4/v5 fixtures and
+this checkout's libpuffs; the existing native mount regression suite also passed.
+
 Remaining milestones
 --------------------
 
 1. Define and implement security-label policy explicitly before accepting
    labelled images. POSIX access/default ACLs are supported; SELinux and other
    security namespaces remain rejected.
-   Expand runtime coverage for abrupt server death, parallel clients and
-   node reclamation under memory pressure. Add bounded caching only with
-   explicit consistency and lifetime contracts.
+   Expand runtime coverage to prolonged workloads and allocator failures.
+   Add bounded caching only with explicit consistency and lifetime contracts.
 2. Add Linux-produced clean/dirty journals, fragmented, sparse and unwritten
    files, complementing synthetic fixtures. Port external directory index
    verifiers/hash lookup and expand cross-tree and metadata-LSN validation.

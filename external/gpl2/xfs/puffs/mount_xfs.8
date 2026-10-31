@@ -8,7 +8,7 @@
 .Nd experimental read-only XFS filesystem in user space
 .Sh SYNOPSIS
 .Nm
-.Op Fl s
+.Op Fl ds
 .Op Fl o Cm ro
 .Ar image mountpoint
 .Sh DESCRIPTION
@@ -30,6 +30,12 @@ The
 option keeps the server in the foreground.
 Otherwise it detaches using
 .Fn puffs_daemon .
+The
+.Fl d
+option also keeps the server in the foreground and reports inode creation,
+kernel reclamation and shutdown release to standard error, including the
+inode number and retained ACL byte count.
+Attribute names, values and caller credentials are not logged.
 .Pp
 Regular files, directories and symbolic links are supported.
 UIDs, GIDs and mode bits are preserved, and directory search and access
