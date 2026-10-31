@@ -13,7 +13,7 @@ xfs_build=$(mktemp -d "${TMPDIR:-/tmp}/netbsd-xfs-tests.XXXXXX")
 trap 'rm -rf "$xfs_build"' EXIT
 trap 'exit 1' HUP INT TERM
 
-for program in t_probe t_io t_inode xfs_probe; do
+for program in t_probe t_io t_inode t_directory xfs_probe; do
 	# CC and CFLAGS intentionally allow multiple shell words.
 	${CC:-cc} ${CFLAGS:--O2 -g} -std=gnu11 -D_DEFAULT_SOURCE \
 	    -Wall -Wextra -Werror -I "$xfs_root/include" \
@@ -23,12 +23,16 @@ for program in t_probe t_io t_inode xfs_probe; do
 	    "$xfs_root/netbsd/xfs_ag.c" \
 	    "$xfs_root/netbsd/xfs_read_btree.c" \
 	    "$xfs_root/netbsd/xfs_read_inode.c" "$xfs_root/netbsd/xfs_read_file.c" \
+	    "$xfs_root/netbsd/xfs_read_symlink.c" \
+	    "$xfs_root/netbsd/xfs_read_directory.c" "$xfs_root/netbsd/xfs_lookup_path.c" \
 	    "$xfs_root/tests/$program.c" -o "$xfs_build/$program"
 done
 
 "$xfs_build/t_probe"
 "$xfs_build/t_io"
 "$xfs_build/t_inode"
+"$xfs_build/t_directory"
 if [ "${1:-}" = --images ]; then
 	python3 "$xfs_root/tests/test_images.py" "$xfs_build/xfs_probe"
+	PYTHONDONTWRITEBYTECODE=1 python3 "$xfs_root/tests/test_paths.py" "$xfs_build/xfs_probe"
 fi

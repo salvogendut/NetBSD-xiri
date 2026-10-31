@@ -70,20 +70,20 @@ xfs_bmap_root(const struct xfs_sb *sb, const uint8_t *root, unsigned int size,
 	    true, 0, target, false, low, high, child, why);
 }
 
-static int
-file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
+int
+xfs_file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
     uint64_t target, void *scratch, size_t capacity, uint64_t *mapped,
-    bool *zero, const char **why)
+    uint64_t *end, bool *zero, const char **why)
 {
 	const struct xfs_sb *sb = &r->sb;
 	const uint8_t *fork = inode->disk + inode->data_offset;
-	uint64_t low = 0, high = UINT64_C(1) << 54, fsb, end;
+	uint64_t low = 0, high = UINT64_C(1) << 54, fsb;
 	unsigned int level, h, n;
 	int error;
 
 	if (inode->format == XFS_DINODE_FMT_EXTENTS)
 		return xfs_extent_lookup(sb, fork, inode->nextents, target,
-		    false, low, high, mapped, &end, zero, why);
+		    false, low, high, mapped, end, zero, why);
 	if (inode->format != XFS_DINODE_FMT_BTREE)
 		return xfs_read_fail(why, EOPNOTSUPP, "unsupported file data format");
 	error = xfs_bmap_root(sb, fork, inode->data_size, target,
@@ -100,7 +100,7 @@ file_mapping(const struct xfs_reader *r, const struct xfs_inode_image *inode,
 			if (n > inode->nextents)
 				return xfs_read_fail(why, EINVAL, "bmap leaf exceeds inode extent count");
 			return xfs_extent_lookup(sb, (const uint8_t *)scratch + h,
-			    n, target, true, low, high, mapped, &end, zero, why);
+			    n, target, true, low, high, mapped, end, zero, why);
 		}
 		error = xfs_tree_child(sb, (const uint8_t *)scratch + h,
 		    sb->sb_blocksize - h, n, true, 0, target, true,
@@ -115,7 +115,7 @@ xfs_read_file(const struct xfs_reader *r, const struct xfs_inode_image *inode,
     uint64_t offset, void *data, size_t length, size_t *done, void *scratch,
     size_t capacity, const char **why)
 {
-	uint64_t fsb;
+	uint64_t fsb, end;
 	size_t copied = 0, part, inblock;
 	bool zero;
 	int error;
@@ -131,14 +131,19 @@ xfs_read_file(const struct xfs_reader *r, const struct xfs_inode_image *inode,
 		return xfs_read_fail(why, EMSGSIZE, "file scratch smaller than block");
 	if (!S_ISREG(inode->mode) && !S_ISLNK(inode->mode))
 		return xfs_read_fail(why, EOPNOTSUPP, "file reader requires regular file or symlink");
-	if (S_ISLNK(inode->mode) && inode->format != XFS_DINODE_FMT_LOCAL)
-		return xfs_read_fail(why, EOPNOTSUPP, "remote symlink verification is not implemented");
 	if (offset > INT64_MAX)
 		return xfs_read_fail(why, EINVAL, "file offset exceeds signed range");
 	if (offset >= inode->size || length == 0)
 		return 0;
 	if (length > inode->size - offset)
 		length = inode->size - offset;
+	if (S_ISLNK(inode->mode)) {
+		error = xfs_read_symlink_range(r, inode, offset, data, length,
+		    scratch, capacity, why);
+		if (error == 0)
+			*done = length;
+		return error;
+	}
 	if (inode->format == XFS_DINODE_FMT_LOCAL) {
 		memcpy(data, inode->disk + inode->data_offset + offset, length);
 		*done = length;
@@ -149,8 +154,8 @@ xfs_read_file(const struct xfs_reader *r, const struct xfs_inode_image *inode,
 		part = r->sb.sb_blocksize - inblock;
 		if (part > length - copied)
 			part = length - copied;
-		error = file_mapping(r, inode, offset >> r->sb.sb_blocklog,
-		    scratch, capacity, &fsb, &zero, why);
+		error = xfs_file_mapping(r, inode, offset >> r->sb.sb_blocklog,
+		    scratch, capacity, &fsb, &end, &zero, why);
 		if (error != 0)
 			return error;
 		if (zero) {

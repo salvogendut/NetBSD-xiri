@@ -22,8 +22,9 @@ int xfs_read_inode(const struct xfs_reader *, uint64_t, void *, size_t,
     struct xfs_inode_image *, const char **);
 
 /*
- * Read regular-file bytes or a local symlink target, clamped at EOF.
- * scratch (at least sb_blocksize bytes), data, inode and done must not overlap.
+ * Read regular-file bytes or a symlink target, clamped at EOF.
+ * scratch (at least sb_blocksize bytes, or 2048 bytes for a remote symlink
+ * on a filesystem with 1024-byte blocks), data, inode and done must not overlap.
  * *done is zero on failure; data may have been partly overwritten.
  * No allocation, writes, journal replay, or assertion of journal cleanliness.
  */

@@ -43,13 +43,38 @@ bounds, record counts, key order and parent/child ranges. Decreasing tree
 levels bound traversal even if corrupted pointers form a cycle.
 
 xfs_read_file reads regular files through inline extents or multi-level
-bmap trees and reads local symlink targets. It returns zeros for holes and
-unwritten extents, handles partial blocks and 64-bit offsets, and clamps reads
+bmap trees and reads local and remote symlink targets. It returns zeros for
+holes and unwritten extents, handles partial blocks and 64-bit offsets, and clamps reads
 at EOF. Inode/file APIs require a caller-owned block-sized scratch buffer
-(up to 64 KiB); their core routines allocate no memory. Keep the returned
+(up to 64 KiB, with at least 2 KiB for remote symlinks on 1 KiB-block filesystems);
+their core routines allocate no memory. Keep the returned
 inode image immutable with its original reader and disjoint from scratch.
 Inode output is unchanged on error; a failed file read reports zero completed
-bytes but may have altered its destination. Remote symlinks are unsupported.
+bytes but may have altered its destination. Remote symlink buffers are checked
+for checksum, owner, UUID, disk address, chunk length and target offset;
+partial reads still verify the entire target. Targets are limited to 1023 bytes.
+
+xfs_read_directory enumerates shortform, block, leaf and node directories.
+It verifies the data entries, names, file types, inode-number bounds, dots,
+free-space records, v3 identity/CRC, and a block directory's embedded hash
+index. Directory blocks up to 64 KiB can span multiple filesystem blocks.
+xfs_directory_lookup scans all data entries for an exact name, rejecting
+duplicate matches. External leaf/node hash indexes and free-space indexes
+are not consulted or verified; this uses the upstream data-only readdir
+approach. ASCII case-insensitive directories are unsupported. Scans are
+linear in directory data size and use no cache or readahead.
+
+xfs_lookup_path resolves absolute image paths, repeated separators, dots,
+relative/absolute symlinks and trailing slashes. It checks selected inode
+allocation, limits expanded paths to 4095 bytes and traversal to 40 symlinks.
+The caller can decline to follow the final symlink. Paths remain entirely
+inside the image. There are no host pathname operations or permission checks.
+
+Directory/path APIs require directory-block-size + filesystem-block-size
+scratch, from xfs_directory_scratch_size. Path resolution also takes a
+caller-owned xfs_path_workspace; never put it on a kernel stack. Directory
+callbacks receive byte names valid only during that call. Earlier callbacks
+can have run when a later block fails. Lookup outputs are unchanged on error.
 
 The probe recognizes v4 superblocks with v2 directories and unwritten extent
 support, and v5 superblocks with the pinned upstream's feature definitions.
@@ -60,8 +85,8 @@ Inode reads reject unknown read-only-compatible features. Recognizing a
 feature bit does not mean that all operations for that feature are ported.
 
 This is NOT a mountable filesystem or a complete filesystem verifier.
-It does not inspect directory/attribute contents, cross-check global tree
-counts or allocation ownership, validate metadata LSNs against the log, or
+It does not inspect external directory indexes or attribute contents,
+cross-check global tree counts or allocation ownership, validate metadata LSNs against the log, or
 establish journal cleanliness. Tree verification covers the visited paths;
 it does not check unvisited subtrees or reciprocal sibling links.
 Even a read-only mount can require recovery; a successful probe must never
@@ -105,19 +130,40 @@ last AG, holes/unwritten data, local symlinks, empty files, offsets beyond
 callback errors/short reads, and output preservation. Fragmented bmaps and
 sparse/unwritten layouts currently use synthetic fixtures.
 
+The namespace suite adds 8,350 checks for v4/v5 shortform and block/data
+directories, 32/64-bit inode numbers, free entries, hash collisions, callbacks,
+holes, lookup output preservation, corruption with recomputed CRCs, and remote
+symlinks. Contiguous and fragmented two-block v5 symlinks with 1 KiB blocks
+are covered by synthetic fixtures, including corruption in an unrequested
+tail and insufficient scratch capacity.
+
 The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
 and xfs_db). It creates six disposable 400 MiB sparse images, compares the
 superblock, all 24 AGs and 30 populated inodes with xfs_db, checks regular-file
-and local-symlink contents against mkfs prototype sources, and tests remote
-symlink rejection. Whole-image hashes before and after inspection confirm
-unchanged contents. It also tests seven bad superblocks, twelve bad AG headers and five
-bad inodes, including corrupt metadata with recomputed checksums.
+and local/remote-symlink contents against mkfs prototype sources.
+Whole-image hashes before and after inspection confirm
+unchanged contents. It also tests seven bad superblocks, twelve bad AG headers
+and five bad inodes, including corrupt metadata with recomputed checksums.
 The configurations cover defaults, 4 KiB sectors, 64 KiB blocks, 2 KiB inodes,
 a shortened final AG and disabled optional trees. Tests were run with
 xfsprogs 7.1.1. A future mkfs default may enable a newer, unsupported feature;
 review the upstream baseline rather than bypassing the rejection.
 
-The third compiles all eight port files with this checkout's NetBSD amd64 kernel
+Four additional populated images test directory listings against xfs_db and
+file reads by path, using default, 8 KiB-directory, 64 KiB-directory and
+1 KiB-filesystem-block configurations. The default fixture explicitly checks
+shortform, block, leaf and node formats, with up to 1800 files per directory.
+Tests include deep paths, relative/absolute links, loops, dangling links,
+trailing slashes, missing names, non-directories, long components, expansion
+limits and 24 directory/symlink corruption cases. Image hashes also cover
+restoration of the intentionally mutated disposable blocks.
+
+xfsprogs 7.1.1's prototype writer produced a truncated remote symlink in the
+1 KiB-block test: a 990-byte inode size with only one 968-byte payload mapping.
+The reader correctly rejects that image. The mkfs test uses a shorter target
+for this configuration; synthetic fixtures test valid two-block targets.
+
+The third compiles all eleven port files with this checkout's NetBSD amd64 kernel
 headers and no host system headers. It needs an amd64 compiler. This checks
 header/layout compatibility and a 2 KiB per-frame stack limit, not linking,
 module loading or booting. There is no rump runtime test yet.
@@ -136,26 +182,33 @@ To build a persistent image inspector on NetBSD or Linux:
         "$xfs_src/netbsd/xfs_io.c" "$xfs_src/netbsd/xfs_ag.c" \
         "$xfs_src/netbsd/xfs_read_btree.c" \
         "$xfs_src/netbsd/xfs_read_inode.c" "$xfs_src/netbsd/xfs_read_file.c" \
+        "$xfs_src/netbsd/xfs_read_symlink.c" \
+        "$xfs_src/netbsd/xfs_read_directory.c" "$xfs_src/netbsd/xfs_lookup_path.c" \
         "$xfs_src/tests/xfs_probe.c" \
         -o /tmp/xfs_probe
     /tmp/xfs_probe /path/to/image
     /tmp/xfs_probe -a 0 /path/to/image
     /tmp/xfs_probe -i 131 /path/to/image
     /tmp/xfs_probe -r 131 0 4096 /path/to/image > /tmp/file-prefix
+    /tmp/xfs_probe -l / /path/to/image
+    /tmp/xfs_probe -p /directory/file /path/to/image
+    /tmp/xfs_probe -R /directory/file 0 4096 /path/to/image > /tmp/file-prefix
+    /tmp/xfs_probe -s /directory/symlink /path/to/image
 
-Inode numbers in these examples are illustrative. Use xfs_db's inode/ls
-commands to find a file's inode until directory lookup is ported. The -r
-command writes raw bytes to stdout; discard partial output if it fails.
+Paths and inode numbers in these examples are illustrative. -l emits JSON
+lines with ino, type (XFS on-disk type) and name; non-ASCII/control name bytes
+are escaped as \u00xx. -p inspects metadata and -R reads bytes after following
+symlinks; -s returns the final symlink's target. -r, -R and -s emit raw bytes
+without a trailing newline. Discard partial output if a command fails.
 
 Next milestones
 ---------------
 
-1. Port directory lookup/readers and remote symlink verification. Add
-   fragmented, sparse and unwritten files produced by a running Linux XFS
-   filesystem, complementing the synthetic bmap tests and mkfs prototype
+1. Establish reliable clean-log detection and reject filesystems requiring
+   replay before enabling mounting. Port external directory index verifiers
+   and hash-based lookup. Add fragmented, sparse and unwritten files produced
+   by a running Linux XFS filesystem, complementing the synthetic bmap tests and mkfs prototype
    images. Expand cross-tree consistency and metadata validation coverage.
-   Establish reliable clean-log detection;
-   reject filesystems requiring replay until recovery is implemented.
 2. Add NetBSD VFS/vnode operations, vnode lifecycle/locking, UBC integration,
    a rump component, a mount helper and an explicitly enabled GPL module.
    Start with read-only mounts and unmount/error-path tests. Unsupported

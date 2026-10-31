@@ -28,9 +28,18 @@ Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
     xfs_inode_fork.c
     xfs_ialloc_btree.c
     xfs_bmap_btree.c
+    xfs_da_format.h
+    xfs_da_btree.c
+    xfs_dir2.c
+    xfs_dir2_priv.h
+    xfs_dir2_sf.c
+    xfs_dir2_data.c
+    xfs_symlink_remote.c
+
+dist/xfs_dir2_readdir.c comes from fs/xfs/ (outside libxfs/) at that commit.
 
 COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
-SHA256 records the hashes of these sixteen upstream files. Verify them with
+SHA256 records the hashes of these twenty-four upstream files. Verify them with
 "sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
 Do not edit dist/ for NetBSD adaptations.
 
@@ -110,14 +119,58 @@ bounds. Holes and unwritten extents return zeros without reading their
 backing data. File reads use caller-owned block scratch, clamp at EOF and
 report zero bytes completed on failure (the destination may be altered).
 
+include/xfs_dir_layout.h selects directory constants and structures from
+xfs_da_format.h, replacing uuid_t with the port's opaque UUID type. It does
+not import Linux-only accessor/attribute helpers into the compatibility layer.
+
+netbsd/xfs_read_directory.c adapts xfs_dir2_sf_verify and the shortform inode
+number/entry accessors, __xfs_dir3_data_check, xfs_dir3_data_verify and
+xfs_dir2_data_freefind_verify. Geometry and entry sizes follow xfs_dir2.c and
+xfs_dir2_priv.h. Name hashing uses xfs_da_hashname's rotate/XOR operation.
+The linear scan follows xfs_dir2_{sf,block,leaf}_getdents in xfs_dir2_readdir.c;
+leaf and node directories both enumerate their data blocks. The port also:
+
+  - bounds all variable-size fields before reading them, including unaligned
+    shortform inode numbers and tags;
+  - checks exact owner/address/UUID, directory dots and root parent, file
+    types, names, free-entry tags and the three largest free areas;
+  - uses a bitset to verify a bijection between live data entries and the
+    single-block directory's embedded hash index (including hash collisions);
+  - assembles directory blocks from possibly fragmented filesystem blocks;
+  - skips whole aligned holes, rejecting unwritten or partially missing data;
+  - implements exact-name lookup by scanning all entries, rejecting duplicate
+    matches and preserving the result when a later block fails verification.
+
+External leaf/node hash indexes and free-space indexes are not read or
+verified. This deliberately uses the data-only readdir path for inspection
+lookup, not upstream's hash-index lookup algorithm. It cannot establish
+agreement with those indexes. ASCII case-insensitive directories are rejected.
+Directory callbacks see only entries from fully verified blocks, but callbacks
+from preceding blocks cannot be rolled back after a later error.
+
+netbsd/xfs_read_symlink.c adapts xfs_symlink_remote_read, xfs_symlink_verify
+and xfs_symlink_hdr_ok. It verifies complete mapped buffers (one header per
+extent, not per filesystem block), target offsets/lengths, exact inode owner,
+disk address, UUID, CRC and absence of embedded NULs. Targets must be shorter
+than XFS_SYMLINK_MAXLEN. Even a partial read checks every target chunk, rejecting
+holes and unwritten mappings. A contiguous two-block target on a v5 filesystem
+with 1 KiB blocks requires 2 KiB of scratch. Metadata LSN checks remain absent.
+
+netbsd/xfs_lookup_path.c is a new image-only adapter around these readers.
+It resolves absolute paths, dots and relative/absolute symlinks with caller
+workspace, a 4096-byte path bound and a 40-link limit. It checks allocation
+when opening every selected inode, preserves trailing-slash semantics and
+never passes image path components to the host filesystem. It does not
+implement credentials, access control or NetBSD namei/VFS integration.
+
 These readers are image-inspection adaptations, not a replacement for all
 live-kernel verifiers or xfs_repair. In particular they do not cross-check
 global extent/block counts, rmap ownership, other allocation trees, inode
-timestamps, directory/attribute contents, or log LSNs. Bmap blocks are
-verified lazily during file reads. Unknown read-only-compatible features
+timestamps, external directory indexes, attribute contents, or log LSNs.
+Bmap blocks are verified lazily during file reads. Unknown read-only-compatible features
 block inode access even though the superblock probe permits inspection.
-Remote symlinks and zero-length directories/symlinks are explicitly
-unsupported. No Linux cache, locking, transaction or recovery object is
+Zero-length directories/symlinks are explicitly unsupported.
+No Linux cache, locking, transaction or recovery object is
 emulated; those contracts remain work for the VFS/recovery milestones.
 
 The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.

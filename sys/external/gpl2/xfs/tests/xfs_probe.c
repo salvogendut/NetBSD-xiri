@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* $NetBSD$ */
 
-#include "xfs_inode.h"
+#include "xfs_directory.h"
 
 #include <sys/stat.h>
 #include <errno.h>
@@ -39,20 +39,39 @@ number(const char *s)
 	return n;
 }
 
+/* JSON escapes preserve arbitrary filename bytes without terminal controls. */
+static int
+print_entry(void *cookie, uint64_t ino, uint8_t type, const uint8_t *name, size_t length)
+{
+	size_t i;
+	(void)cookie;
+	printf("{\"ino\":%" PRIu64 ",\"type\":%u,\"name\":\"", ino, type);
+	for (i = 0; i < length; i++) {
+		if (name[i] < 32 || name[i] >= 127 || name[i] == '"' || name[i] == '\\')
+			printf("\\u%04x", name[i]);
+		else
+			putchar(name[i]);
+	}
+	fputs("\"}\n", stdout);
+	return ferror(stdout) ? EIO : 0;
+}
+
 int
 main(int argc, char **argv)
 {
-	uint8_t data[XFS_MAX_BLOCKSIZE], output[XFS_MAX_BLOCKSIZE];
+	uint8_t data[2 * XFS_MAX_BLOCKSIZE], output[XFS_MAX_BLOCKSIZE];
+	struct xfs_path_workspace path_work;
 	struct xfs_inode_image inode;
 	struct xfs_sb sb;
 	struct xfs_reader reader;
 	struct xfs_io io;
 	struct xfs_ag_headers ag;
 	struct stat st;
-	const char *why, *path;
+	const char *why, *path, *image_path = NULL;
 	uint64_t agno = 0, ino = 0, offset = 0, length = 0;
 	size_t done, part;
 	bool inspect_ag = false, inspect_inode = false, read_file = false;
+	bool list_directory = false, read_link = false;
 	int fd, error;
 
 	if (argc == 4 && strcmp(argv[1], "-a") == 0) {
@@ -73,11 +92,28 @@ main(int argc, char **argv)
 		offset = number(argv[3]);
 		length = number(argv[4]);
 		path = argv[5];
+	} else if (argc == 4 && (strcmp(argv[1], "-p") == 0 ||
+	    strcmp(argv[1], "-l") == 0 || strcmp(argv[1], "-s") == 0)) {
+		inspect_inode = argv[1][1] == 'p';
+		list_directory = argv[1][1] == 'l';
+		read_link = argv[1][1] == 's';
+		read_file = read_link;
+		length = XFS_SYMLINK_MAXLEN;
+		image_path = argv[2];
+		path = argv[3];
+	} else if (argc == 6 && strcmp(argv[1], "-R") == 0) {
+		read_file = true;
+		image_path = argv[2];
+		offset = number(argv[3]);
+		length = number(argv[4]);
+		path = argv[5];
 	} else if (argc == 2) {
 		path = argv[1];
 	} else {
 		fprintf(stderr, "usage: xfs_probe [-a agno | -i ino] image\n"
-		    "       xfs_probe -r ino offset length image\n");
+		    "       xfs_probe -r ino offset length image\n"
+		    "       xfs_probe {-p|-l|-s} /path/in/image image\n"
+		    "       xfs_probe -R /path/in/image offset length image\n");
 		return 2;
 	}
 	fd = open(path, O_RDONLY | O_NONBLOCK);
@@ -101,8 +137,22 @@ main(int argc, char **argv)
 	error = xfs_reader_open(&io, data, sizeof(data), &reader, &why);
 	if (error == 0 && inspect_ag)
 		error = xfs_read_ag(&reader, (uint32_t)agno, data, sizeof(data), &ag, &why);
-	if (error == 0 && (inspect_inode || read_file))
+	if (error == 0 && image_path != NULL)
+		error = xfs_lookup_path(&reader, image_path, strlen(image_path), !read_link,
+		    &path_work, data, sizeof(data), &ino, &why);
+	if (error == 0 && (inspect_inode || read_file || list_directory))
 		error = xfs_read_inode(&reader, ino, data, sizeof(data), &inode, &why);
+	if (error == 0 && read_link && !S_ISLNK(inode.mode)) {
+		error = EINVAL;
+		why = "readlink requires a symlink";
+	}
+	if (error == 0 && list_directory) {
+		error = xfs_read_directory(&reader, &inode, data, sizeof(data), print_entry, NULL, &why);
+		if (fflush(stdout) != 0 && error == 0) {
+			error = EIO;
+			why = "directory output flush failed";
+		}
+	}
 	if (error == 0 && read_file) {
 		do {
 			part = length > sizeof(output) ? sizeof(output) : (size_t)length;
@@ -128,7 +178,7 @@ main(int argc, char **argv)
 		fprintf(stderr, "xfs_probe: %s (%s)\n", why, strerror(error));
 		return 1;
 	}
-	if (read_file)
+	if (read_file || list_directory)
 		return 0;
 	if (inspect_inode) {
 		printf("mode = %u\n", inode.mode);

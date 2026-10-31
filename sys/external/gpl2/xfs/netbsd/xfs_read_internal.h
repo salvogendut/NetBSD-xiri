@@ -56,5 +56,9 @@ int xfs_extent_lookup(const struct xfs_sb *, const uint8_t *, uint64_t,
     const char **);
 int xfs_bmap_root(const struct xfs_sb *, const uint8_t *, unsigned int,
     uint64_t, unsigned int *, uint64_t *, uint64_t *, uint64_t *, const char **);
+int xfs_file_mapping(const struct xfs_reader *, const struct xfs_inode_image *,
+    uint64_t, void *, size_t, uint64_t *, uint64_t *, bool *, const char **);
+int xfs_read_symlink_range(const struct xfs_reader *, const struct xfs_inode_image *,
+    uint64_t, void *, size_t, void *, size_t, const char **);
 
 #endif

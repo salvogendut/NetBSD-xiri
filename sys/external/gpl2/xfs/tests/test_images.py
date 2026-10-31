@@ -135,18 +135,13 @@ def main():
                 require(actual_inode == expected_inode,
                         f"{name}/{entry}: {actual_inode} != {expected_inode}")
                 inode_comparisons += 1
-                remote = "link" in entry and actual_inode["format"] != 1
                 result = subprocess.run((probe, "-r", str(ino), "0",
                                          str(len(content) + 100), str(image)), capture_output=True)
-                if remote:
-                    require(result.returncode == 1 and b"remote symlink" in result.stderr,
-                            f"{name}/{entry}: unsupported remote symlink accepted")
-                else:
-                    require(result.returncode == 0 and result.stdout == content,
-                            f"{name}/{entry}: wrong file contents: {result.stderr}")
-                    result = subprocess.run((probe, "-r", str(ino), "253", "8195",
-                                             str(image)), check=True, capture_output=True)
-                    require(result.stdout == content[253:8448], f"{name}/{entry}: wrong partial read")
+                require(result.returncode == 0 and result.stdout == content,
+                        f"{name}/{entry}: wrong file contents: {result.stderr}")
+                result = subprocess.run((probe, "-r", str(ino), "253", "8195",
+                                         str(image)), check=True, capture_output=True)
+                require(result.stdout == content[253:8448], f"{name}/{entry}: wrong partial read")
             if first_inode is None:
                 ino = entries["small"]
                 fsb = ino >> (actual["blocksize"].bit_length() - actual["inodesize"].bit_length())
