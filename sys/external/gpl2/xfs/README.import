@@ -1,0 +1,50 @@
+$NetBSD$
+
+Upstream: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+Mirror: https://github.com/torvalds/linux
+Tag: v6.12
+Commit: adc218676eef25575469234709c2d87185ca223a
+Import date: 2026-10-31
+License: GPL version 2, as specified in each imported file.
+
+This is a deliberately small, pinned source import for the first porting
+milestone. v6.12 supplies both v4 and v5 disk definitions and a reproducible
+baseline; this is not a claim to track the latest Linux XFS release.
+
+Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
+
+    xfs_format.h
+    xfs_log_format.h
+    xfs_sb.c
+    xfs_sb.h
+    xfs_types.h
+
+COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
+SHA256 records the hashes of these six upstream files. Verify them with
+"sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
+Do not edit dist/ for NetBSD adaptations.
+
+netbsd/xfs_sb.c selects these routines from dist/xfs_sb.c without changing
+their bodies:
+
+    xfs_sb_validate_v5_features
+    xfs_sb_good_version
+    xfs_sb_quota_from_disk
+    __xfs_sb_from_disk
+    xfs_sb_from_disk
+
+include/xfs_quota_flags.h selects the quota flag block from
+dist/xfs_log_format.h, from XFS_UQUOTA_ACCT through XFS_PQUOTA_CHKD.
+Their original copyright notices and GPL identifiers are retained.
+
+include/xfs_compat.h supplies the scalar types, endian conversions, assertions
+and UUID-copy operation used by these routines. Linux's opaque UUID bytes
+remain distinct from NetBSD's structured UUID representation.
+
+The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
+No SGI/Linux code has been relicensed as BSD code. This directory is not wired
+into the default kernel, installed header set, or base-system build.
+
+For a future import, update the commit and original files together, review
+changes to the selected routines and compatibility layer, regenerate SHA256,
+and rerun all tests before accepting any new feature bits.

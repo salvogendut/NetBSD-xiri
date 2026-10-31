@@ -1,0 +1,112 @@
+$NetBSD$
+
+Experimental GPL XFS port for NetBSD
+===================================
+
+This starts a direct port of SGI/Linux XFS, using Linux v6.12 as a pinned
+baseline. See README.import for source provenance and COPYING for the license.
+The old http://oss.sgi.com/projects/xfs/ URL is historical; the maintained
+implementation is in Linux's fs/xfs tree.
+
+Current milestone
+-----------------
+
+The upstream superblock decoder, version checks and quota conversion run
+through a small NetBSD compatibility header. A read-only probe adds bounded
+input handling, v5 CRC32C verification over the complete sector, basic
+geometry validation and data-device bounds checks. It handles unaligned
+input, checks disk-controlled shifts, and preserves the caller's output on
+failure. Filesystem block numbers are decoded as AG/block pairs, including
+when the allocation-group size is not a power of two.
+
+The probe recognizes v4 superblocks with v2 directories and unwritten extent
+support, and v5 superblocks with the pinned upstream's feature definitions.
+It rejects unknown incompatible bits, NEEDSREPAIR, nonzero log-incompatible
+bits, incomplete mkfs state, external logs and realtime devices. Unknown
+compatible and read-only-compatible bits do not prevent superblock inspection.
+Recognizing a feature bit does not mean that its inode or btree format has
+been ported.
+
+This is NOT a mountable filesystem or a complete upstream superblock verifier.
+It does not check AG headers, inode allocation, directory contents, all log
+geometry, or journal cleanliness. Even a read-only mount can require recovery;
+a successful probe must never be used as evidence that replay can be skipped.
+There is no VFS registration, mount helper, kernel module, or write path yet.
+The command-line probe accepts regular image files only and opens them
+read-only. No test mounts a filesystem or accesses a raw disk device.
+
+Layout
+------
+
+    dist/       Unmodified upstream files, retained for comparison.
+    include/    Compatibility definitions and the probe interface.
+    netbsd/     Selected upstream routines and NetBSD probe wrapper.
+    tests/      Host tests, image inspector and kernel-header compile check.
+
+Build and test from the src root
+-------------------------------
+
+    sh sys/external/gpl2/xfs/tests/run.sh
+    sh sys/external/gpl2/xfs/tests/run.sh --images
+    sh sys/external/gpl2/xfs/tests/check-kernel.sh
+
+The first command needs a C compiler and runs 1,070 checks, including v4 quota
+translation, UUID selection, unaligned and short input, sector corruption,
+invalid geometry and feature masks, and shortened final allocation groups.
+CC and CFLAGS can override the compiler and host-test flags.
+
+The second additionally requires Python 3.11 or newer and xfsprogs (mkfs.xfs
+and xfs_db). It creates four disposable 400 MiB sparse images, compares the
+probe's fields with xfs_db, checks whole-image hashes before and after probing,
+and tests seven damaged/unsupported inputs. The image configurations cover
+defaults, 4 KiB sectors, 64 KiB blocks and 2 KiB inodes. Tests were run with
+xfsprogs 7.1.1. A future mkfs default may enable a newer, unsupported feature;
+review the upstream baseline rather than bypassing the rejection.
+
+The third compiles both port files with this checkout's NetBSD amd64 kernel
+headers and no host system headers. It needs an amd64 compiler. This checks
+header/layout compatibility only, not linking, module loading or booting.
+
+An undefined-behavior check that does not require sanitizer runtime libraries:
+
+    CFLAGS='-O1 -g -fsanitize=undefined -fsanitize-undefined-trap-on-error' \
+        sh sys/external/gpl2/xfs/tests/run.sh
+
+To build a persistent image inspector on NetBSD or Linux:
+
+    xfs_src=sys/external/gpl2/xfs
+    cc -std=gnu11 -D_DEFAULT_SOURCE -O2 -I "$xfs_src/include" \
+        -isystem "$xfs_src/dist" "$xfs_src/netbsd/xfs_sb.c" \
+        "$xfs_src/netbsd/xfs_probe.c" "$xfs_src/tests/xfs_probe.c" \
+        -o /tmp/xfs_probe
+    /tmp/xfs_probe /path/to/image
+
+Next milestones
+---------------
+
+1. Add an explicit block-I/O interface and port upstream AG and buffer
+   verifiers. Test reads, I/O errors, UUID/CRC mismatches and all block bounds
+   in userland/rump before connecting a live kernel device.
+2. Port inode, extent/bmap and directory readers. Test file data, sparse and
+   unwritten extents, symlinks, large files and corrupted metadata against
+   images populated with Linux XFS. Establish reliable clean-log detection;
+   reject filesystems requiring replay until recovery is implemented.
+3. Add NetBSD VFS/vnode operations, vnode lifecycle/locking, UBC integration,
+   a rump component, a mount helper and an explicitly enabled GPL module.
+   Start with read-only mounts and unmount/error-path tests. Unsupported
+   formats and write requests must fail rather than use placeholder handlers.
+4. Port transaction reservations, logging/recovery and allocation before
+   enabling any writes. Require crash/replay tests and xfstests coverage,
+   including concurrency and forced-shutdown paths.
+
+Useful references
+-----------------
+
+    https://wiki.netbsd.org/projects/project/xfs/
+    https://docs.kernel.org/filesystems/xfs/index.html
+    https://www.kernel.org/pub/linux/utils/fs/xfs/docs/xfs_filesystem_structure.pdf
+
+NetBSD's existing fs/efs and fs/ntfs code, sys/rump/fs components and
+sys/modules layouts provide local integration examples. The XFS transaction,
+locking and cache contracts still require explicit adaptation; the scalar
+compatibility header is not a substitute for that work.
