@@ -1678,15 +1678,16 @@ irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
 	int error, how = 0;
 
 	if (SCARG(uap, set) != 0) {
+		/* IRIX reports a bad input address before an invalid operation. */
+		error = copyin(irix_pointer(SCARG(uap, set)), in, sizeof(in));
+		if (error != 0)
+			return error;
 		switch (SCARG(uap, how)) {
 		case 1: how = SIG_BLOCK; break;
 		case 2: how = SIG_UNBLOCK; break;
 		case 3: case 256: how = SIG_SETMASK; break;
 		default: return EINVAL;
 		}
-		error = copyin(irix_pointer(SCARG(uap, set)), in, sizeof(in));
-		if (error != 0)
-			return error;
 	}
 	mutex_enter(p->p_lock);
 	sigemptyset(&requested);
@@ -1739,6 +1740,21 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 		return EINVAL;
 	if (SCARG(uap, rusage) != 0)
 		return ENOSYS;
+	if (SCARG(uap, info) == 0)
+		return EINVAL;
+	/* Reject unmapped ranges before consuming a child. Read-only storage
+	 * passes this check: IRIX consumes the child before its copyout fails.
+	 * A concurrent map change can still make the final copyout fail. */
+	struct vm_map *map = &l->l_proc->p_vmspace->vm_map;
+	vaddr_t start = SCARG(uap, info);
+	if (start >= 0x80000000U || sizeof(info) > 0x80000000U - start)
+		return EFAULT;
+	vm_map_lock_read(map);
+	bool mapped = uvm_map_checkprot(map, start, start + sizeof(info),
+	    VM_PROT_NONE);
+	vm_map_unlock_read(map);
+	if (!mapped)
+		return EFAULT;
 	if (flags & 0x40)
 		options |= WNOHANG;
 	if (flags & 0x80)
