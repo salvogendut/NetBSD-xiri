@@ -82,6 +82,7 @@
 #include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
+#include <sys/filio.h>
 #include <sys/ktrace.h>
 #include <sys/mbuf.h>
 #include <sys/mman.h>
@@ -1068,6 +1069,70 @@ irix_fileflags(int value, bool socket)
 	return converted;
 }
 
+/* Only the measured four-byte TCP bytes-readable selector is implemented. */
+struct irix_ioctl_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) command;
+	syscallarg(uint32_t) data;
+};
+
+static int
+irix_ioctl(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_ioctl_args *uap = args;
+	file_t *fp;
+	struct socket *so;
+	int error, available = 0;
+	int32_t foreign_count;
+
+	CTASSERT(sizeof(available) == sizeof(foreign_count));
+	/* Preserve the unsupported-command policy, including TCGETA. Never
+	 * interpret foreign direction/length bits as a native ioctl command. */
+	if (SCARG(uap, command) != 0x4004730aU) /* IRIX_SIOCNREAD */
+		return ENOSYS;
+	fp = fd_getfile(SCARG(uap, fd));
+	if (fp == NULL)
+		return EBADF;
+	if ((fp->f_flag & (FREAD | FWRITE)) == 0) {
+		error = EBADF;
+		goto out;
+	}
+	if (fp->f_type != DTYPE_SOCKET) {
+		/* Native FIONREAD accepts regular files; IRIX SIOCNREAD does not.
+		 * Do not send socket commands to arbitrary native devices. */
+		error = fp->f_type == DTYPE_VNODE &&
+		    (fp->f_vnode->v_type == VREG || fp->f_vnode->v_type == VDIR) ?
+		    ENOTTY : EINVAL;
+		goto out;
+	}
+	so = fp->f_socket;
+	if (so->so_proto->pr_domain->dom_family != AF_INET ||
+	    so->so_type != SOCK_STREAM || so->so_proto->pr_protocol != IPPROTO_TCP) {
+		error = EAFNOSUPPORT;
+		goto out;
+	}
+	/* Hold the socket lock across the byte-count and EOF snapshot. Native
+	 * soo_ioctl(FIONREAD) does not acquire it or touch the user pointer. */
+	solock(so);
+	error = (*fp->f_ops->fo_ioctl)(fp, FIONREAD, &available);
+	if (error == 0 && available == 0 &&
+	    (so->so_state & SS_CANTRCVMORE) != 0)
+		error = ECONNRESET;
+	sounlock(so);
+	if (error == EPASSTHROUGH)
+		error = ENOTTY;
+	if (error == 0) {
+		foreign_count = available;
+		error = copyout(&foreign_count, irix_pointer(SCARG(uap, data)),
+		    sizeof(foreign_count));
+	}
+out:
+	fd_putfile(SCARG(uap, fd));
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 struct irix_fcntl_args {
 	syscallarg(int32_t) fd;
 	syscallarg(int32_t) cmd;
@@ -1413,6 +1478,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_call = irix_o32_syssgi,
 	},
 	[47] = { .sy_call = (sy_call_t *)sys_getgid_with_egid },
+	[54] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_ioctl_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_ioctl,
+	},
 	[56] = {
 		.sy_narg = 5,
 		.sy_argsize = sizeof(struct irix_o32_sysmp_args),
@@ -1522,7 +1593,7 @@ static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
-	[47] = "getgid", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
+	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
@@ -1579,6 +1650,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1024: code = 24; break;
 	case 1040: code = 40; break;
 	case 1047: code = 47; break;
+	case 1054: code = 54; break;
 	case 1056: code = 56; break;
 	case 1062: code = 62; break;
 	case 1082: code = 82; break;

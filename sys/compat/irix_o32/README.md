@@ -356,3 +356,27 @@ encoded in the native table allocator. Signal delivery and concurrent fd/set
 mutation are outside this qualification. Xiri's irix-select lab contains the
 paired guarded records, timeout and delayed TCP readiness probes, and native
 and vendor controls. Toolchest still needs version-2 xstat for its menu check.
+
+
+### Experimental SIOCNREAD (1054, 0x4004730a)
+
+The ioctl adapter decodes three explicit 32-bit arguments and implements only
+IRIX_SIOCNREAD for IPv4 TCP streams. It keeps a native file reference and uses
+a kernel-owned integer with native FIONREAD under the socket lock. Exactly
+four bytes are copied out after releasing the socket lock. Counts are snapshots;
+the query never consumes queued data or changes nonblocking mode.
+
+Paired original IRIX probes establish zero for empty/unconnected streams,
+queued-byte counts before and after partial reads, and ECONNRESET for drained
+EOF. Descriptor and EOF errors precede output-pointer validation. Unaligned
+output is accepted; page-crossing faults retain the copied accessible prefix.
+Regular files/directories reject this socket selector with ENOTTY; FIFO and
+/dev/null reject it with EINVAL. No socket ioctl is forwarded to a device.
+
+Other selectors retain ENOSYS, including TCGETA, altered size/group encodings,
+and 0x4004667f (which original IRIX also accepts for bytes-readable). This is an
+explicit bounded-policy difference, including invalid-fd unknown commands.
+AF_UNIX, datagrams, listening sockets, urgent data, resets, concurrent changes,
+large queue counts, inherited unsupported descriptor types and general ioctl
+translation are outside this qualification. The companion irix-siocnread lab
+holds the original synthetic fixtures and reviewed observations.
