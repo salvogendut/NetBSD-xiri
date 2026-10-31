@@ -422,6 +422,33 @@ unlock is a no-op and never changes ownership or permissions.
 
 Original libc can allocate a master and open its slave under root and an
 ordinary UID. Its next terminal-attribute ioctl (0x54d5) remains ENOSYS;
-original xwsh instead reaches unsupported fork after allocation. General
+original xwsh reached unsupported fork at that PTY checkpoint; the process
+subset below advances it through child slave opening to unsupported execve. General
 STREAMS, higher PTY banks, concurrent lifecycle, IRIX slave-lock isolation,
 termios, signals, shell execution and interactive winterm are not qualified.
+
+
+### Experimental process subset (1002, 1020, 1164, 1170)
+
+The process checkpoint adds native fork and the getpid/getppid register pair,
+explicit 16-byte signal-mask marshalling, and positive-P_PID exit waits.
+Traditional IRIX signals 1–31 map to native numbers; native-only inherited
+mask bits survive replacement. Unsupported checkpoint/realtime bits are
+ignored/reported zero. Input copy precedes operation validation; old-mask
+copyout follows mutation. NULL input ignores the operation code. How 256
+uses the mapped low-word subset.
+
+Wait accepts WEXITED with optional WNOHANG/WNOWAIT. Unsupported selectors,
+options and non-NULL rusage fail before consuming a child. NULL info is EINVAL;
+unmapped ranges fault before waiting, whereas read-only mapped output can
+fault after the native wait consumes the child. Concurrent map changes can
+still cause a later copyout fault. The owned 128-byte info buffer has zero
+padding/accounting. Reaping an ordinary exited child returns its encoded
+status in the second register; no-event/nowait preserves that register.
+
+The paired tests cover fork register returns, PID/identity relationships,
+COW data, shared file offsets, actual KERN_PROC2 signal masks, positive-child
+exit/nohang/nowait and copy faults under both ABIs. Signal delivery/handlers,
+signal-caused child deaths, accounting, stopped/continued children, other wait
+selectors, exec/session/descriptor setup and interactive terminal behavior
+remain unqualified. See xiri's lab/irix-process and 2026-11-01 process report.
