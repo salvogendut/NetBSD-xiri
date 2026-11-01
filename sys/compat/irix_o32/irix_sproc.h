@@ -46,6 +46,7 @@ struct irix_procblk_args {
 	syscallarg(int32_t) count;
 };
 
+void irix_o32_child_return(void *);
 int irix_sproc(struct lwp *, const void *, register_t *);
 int irix_sprocsp(struct lwp *, const void *, register_t *);
 int irix_procblk(struct lwp *, const void *, register_t *);

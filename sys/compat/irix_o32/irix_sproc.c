@@ -44,7 +44,9 @@
 #include <sys/systm.h>
 #include <uvm/uvm_extern.h>
 #include <uvm/uvm_map.h>
+#include <uvm/uvm.h>
 #include <mips/regnum.h>
+#include <mips/locore.h>
 #include <compat/irix_o32/irix_sproc.h>
 
 #define PR_SFDS 0x2U
@@ -511,7 +513,6 @@ free_spawn:
 
 /* Existing personality callback updates the private PRDA and performs the
  * native child return; irix_share_child adjusts its entry first. */
-extern void irix_o32_child_return(void *);
 
 int
 irix_sproc(struct lwp *l, const void *args, register_t *rval)

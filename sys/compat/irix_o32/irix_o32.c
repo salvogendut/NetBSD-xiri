@@ -2604,7 +2604,10 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1106: code = 106; break;
 	case 1107: code = 107; break;
 	case 1108: code = 108; break;
+	case 1129: code = 129; break;
 	case 1130: code = 130; break;
+	case 1131: code = 131; break;
+	case 1132: code = 132; break;
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
