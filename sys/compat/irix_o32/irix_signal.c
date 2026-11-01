@@ -137,9 +137,20 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 	out[2] = ip->signal[sig].mask;
 	/* Preserve IRIX's copyout-before-install ordering, including partial
 	 * copyout on a boundary fault. No user pointer is retained in the kernel. */
-	if (SCARG(uap, old) != 0 && (error = copyout(out,
-	    ptr32(SCARG(uap, old)), sizeof(out))) != 0)
-		return error;
+	if (SCARG(uap, old) != 0) {
+		/* The o32 bulk copyout may fault after an unrolled 16-byte
+		 * block. Serialize bytes to retain the observed 4/28-byte
+		 * prefixes at a page boundary on both kernel architectures. */
+		for (size_t i = 0; i < sizeof(out); i++) {
+			uint32_t address = SCARG(uap, old);
+			if (address >= 0x80000000U || i >= 0x80000000U - address)
+				return EFAULT;
+			error = copyout((const uint8_t *)out + i,
+			    ptr32(address + i), 1);
+			if (error != 0)
+				return error;
+		}
+	}
 	if (change) {
 		memset(&native, 0, sizeof(native));
 		native.sa_handler = (sig_t)ptr32(in[1]);
