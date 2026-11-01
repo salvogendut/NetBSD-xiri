@@ -559,3 +559,11 @@ absence directly and after foreign-to-native exec. All 80 executions/180
 records, 20 damaged-state cases and 94 other controls pass across LP64 CI,
 LP64 ordinary and o32 CI. Share groups, threads, scheduling hints, user-managed
 PRDA signal holds and general FP control remain outside this subset.
+
+On this PRDA kernel, Xiri's original 4Dwm now passes reparenting, pointer focus,
+key delivery and dragging on native Xvfb in CI and ordinary IRIS execution.
+Combined sessions run Toolchest and a native shell in original winterm/xwsh.
+The original resources must be readable, and SG_manageSession/SG_autoSave
+are explicitly disabled. Saved-state file operations, the unexpected Trusted
+Path panel, startup repeatability and complete desktop services remain open.
+See Xiri's 2026-11-01 4Dwm report, including retained failed startup attempts.
