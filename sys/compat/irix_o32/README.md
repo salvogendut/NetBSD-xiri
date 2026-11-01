@@ -608,5 +608,36 @@ native/vendor controls. The application follow-up now executes bgicons and
 successfully queries PTHREAD in all four file/icon launches. The next observed
 failure is mmap with flags 0x102 (PRIVATE|AUTORESRV), returning EINVAL before
 libpthread's table-allocation panic. AUTORESRV and general pthread behavior
-remain unsupported; see Xiri's 2026-11-01 resource-limit and desktop-startup-fixes
-reports for the exact pins, trace evidence and interaction limitations.
+were still unsupported at that checkpoint; see Xiri's 2026-11-01 resource-limit
+and desktop-startup-fixes reports for the exact pins, trace evidence and
+interaction limitations.
+
+### Private AUTORESRV mappings
+
+The private mmap subset accepts IRIX MAP_AUTORESRV (0x100), optionally with
+FIXED and LOCAL. It requests deferred swap reservation. UVM already creates
+private mappings with demand allocation/COW and does not reserve swap for the
+whole mapping at mmap time, so no extra native flag is needed. Native
+MAP_NORESERVE is unimplemented; passing it would not supply an additional
+reservation policy. This adapter continues to translate the accepted flags
+explicitly rather than passing their foreign bit values through.
+
+Descriptor access modes, protections, native page alignment, address ranges,
+resource limits and fixed replacement remain native mmap responsibilities.
+LOCAL still requires one LWP and an unshared vmspace. Shared mappings,
+AUTOGROW, ANYADDR and unknown bits remain unsupported. This does not reproduce
+IRIX logical-swap accounting, swap-exhaustion SIGBUS behavior or mlock effects;
+native memory-pressure policy applies.
+
+Paired fixtures exercise the original pthread table request (1.375 MiB,
+READ|WRITE, PRIVATE|AUTORESRV, O_RDWR /dev/zero), regular-file privacy, fixed
+replacement, descriptor lifetime/access errors, protection faults and changes,
+and private fork inheritance. The prior fixed/local cases and native page-zero
+controls remain part of the new matrix. Qualification passes 464 original-IRIX
+records, 1,160 native mapping cases, 30 native/vendor/cleanup controls and 32
+native page-zero controls. See Xiri's lab/irix-mmap-autoresrv.
+
+Original bgicons, fm and Icon Catalog now pass table allocation and its
+following fixed mapping. Their next observed failure is trap 1130,
+prctl(PR_INIT_THREADS=20), returning IRIX ENOSYS before libpthread's
+INIT_THREADS panic. General pthread initialization and creation remain open.
