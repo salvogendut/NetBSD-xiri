@@ -431,6 +431,16 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_o32_syssgi_args * const uap = args;
 
 	switch (SCARG(uap, request)) {
+	case 109: { /* SGI_FDHI: one beyond the highest currently open fd. */
+		filedesc_t *fdp = l->l_proc->p_fd;
+
+		mutex_enter(&fdp->fd_lock);
+		*rval = fdp->fd_lastfile + 1;
+		mutex_exit(&fdp->fd_lock);
+		return 0;
+	}
+	case 20: /* SGI_SETSID: native session ownership and authorization. */
+		return sys_setsid(l, NULL, rval);
 	case 68: /* SGI_ELFMAP */
 		return irix_o32_elfmap(l, (int32_t)SCARG(uap, arg1),
 		    SCARG(uap, arg2), SCARG(uap, arg3), rval);
@@ -1717,6 +1727,60 @@ irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
 	return 0;
 }
 
+/* Both foreign ABIs store argv/envp elements as signed 32-bit pointers.
+ * Let native exec own pathname lookup, permissions, argument limits and the
+ * final personality/ABI transition, including EJUSTRETURN on success. */
+struct irix_execve_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) argv;
+	syscallarg(uint32_t) envp;
+};
+
+static int
+irix_exec_fetch(char * const *array, size_t index, char **value)
+{
+	const uint32_t *array32 = (const void *)array;
+	uint32_t entry;
+	int error = copyin(array32 + index, &entry, sizeof(entry));
+
+	if (error != 0)
+		return error;
+	*value = irix_pointer(entry);
+	return 0;
+}
+
+static int
+irix_execve(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_execve_args *uap = args;
+
+	return execve1(l, true, irix_pointer(SCARG(uap, path)), -1,
+	    irix_pointer(SCARG(uap, argv)), irix_pointer(SCARG(uap, envp)),
+	    irix_exec_fetch);
+}
+
+/* Only the descriptor-limit query is admitted; native limits remain policy. */
+struct irix_ulimit_args {
+	syscallarg(int32_t) command;
+	syscallarg(int32_t) value;
+};
+
+static int
+irix_ulimit(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_ulimit_args *uap = args;
+	struct proc *p = l->l_proc;
+	rlim_t limit;
+
+	if (SCARG(uap, command) != 4)
+		return EINVAL;
+	mutex_enter(p->p_lock);
+	limit = p->p_rlimit[RLIMIT_NOFILE].rlim_cur;
+	mutex_exit(p->p_lock);
+	*rval = MIN(limit, INT32_MAX);
+	return 0;
+}
+
 struct irix_waitsys_args {
 	syscallarg(int32_t) type;
 	syscallarg(int32_t) pid;
@@ -1851,6 +1915,22 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_syssgi,
 	},
+	[41] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct sys_dup_args),
+		.sy_call = (sy_call_t *)sys_dup,
+	},
+	[59] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_execve_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_execve,
+	},
+	[63] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_ulimit_args),
+		.sy_call = irix_ulimit,
+	},
 	[47] = { .sy_call = (sy_call_t *)sys_getgid_with_egid },
 	[54] = {
 		.sy_narg = 3,
@@ -1979,7 +2059,7 @@ static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
-	[33] = "access",
+	[33] = "access", [41] = "dup", [59] = "execve", [63] = "ulimit",
 	[15] = "chmod", [16] = "chown",
 	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
@@ -2043,10 +2123,13 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1024: code = 24; break;
 	case 1033: code = 33; break;
 	case 1040: code = 40; break;
+	case 1041: code = 41; break;
 	case 1047: code = 47; break;
 	case 1054: code = 54; break;
 	case 1056: code = 56; break;
+	case 1059: code = 59; break;
 	case 1062: code = 62; break;
+	case 1063: code = 63; break;
 	case 1082: code = 82; break;
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
