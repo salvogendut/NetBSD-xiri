@@ -144,6 +144,43 @@ irix_pointer(uint32_t value)
 	return (void *)(intptr_t)(int32_t)value;
 }
 
+#define IRIX_PRDA_ADDRESS 0x00200000U
+#define IRIX_PRDA_SYS_OFFSET 0xe00U
+
+static void
+irix_o32_child_return(void *arg)
+{
+	struct lwp *l = curlwp;
+	const uint32_t pid = l->l_proc->p_pid;
+
+	/* The inherited private page preserves library/user data. Updating
+	 * only the child PID takes the normal COW path in the child's map. */
+	if (copyout(&pid, irix_pointer(IRIX_PRDA_ADDRESS +
+	    IRIX_PRDA_SYS_OFFSET), sizeof(pid)) != 0)
+		sigexit(l, SIGSEGV);
+	child_return(arg);
+}
+
+static int
+irix_o32_fork(struct lwp *l, const void *args, register_t *rval)
+{
+	struct vm_map *map = &l->l_proc->p_vmspace->vm_map;
+	bool writable;
+
+	/* PRDA is reserved process state. Reject a damaged mapping before
+	 * creating a child; the child still handles a later copyout failure. */
+	vm_map_lock_read(map);
+	writable = uvm_map_checkprot(map,
+	    IRIX_PRDA_ADDRESS + IRIX_PRDA_SYS_OFFSET,
+	    IRIX_PRDA_ADDRESS + IRIX_PRDA_SYS_OFFSET + sizeof(uint32_t),
+	    VM_PROT_WRITE);
+	vm_map_unlock_read(map);
+	if (!writable)
+		return EFAULT;
+	return fork1(l, 0, SIGCHLD, NULL, 0, irix_o32_child_return, NULL,
+	    rval);
+}
+
 struct irix_o32_io_args {
 	syscallarg(int32_t) fd;
 	syscallarg(uint32_t) buf;
@@ -1904,7 +1941,7 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_exit_args),
 		.sy_call = (sy_call_t *)sys_exit,
 	},
-	[2] = { .sy_call = (sy_call_t *)sys_fork },
+	[2] = { .sy_call = irix_o32_fork },
 	[3] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_o32_io_args),
@@ -2336,6 +2373,16 @@ irix_o32_copyargs(struct lwp *l, struct exec_package *pack,
 #endif
 	if (error != 0)
 		return error;
+	/* Explicit 32-bit PRDA prefix measured on the R4400 reference:
+	 * PID, scheduling fields, ABI FP flags, and processor revision ID.
+	 * The rest of the new native page remains zero-filled. */
+	const Elf32_Ehdr *eh = pack->ep_hdr;
+	const uint32_t prda[5] = { l->l_proc->p_pid, 0, 0,
+	    (eh->e_flags & EF_MIPS_ABI2) != 0 ? 4U : 0U,
+	    mips_options.mips_cpu_id };
+	if ((error = copyout(prda, irix_pointer(IRIX_PRDA_ADDRESS +
+	    IRIX_PRDA_SYS_OFFSET), sizeof(prda))) != 0)
+		return error;
 	if ((error = copyout(aux, *stackp, size)) != 0)
 		return error;
 	*stackp += size;
@@ -2608,6 +2655,10 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 	 * after accepting an IRIX image. Native exec still uses its normal
 	 * exec_vm_minaddr guard; no global user_va0_disable change is needed. */
 	epp->ep_vm_minaddr = VM_MIN_ADDRESS;
+	/* Admitted program/interpreter segments start above this private
+	 * area. VM commands own allocation and failed-exec cleanup. */
+	NEW_VMCMD(&epp->ep_vmcmds, vmcmd_map_zero, PAGE_SIZE,
+	    IRIX_PRDA_ADDRESS, NULL, 0, VM_PROT_READ | VM_PROT_WRITE);
 #ifdef _LP64
 	/* Only package state here; setregs commits the selected process ABI. */
 	epp->ep_flags |= EXEC_32;
