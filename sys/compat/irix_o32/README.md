@@ -736,3 +736,58 @@ terminal handoff and an interrupted XWD capture (BadDrawable). Both guarded
 sessions remove descendants and halt cleanly. See Xiri's
 2026-11-01-irix-desktop-mkdir report and pixel-verified CI PNG. Full desktop,
 repeatable startup, catalog actions and session saving remain unqualified.
+
+
+### Native pipe dispatch
+
+Trap1042 now dispatches directly to native sys_pipe with zero arguments.
+The measured IRIX ABI returns the read/write endpoints in V0/V1, and the
+original libc wrapper stores them in its caller's array. Native pipe1 owns
+limits, rollback and file-descriptor lifetime; no new core hook is needed.
+
+Source 039ac3ab33386392c178031ad4997b0cd86fb53c passes 220 native records
+against 88 original-IRIX records, without error/descriptor normalization,
+and 44 native/vendor controls. LP64 CI/ordinary and o32 CI builds cover both
+foreign ABIs where supported, direct/indirect traps, UID0/UID1234, ignored
+argument pointers, endpoint/descriptor flags, lowest-slot reuse, partial I/O,
+nonblocking and reversed-direction errors, dup/EOF, inherited fork endpoints,
+reaped exit status and EPIPE with SIGPIPE blocked. Zero/one/two-slot tests at
+RLIMIT_NOFILE=32 verify atomic allocation failure and descriptor recovery.
+All guests halt cleanly; every foreign execution proves process-group removal.
+
+See Xiri lab/irix-pipe and the 2026-11-01-irix-pipe report. STREAMS interfaces,
+poll translation, capacity/atomicity under contention, foreign signal handlers
+and physical hardware remain outside this qualification. sgikopt behavior is
+unchanged; desktop behavior is checked separately.
+
+
+The pipe desktop retry renders FileManager in ordinary mode; fm -b remains
+until guarded cleanup and the separate home launch exits zero. Repeated
+select EINVAL remains, with usable browsing unqualified. Ordinary 4Dwm/shell
+checks pass; the independent CI desktop capture times out and is retained as
+an unclean diagnostic, not a seed. The isolated select tracer records missing
+gettimeofday but does not reproduce EINVAL; its cause remains open.
+
+### Original software installer and native homes
+
+The supplied May 2004 freeware media contains four CD sets and 489 distinct
+packages. The selected installation test is xmahjongg 3.6.1 through original
+inst and its iconcatalogedit hooks for the Freeware page, followed by original
+Software Manager. Runtime imports do not substitute for this workflow.
+
+Original inst loads on the pipe kernel but faults before distribution reading.
+A checked capture measures mmap(0, 0x100000, READ|WRITE, 0x141, 3, 0), after
+opening /dev/zero read/write. Flags are SHARED|AUTOGROW|AUTORESRV, outside the
+current private-mapping subset. After EINVAL, libinst iStringG::vprintf stores
+through the failed pointer: EPC 0x043e18d4, delay-slot sb at 0x043e18d8,
+register8 all ones, fault address 0xffffffff. Captured code matches the original
+library. Measure shared/autogrow semantics before extending the adapter.
+No vendor bytes/returns are modified and no installer success is claimed.
+
+The native account helper now creates /usr/people/<username> homes with native
+ksh and account skeletons. Native ksh writes and original asa reads the same
+file; its ownership/content survive a cold boot. Original root sessions use
+HOME=/; native administrator accounts are not relocated. Eight native
+execution and two known-fault controls pass, and both installer test guests
+halt cleanly. Graphical login persistence and catalog actions remain open.
+See Xiri's 2026-11-01-irix-installer and irix-freeware reports.
