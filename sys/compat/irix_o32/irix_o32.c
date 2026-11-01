@@ -320,9 +320,11 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		    (i == 0 && h->p_filesz != h->p_memsz) ||
 		    h->p_vaddr < 0x00400000 ||
 		    h->p_vaddr > 0x40000000 - h->p_memsz ||
-		    (h->p_vaddr & PAGE_MASK) != 0 ||
-		    (h->p_offset & PAGE_MASK) != 0 ||
-		    h->p_align < PAGE_SIZE || h->p_align > 1024 * 1024 ||
+		    (h->p_vaddr & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
+		    (h->p_offset & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
+		    (h->p_vaddr & PAGE_MASK) != (h->p_offset & PAGE_MASK) ||
+		    h->p_align < (i == 0 ? PAGE_SIZE : 4096) ||
+		    h->p_align > 1024 * 1024 ||
 		    !powerof2(h->p_align) ||
 		    h->p_vaddr % h->p_align != h->p_offset % h->p_align ||
 		    h->p_offset > INT32_MAX - h->p_filesz ||
@@ -330,15 +332,28 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 			error = ENOEXEC;
 			goto out;
 		}
-		total += round_page(h->p_memsz);
 	}
-	if (ph[1].p_vaddr < round_page(ph[0].p_vaddr + ph[0].p_memsz) ||
-	    ph[1].p_vaddr + round_page(ph[1].p_memsz) - ph[0].p_vaddr >
+	if (trunc_page(ph[1].p_vaddr) <
+	    round_page(ph[0].p_vaddr + ph[0].p_memsz) ||
+	    round_page(ph[1].p_vaddr + ph[1].p_memsz) - ph[0].p_vaddr >
 	    32 * 1024 * 1024 || ph[0].p_offset != 0 ||
-	    (ph[1].p_filesz != 0 && ph[1].p_offset < round_page(ph[0].p_filesz))) {
+	    (ph[1].p_filesz != 0 && ph[1].p_offset < ph[0].p_filesz)) {
 		error = ENOEXEC;
 		goto out;
 	}
+	/* A 4 KiB data boundary may sit halfway through an 8 KiB page.
+	 * Normalize only this owned header copy before collision/limit checks.
+	 * Nonempty data includes the preceding file bytes; pure BSS gets a
+	 * zero-filled prefix. RX and RW virtual pages must remain disjoint.
+	 * Their file pages may overlap: native private COW preserves the RX
+	 * mapping and backing file when the RW alias is modified. */
+	const vsize_t prefix = ph[1].p_vaddr & PAGE_MASK;
+	ph[1].p_vaddr -= prefix;
+	ph[1].p_offset -= prefix;
+	if (ph[1].p_filesz != 0)
+		ph[1].p_filesz += prefix;
+	ph[1].p_memsz += prefix;
+	total = round_page(ph[0].p_memsz) + round_page(ph[1].p_memsz);
 	/* The personality cannot create LWPs or share a vmspace. Keep this
 	 * requirement explicit: rollback ownership depends on it. */
 	mutex_enter(p->p_lock);
