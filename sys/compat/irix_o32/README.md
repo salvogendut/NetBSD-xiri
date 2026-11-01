@@ -452,3 +452,36 @@ exit/nohang/nowait and copy faults under both ABIs. Signal delivery/handlers,
 signal-caused child deaths, accounting, stopped/continued children, other wait
 selectors, exec/session/descriptor setup and interactive terminal behavior
 remain unqualified. See xiri's lab/irix-process and 2026-11-01 process report.
+
+
+### Experimental shell handoff (1041, 1059, 1063, syssgi 20/109)
+
+The shell branch adds native descriptor duplication and session creation.
+SGI_FDHI reads the native descriptor high-water mark under fd_lock and returns
+one beyond the highest open descriptor, including holes below that descriptor.
+The only admitted ulimit selector is 4, returning the native soft descriptor
+limit clamped to INT32_MAX; unsupported selectors return EINVAL.
+
+Exec fetches each argument/environment element as a signed four-byte pointer
+for both o32 and n32. Misaligned vectors fault with EFAULT, as measured on
+IRIX 6.5.22m. Native execve1 owns pathname lookup, permissions, argument limits,
+loading, signal-state reset and the final personality transition. NULL argv
+retains native EINVAL; the reference /bin/sh terminates with status 139 for
+that input. NULL environment is admitted. This is not a general qualification
+of foreign-to-foreign or script exec, native n64 targets, set-ID transitions,
+concurrent argument mutation, or caught-signal delivery.
+
+Xiri's lab/irix-shell uses an explicit native helper after the handoff to
+reopen the verified native PTY before acquiring its controlling terminal,
+set its foreground group and 80x24 size, and exec
+native /bin/sh. Foreign termios, window-size changes and signal handlers are
+still separate work. Test cleanup reserves an otherwise unused UID in a fresh
+guest and drops all privilege before launching descendants, allowing it to
+clean up session children that outlive the original winterm launcher.
+
+The native reopen avoids an observed layer_revoke/vrelel panic when shell
+teardown revokes a controlling terminal through the nullfs compatibility view.
+This is an explicit native-session integration policy; general layered-tty
+revoke behavior remains open. Original xwsh and the unchanged winterm launcher
+now execute native /bin/sh and accept XTest keyboard commands in the Xiri lab.
+See xiri's 2026-11-01 shell report for the accepted runs and limitations.
