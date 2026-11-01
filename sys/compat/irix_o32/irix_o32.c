@@ -1741,7 +1741,12 @@ irix_exec_fetch(char * const *array, size_t index, char **value)
 {
 	const uint32_t *array32 = (const void *)array;
 	uint32_t entry;
-	int error = copyin(array32 + index, &entry, sizeof(entry));
+	int error;
+
+	/* Original IRIX fetches aligned pointer words, unlike byte copyin. */
+	if (((uintptr_t)array32 & 3) != 0)
+		return EFAULT;
+	error = copyin(array32 + index, &entry, sizeof(entry));
 
 	if (error != 0)
 		return error;
