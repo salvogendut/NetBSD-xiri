@@ -69,7 +69,7 @@
 /*
  * Experimental o32/n32 personality, not general IRIX support. Xiri-marked static
  * fixtures and a bounded vendor interpreter path have separate ELF contracts.
- * File and private mapping support remains deliberately small.
+ * File and memory mapping support remains deliberately small.
  */
 /* exec_elf32_makecmds supplies a 32-bit elf_args object even on LP64. */
 #define ELFSIZE 32
@@ -995,14 +995,16 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_o32_mmap_args * const uap = args;
 	struct sys_mmap_args native = { 0 };
 	const int flags = SCARG(uap, flags);
+	const int type = flags & 0x3;
+	int held_fd = -1, error;
 
-	/* IRIX PRIVATE=0x2, FIXED=0x10, LOCAL=0x80, AUTORESRV=0x100.
-	 * No other foreign flags reach the native call: in particular
-	 * 0x1000 is NOT MAP_ANON. */
+	/* IRIX SHARED=0x1, PRIVATE=0x2, FIXED=0x10, AUTOGROW=0x40,
+	 * LOCAL=0x80, AUTORESRV=0x100. No other foreign flags reach
+	 * the native call: in particular 0x1000 is NOT MAP_ANON. */
 	if (SCARG(uap, addr) >= IRIX_MAXUSER_ADDRESS ||
 	    SCARG(uap, len) == 0 ||
 	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
-	    (flags & ~0x192) != 0 || (flags & 0x2) == 0 ||
+	    (flags & ~0x1d3) != 0 || (type != 0x1 && type != 0x2) ||
 	    SCARG(uap, pos) < 0 ||
 	    (SCARG(uap, pos) & PAGE_MASK) != 0)
 		return EINVAL;
@@ -1026,7 +1028,29 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 		if (!single)
 			return EOPNOTSUPP;
 	}
-	/* AUTORESRV requests delayed swap reservation. UVM's private
+	if ((flags & 0x40) != 0) {
+		file_t *fp;
+		const int fd = SCARG(uap, fd);
+
+		/* /dev/zero has no file extent to grow. Native mmap converts
+		 * this device to anonymous memory, retaining the sharing type.
+		 * Identify the vnode, including aliases, never its pathname.
+		 * Regular-file AUTOGROW requires fault-time extension (shared)
+		 * or private pages past EOF; neither is implemented here. */
+		if ((fp = fd_getfile(fd)) == NULL)
+			return EBADF;
+		if (fp->f_type != DTYPE_VNODE ||
+		    fp->f_vnode->v_type != VCHR ||
+		    fp->f_vnode->v_rdev != zerodev) {
+			fd_putfile(fd);
+			return EINVAL;
+		}
+		/* Retain this descriptor reference through sys_mmap so a
+		 * concurrent close cannot replace it with another file after
+		 * the AUTOGROW check. Native mmap still owns authorization. */
+		held_fd = fd;
+	}
+	/* AUTORESRV requests delayed swap reservation. UVM's anonymous
 	 * mappings already use demand allocation/COW without reserving swap
 	 * for the full extent here. No native flag is needed (MAP_NORESERVE
 	 * is unimplemented). Native resource limits and fault-time memory
@@ -1037,11 +1061,14 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
 	SCARG(&native, len) = SCARG(uap, len);
 	SCARG(&native, prot) = SCARG(uap, prot);
-	SCARG(&native, flags) = MAP_PRIVATE |
+	SCARG(&native, flags) = (type == 0x1 ? MAP_SHARED : MAP_PRIVATE) |
 	    ((flags & 0x10) != 0 ? MAP_FIXED : 0);
 	SCARG(&native, fd) = SCARG(uap, fd);
 	SCARG(&native, pos) = SCARG(uap, pos); /* signed 32-bit to native off_t */
-	return sys_mmap(l, &native, rval);
+	error = sys_mmap(l, &native, rval);
+	if (held_fd >= 0)
+		fd_putfile(held_fd);
+	return error;
 }
 
 struct irix_o32_munmap_args {
