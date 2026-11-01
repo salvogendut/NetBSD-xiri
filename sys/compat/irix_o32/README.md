@@ -508,3 +508,31 @@ IRIX's 4 KiB page behavior from native padding and rejection policy. They
 retain all prior relocation inputs and add data/prefix/BSS, file-page COW,
 collision, protection, limit and invalid-layout checks. This is a bounded
 extension, not arbitrary ELF segment layout support.
+
+### Experimental private fixed/local mappings (1134)
+
+The mmap wrapper now accepts IRIX PRIVATE with optional FIXED and LOCAL
+(0x2, 0x10 and 0x80), converting only the supported flags. Fixed ranges must
+fit the foreign user address space and native page alignment. Native mmap
+owns descriptor access checks, protections, page rounding, COW and replacement.
+Shared mappings, AUTOGROW, AUTORESRV, ANYADDR and unknown bits remain EINVAL;
+0x1000 must never be confused with native MAP_ANON. File offsets remain signed
+32-bit values aligned to the native page size.
+
+LOCAL isolates mappings from sproc share groups on IRIX. This implementation
+accepts it only with one LWP and an unshared vmspace, and still cannot create
+such a group. Ordinary private-map semantics apply within that supported scope.
+
+Original libGL explicitly maps the page containing address 0x1000 for dispatch
+data. With 8 KiB pages it requests address zero and length 4096; data at 0x1050
+is covered by native rounding. After accepting a validated IRIX ELF image, its
+exec probe supplies VM_MIN_ADDRESS instead of the native page-zero guard.
+Only the foreign exec package changes: native exec retains exec_vm_minaddr,
+and vm.user_va0_disable is not changed globally. Xiri's lab/irix-mmap-local
+checks native zero-map rejection both directly and after o32/n32-to-native exec,
+under both test identities, before and after the foreign mmap matrix.
+
+The paired original fixtures measure fixed placement, complete rounded-page
+payloads, replacement and adjacent mappings, invalid-descriptor preservation,
+private file COW, read-only faults and explicit unsupported-input policy.
+See the companion lab for reference records, exact kernel pins and results.
