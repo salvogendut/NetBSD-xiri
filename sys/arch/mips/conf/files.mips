@@ -121,3 +121,4 @@ file arch/mips/mips/linux_syscall.c		compat_linux
 defflag opt_compat_irix_o32.h COMPAT_IRIX_O32: EXEC_ELF32
 file compat/irix_o32/irix_o32.c		compat_irix_o32
 file compat/irix_o32/irix_sproc.c		compat_irix_o32
+file compat/irix_o32/irix_signal.c		compat_irix_o32

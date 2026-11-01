@@ -147,6 +147,7 @@ irix_pointer(uint32_t value)
 }
 
 #include <compat/irix_o32/irix_sproc.h>
+#include <compat/irix_o32/irix_signal.h>
 
 static void irix_prda_sigmask(struct lwp *);
 
@@ -1904,7 +1905,7 @@ irix_shutdown(struct lwp *l, const void *args, register_t *rval)
 
 /* Traditional IRIX/SVR4 signal numbers. Realtime/checkpoint signals remain
  * outside this subset. Preserve native-only mask bits on replacement. */
-static const uint8_t irix_signal_map[32] = {
+const uint8_t irix_signal_map[32] = {
 	0, SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGTRAP, SIGABRT, SIGEMT,
 	SIGFPE, SIGKILL, SIGBUS, SIGSEGV, SIGSYS, SIGPIPE, SIGALRM, SIGTERM,
 	SIGUSR1, SIGUSR2, SIGCHLD, SIGPWR, SIGWINCH, SIGURG, SIGIO, SIGSTOP,
@@ -1954,7 +1955,7 @@ irix_prda_sigmask(struct lwp *l)
 	mutex_exit(p->p_lock);
 }
 
-static int
+int
 irix_prda_maskout(struct lwp *l)
 {
 	struct proc *p = l->l_proc;
@@ -2032,6 +2033,7 @@ irix_proc_fork(struct proc *child, struct lwp *parent, int flags)
 	struct irix_process *ip = kmem_zalloc(sizeof(*ip), KM_SLEEP);
 
 	ip->reset_hold = old->threads;
+	memcpy(ip->signal, old->signal, sizeof(ip->signal));
 	child->p_emuldata = ip;
 	irix_share_fork(child, parent);
 }
@@ -2256,10 +2258,12 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 	const uint32_t flags = SCARG(uap, options);
 	int pid = 0, status = 0, options = WEXITED, error;
 
-	/* Only exit observation/reaping for one positive child PID. Do not
-	 * consume a child for unsupported selectors/options/accounting. */
-	if (SCARG(uap, type) != 0 || SCARG(uap, pid) <= 0 ||
-	    !(flags & 1) || (flags & ~(1U | 0x40U | 0x80U)))
+	/* Positive-child waits plus the installer's P_ALL exit callback.
+	 * Native wait owns child selection/consumption. Reject unsupported
+	 * selectors and accounting before observing any child. */
+	const bool all = SCARG(uap, type) == 7 && SCARG(uap, pid) == 0;
+	if ((!all && (SCARG(uap, type) != 0 || SCARG(uap, pid) <= 0)) ||
+	    !(flags & 1) || (flags & ~(1U | 2U | 0x40U | 0x80U)))
 		return EINVAL;
 	if (SCARG(uap, rusage) != 0)
 		return ENOSYS;
@@ -2282,7 +2286,9 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 		options |= WNOHANG;
 	if (flags & 0x80)
 		options |= WNOWAIT;
-	error = do_sys_waitid(P_PID, SCARG(uap, pid), &pid, &status,
+	if (flags & 2)
+		options |= WTRAPPED;
+	error = do_sys_waitid(all ? P_ALL : P_PID, SCARG(uap, pid), &pid, &status,
 	    options, NULL, NULL);
 	if (error != 0)
 		return error;
@@ -2293,6 +2299,11 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 		if (WIFEXITED(status)) {
 			info[1] = 1; /* CLD_EXITED */
 			info[5] = WEXITSTATUS(status);
+		} else if (WIFSTOPPED(status)) {
+			info[1] = 4; /* CLD_TRAPPED; only traced stops are requested. */
+			for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
+				if (irix_signal_map[i] == WSTOPSIG(status))
+					info[5] = i;
 		} else {
 			info[1] = WCOREDUMP(status) ? 3 : 2;
 			for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
@@ -2312,6 +2323,12 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 }
 
 static struct sysent irix_o32_sysent[] = {
+	[37] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_kill_args),
+	    .sy_call = irix_kill },
+	[88] = { .sy_narg = 3, .sy_argsize = sizeof(struct irix_sigreturn_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_sigreturn },
+	[162] = { .sy_narg = 4, .sy_argsize = sizeof(struct irix_sigaction_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_sigaction },
 	[0] = { .sy_call = irix_o32_nosys },
 	[1] = {
 		.sy_narg = 1,
@@ -2567,6 +2584,7 @@ static struct sysent irix_o32_sysent[] = {
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
+	[37] = "kill", [88] = "sigreturn", [162] = "sigaction",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
 	[13] = "time", [15] = "chmod", [16] = "chown", [128] = "gettimeofday",
@@ -2634,6 +2652,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1020: code = 20; break;
 	case 1024: code = 24; break;
 	case 1033: code = 33; break;
+	case 1037: code = 37; break;
 	case 1040: code = 40; break;
 	case 1041: code = 41; break;
 	case 1042: code = 42; break;
@@ -2646,6 +2665,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1075: code = 75; break;
 	case 1080: code = 80; break;
 	case 1082: code = 82; break;
+	case 1088: code = 88; break;
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
 	case 1094: code = 94; break;
@@ -2667,6 +2687,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1148: code = 148; break;
 	case 1158: code = 158; break;
 	case 1160: code = 160; break;
+	case 1162: code = 162; break;
 	case 1164: code = 164; break;
 	case 1170: code = 170; break;
 	default: code = 0; break;
@@ -2748,14 +2769,6 @@ irix_o32_setregs(struct lwp *l, struct exec_package *epp, vaddr_t stack)
 	setregs(l, epp, stack);
 }
 
-static void
-irix_o32_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
-{
-
-	/* No syscall installs foreign handlers; never build a native signal frame. */
-	sigexit(curlwp, SIGILL);
-}
-
 static struct emul emul_irix_o32 = {
 	.e_name = "irix_o32",
 	.e_path = "/emul/irix",
@@ -2764,7 +2777,7 @@ static struct emul emul_irix_o32 = {
 	.e_sysent = irix_o32_sysent,
 	.e_nomodbits = irix_o32_nomodbits,
 	.e_syscallnames = irix_o32_syscallnames,
-	.e_sendsig = irix_o32_sendsig,
+	.e_sendsig = irix_sendsig,
 	.e_trapsignal = irix_trapsignal,
 	.e_setregs = irix_o32_setregs,
 	.e_proc_exec = irix_proc_exec,

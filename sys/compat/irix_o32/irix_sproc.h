@@ -16,6 +16,7 @@ struct irix_localset {
 struct irix_share;
 struct irix_spawn;
 struct irix_process {
+	struct { uint32_t flags, mask, trampoline; } signal[32];
 	bool threads, reset_hold;
 	struct irix_localset local;
 	struct irix_share *share;
