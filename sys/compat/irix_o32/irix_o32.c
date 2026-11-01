@@ -146,23 +146,17 @@ irix_pointer(uint32_t value)
 	return (void *)(intptr_t)(int32_t)value;
 }
 
-#define IRIX_PRDA_ADDRESS 0x00200000U
-#define IRIX_PRDA_SYS_OFFSET 0xe00U
-#define IRIX_PRDA_FLAGS (IRIX_PRDA_ADDRESS + 0xe6cU)
-#define IRIX_PRDA_HOLD (IRIX_PRDA_ADDRESS + 0xe70U)
-
-struct irix_process {
-	bool threads;
-	bool reset_hold;
-};
+#include <compat/irix_o32/irix_sproc.h>
 
 static void irix_prda_sigmask(struct lwp *);
 
-static void
+void
 irix_o32_child_return(void *arg)
 {
 	struct lwp *l = curlwp;
 	const uint32_t pid = l->l_proc->p_pid;
+
+	irix_share_child(l);
 
 	/* The inherited private page preserves library/user data. Updating
 	 * only the child PID takes the normal COW path in the child's map. */
@@ -189,6 +183,9 @@ irix_o32_fork(struct lwp *l, const void *args, register_t *rval)
 {
 	struct vm_map *map = &l->l_proc->p_vmspace->vm_map;
 	bool writable;
+
+	if (!irix_share_single(l->l_proc))
+		return EOPNOTSUPP;
 
 	/* PRDA is reserved process state. Reject a damaged mapping before
 	 * creating a child; the child still handles a later copyout failure. */
@@ -247,6 +244,9 @@ irix_o32_break(struct lwp *l, const void *args, register_t *rval)
 	struct sys_obreak_args native = { 0 };
 	const vaddr_t end = SCARG(uap, nsize);
 	int error;
+
+	if (!irix_share_single(l->l_proc))
+		return EOPNOTSUPP;
 
 	/* Bound page rounding and prevent vm_dsize underflow on a request
 	 * below the data segment. Native obreak enforces RLIMIT_DATA and
@@ -416,11 +416,8 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		ph[1].p_filesz += prefix;
 	ph[1].p_memsz += prefix;
 	total = round_page(ph[0].p_memsz) + round_page(ph[1].p_memsz);
-	/* The personality cannot create LWPs or share a vmspace. Keep this
-	 * requirement explicit: rollback ownership depends on it. */
-	mutex_enter(p->p_lock);
-	single = p->p_nlwps == 1 && p->p_vmspace->vm_refcnt == 1;
-	mutex_exit(p->p_lock);
+	/* ELF mapping rollback remains restricted to a sole group member. */
+	single = irix_share_single(p);
 	if (!single || (map->flags & VM_MAP_WIREFUTURE) != 0) {
 		error = EOPNOTSUPP;
 		goto out;
@@ -997,6 +994,9 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	const int flags = SCARG(uap, flags);
 	const int type = flags & 0x3;
 	int held_fd = -1, error;
+	struct irix_process *ip = l->l_proc->p_emuldata;
+	struct irix_localset next;
+	bool local_plan = false;
 
 	/* IRIX SHARED=0x1, PRIVATE=0x2, FIXED=0x10, AUTOGROW=0x40,
 	 * LOCAL=0x80, AUTORESRV=0x100. No other foreign flags reach
@@ -1016,18 +1016,19 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 		if (size > IRIX_MAXUSER_ADDRESS - SCARG(uap, addr))
 			return ENOMEM;
 	}
-	if ((flags & 0x80) != 0) {
-		struct proc *p = l->l_proc;
-		bool single;
-		/* LOCAL isolates mappings from sproc share-group members.
-		 * This personality cannot create such members or LWPs. Do not
-		 * silently drop that property if a shared vmspace is added. */
-		mutex_enter(p->p_lock);
-		single = p->p_nlwps == 1 && p->p_vmspace->vm_refcnt == 1;
-		mutex_exit(p->p_lock);
-		if (!single)
+	if ((flags & 0x80) && !irix_share_single(l->l_proc))
+		return EOPNOTSUPP;
+	if (flags & 0x10) {
+		if (!irix_share_single(l->l_proc))
 			return EOPNOTSUPP;
-	}
+		error = irix_local_plan(&ip->local, SCARG(uap, addr),
+		    SCARG(uap, addr) + round_page((vsize_t)SCARG(uap, len)),
+		    (flags & 0x80) != 0, &next);
+		if (error)
+			return error;
+		local_plan = true;
+	} else if ((flags & 0x80) && ip->local.count == IRIX_LOCAL_MAX)
+		return ENOMEM;
 	if ((flags & 0x40) != 0) {
 		file_t *fp;
 		const int fd = SCARG(uap, fd);
@@ -1065,7 +1066,17 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	    ((flags & 0x10) != 0 ? MAP_FIXED : 0);
 	SCARG(&native, fd) = SCARG(uap, fd);
 	SCARG(&native, pos) = SCARG(uap, pos); /* signed 32-bit to native off_t */
-	error = sys_mmap(l, &native, rval);
+	error = irix_share_mmap(l, &native, rval);
+	if (error == 0) {
+		if (!local_plan && (flags & 0x80)) {
+			int e = irix_local_plan(&ip->local, *rval,
+			    *rval + round_page((vsize_t)SCARG(uap, len)), true, &next);
+			KASSERT(e == 0);
+			local_plan = true;
+		}
+		if (local_plan)
+			ip->local = next;
+	}
 	if (held_fd >= 0)
 		fd_putfile(held_fd);
 	return error;
@@ -1081,13 +1092,28 @@ irix_o32_munmap(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_munmap_args * const uap = args;
 	struct sys_munmap_args native = { 0 };
+	struct irix_process *ip = l->l_proc->p_emuldata;
+	struct irix_localset next;
+	int error;
+
+	if (!irix_share_single(l->l_proc))
+		return EOPNOTSUPP;
 
 	if ((int32_t)SCARG(uap, len) <= 0 ||
 	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0)
 		return EINVAL;
 	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
 	SCARG(&native, len) = SCARG(uap, len);
-	return sys_munmap(l, &native, rval);
+	if ((uint64_t)SCARG(uap, addr) + round_page((uint64_t)SCARG(uap, len)) > IRIX_MAXUSER_ADDRESS)
+		return EINVAL;
+	error = irix_local_plan(&ip->local, SCARG(uap, addr),
+	    SCARG(uap, addr) + round_page((vsize_t)SCARG(uap, len)), false, &next);
+	if (error)
+		return error;
+	error = sys_munmap(l, &native, rval);
+	if (error == 0)
+		ip->local = next;
+	return error;
 }
 
 struct irix_o32_mprotect_args {
@@ -1101,6 +1127,9 @@ irix_o32_mprotect(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_mprotect_args * const uap = args;
 	struct sys_mprotect_args native = { 0 };
+
+	if (!irix_share_single(l->l_proc))
+		return EOPNOTSUPP;
 
 	if ((int32_t)SCARG(uap, len) <= 0 ||
 	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0 ||
@@ -1898,6 +1927,7 @@ irix_prda_maskout(struct lwp *l)
 
 struct irix_prctl_args {
 	syscallarg(uint32_t) option;
+	syscallarg(uint32_t) argument;
 };
 
 static int
@@ -1910,12 +1940,12 @@ irix_prctl(struct lwp *l, const void *args, register_t *rval)
 	int error;
 
 	if (SCARG(uap, option) != 20) /* PR_INIT_THREADS */
-		return ENOSYS;
+		return irix_share_prctl(l, SCARG(uap, option), SCARG(uap, argument), rval);
 	if (ip->threads) {
 		*rval = 0;
 		return 0;
 	}
-	if (p->p_nlwps != 1 || p->p_vmspace->vm_refcnt != 1)
+	if (!irix_share_single(p))
 		return EOPNOTSUPP;
 	if ((error = copyin(irix_pointer(IRIX_PRDA_FLAGS), &flags,
 	    sizeof(flags))) != 0)
@@ -1945,8 +1975,10 @@ irix_proc_exec(struct proc *p, struct exec_package *epp)
 
 	if (ip == NULL)
 		p->p_emuldata = kmem_zalloc(sizeof(*ip), KM_SLEEP);
-	else
+	else {
+		irix_share_leave(p);
 		memset(ip, 0, sizeof(*ip));
+	}
 }
 
 static void
@@ -1957,6 +1989,7 @@ irix_proc_fork(struct proc *child, struct lwp *parent, int flags)
 
 	ip->reset_hold = old->threads;
 	child->p_emuldata = ip;
+	irix_share_fork(child, parent);
 }
 
 static void
@@ -1964,6 +1997,7 @@ irix_proc_exit(struct proc *p)
 {
 	struct irix_process *ip = p->p_emuldata;
 
+	irix_share_leave(p);
 	p->p_emuldata = NULL;
 	kmem_free(ip, sizeof(*ip));
 }
@@ -2437,8 +2471,25 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_waitsys,
 	},
+	[129] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_sproc_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_sproc,
+	},
+	[131] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_procblk_args),
+		.sy_call = irix_procblk,
+	},
+	[132] = {
+		.sy_narg = 5,
+		.sy_argsize = sizeof(struct irix_sprocsp_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_sprocsp,
+	},
 	[130] = {
-		.sy_narg = 1,
+		.sy_narg = 2,
 		.sy_argsize = sizeof(struct irix_prctl_args),
 		.sy_call = irix_prctl,
 	},
@@ -2469,7 +2520,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
 	[15] = "chmod", [16] = "chown",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
-	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
+	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
