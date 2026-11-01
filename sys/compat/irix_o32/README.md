@@ -536,3 +536,26 @@ The paired original fixtures measure fixed placement, complete rounded-page
 payloads, replacement and adjacent mappings, invalid-descriptor preservation,
 private file COW, read-only faults and explicit unsupported-input policy.
 See the companion lab for reference records, exact kernel pins and results.
+
+### Experimental measured PRDA and fork lifecycle
+
+The validated foreign exec maps a private zero-filled native page at 0x200000.
+An explicit uint32 prefix at offset 0xe00 supplies PID, two zero words, measured
+initial FP flags (o32 0, n32 4), and native CPU PRId. Xiri's paired IRIX 6.5.22m
+records establish these values; the configured R4400 reports 0x440. The older
+historical initialization of PRId as PID is not used.
+
+Ordinary fork inherits the page through COW. A child-return callback updates
+only the child's PID before native child_return, preserving user data and the
+parent's page. Fork rejects absent/read-only PID storage with EFAULT before
+child creation; a later copyout failure terminates the child with SIGSEGV.
+This damaged-PRDA behavior is native policy. Exec resets the area, and native
+exec removes it. Native page-zero guards remain unchanged.
+
+The lab/irix-prda fixtures in Xiri qualify initial state, private user writes,
+fork parent/child identity and COW, exec reset, and traditional signal masks.
+The LP64 native page's extra half is verified zero. Native controls check PRDA
+absence directly and after foreign-to-native exec. All 80 executions/180
+records, 20 damaged-state cases and 94 other controls pass across LP64 CI,
+LP64 ordinary and o32 CI. Share groups, threads, scheduling hints, user-managed
+PRDA signal holds and general FP control remain outside this subset.
