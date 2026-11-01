@@ -1576,6 +1576,13 @@ irix_fcntl(struct lwp *l, const void *args, register_t *rval)
 
 	SCARG(&native, fd) = SCARG(uap, fd);
 	switch (SCARG(uap, cmd)) {
+	case 0: /* F_DUPFD: signed lower bound, not a destination to replace. */
+		SCARG(&native, cmd) = F_DUPFD;
+		SCARG(&native, arg) = (void *)(intptr_t)(int32_t)arg;
+		/* Native allocation holds the source reference, checks limits and
+		 * clears close-on-exec/fork. Preserve the newly allocated fd in
+		 * rval; the flag-setting cases below instead return zero. */
+		return sys_fcntl(l, &native, rval);
 	case 1: /* F_GETFD */
 		SCARG(&native, cmd) = F_GETFD;
 		break;
