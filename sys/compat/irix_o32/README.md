@@ -1005,3 +1005,36 @@ qualify paths and parent output/completion handling. Signal registration,
 hardware/system information, umask and creat remain observed gaps. No
 package distribution read or installation is qualified. See Xiri's
 2026-11-01-irix-time and irix-installer-time reports for complete evidence.
+
+### Measured traditional signals and child completion
+
+Source 4680cd61b625a5eaa393a0deaea73f4b9f7ed7bc adds irix_signal.c with
+sigaction, kill, explicit o32/n32 legacy/SA_SIGINFO delivery and sigreturn.
+Native signal, machine-context and PCU facilities retain ownership. Foreign
+metadata inherits on fork and resets on exec. Waitsys accepts the measured
+P_ALL/id=0 exit callback with WTRAPPED, retaining positive-child waits.
+
+The companion Xiri lab checks 480 corrected-fixture original-IRIX records,
+then 1,216 native records and 76 controls: LP64 CI/ordinary, o32 CI, and extra
+fork-inheritance/malformed-context cases. FPU restoration requires marking
+the replacement native PCB valid after cpu_setmcontext. Sigaction output is
+bytewise to preserve original 4/28-byte fault prefixes on the o32 kernel.
+All fixture groups are absent and all guests halt cleanly.
+
+Signals 32..64, unsupported action-mask bits, SIGCHLD-specific high flags
+and multi-LWP disposition changes are outside this subset. Reserved output
+is zeroed. Alternate-stack setup, nested delivery, restart, realtime signals,
+broad fault translation and general multi-child waits remain unqualified.
+Invalid return-context checks enforce user PC/SP bounds and known fields;
+user status-register bits are ignored through the native context setter.
+
+Process (1,248 records), sproc (240 records) and time (192 records) regressions
+pass on 1e29ed231349, before the sole subsequent sigaction copyout correction;
+their reports retain that earlier pin. Full final signal matrices cover the
+correction. See Xiri docs/results/2026-11-01-irix-signal.md for exact scope,
+native controls and diagnostic exclusions. No new core hook is needed;
+deployment remains built in pending the compat_linux-style module.
+
+Installer retries are deferred in favor of copying already installed apps
+and their original catalog registration from the user's image. This does
+not qualify inst, package history, upgrade/removal or every imported app.
