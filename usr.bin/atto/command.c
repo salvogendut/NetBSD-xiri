@@ -1,5 +1,6 @@
 /* command.c, Atto Emacs, Public Domain, Hugh Barney, 2016, Derived from: Anthony's Editor January 93 */
 
+#include <sys/param.h> // for MIN()
 #include "header.h"
 
 void quit(void) { done = 1; }
@@ -159,7 +160,8 @@ void delete(void)
 {
 	curbp->b_point = movegap(curbp, curbp->b_point);
 	if (curbp->b_egap < curbp->b_ebuf) {
-		curbp->b_egap += utf8_size(*curbp->b_egap);
+		curbp->b_egap += MIN(utf8_size(*curbp->b_egap),
+		    curbp->b_ebuf - curbp->b_egap);
 		curbp->b_point = pos(curbp, curbp->b_egap);
 		curbp->b_flags |= B_MODIFIED;
 	}
@@ -351,10 +353,10 @@ void showpos(void)
 	get_line_stats(&current, &lastln);
 
 	if (curbp->b_point == end_p) {
-		msg("[EOB] Line = %d/%d  Point = %d/%d", current, lastln,
+		msg("[EOB] Line = %d/%d  Point = %ld/%td", current, lastln,
 			curbp->b_point, ((curbp->b_ebuf - curbp->b_buf) - (curbp->b_egap - curbp->b_gap)));
 	} else {
-		msg("Char = %s 0x%x  Line = %d/%d  Point = %d/%d", unctrl(*(ptr(curbp, curbp->b_point))), *(ptr(curbp, curbp->b_point)), 
+		msg("Char = %s 0x%x  Line = %d/%d  Point = %ld/%td", unctrl(*(ptr(curbp, curbp->b_point))), *(ptr(curbp, curbp->b_point)), 
 			current, lastln,
 			curbp->b_point, ((curbp->b_ebuf - curbp->b_buf) - (curbp->b_egap - curbp->b_gap)));
 	}
