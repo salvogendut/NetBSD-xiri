@@ -778,10 +778,10 @@ Software Manager. Runtime imports do not substitute for this workflow.
 Original inst loads on the pipe kernel but faults before distribution reading.
 A checked capture measures mmap(0, 0x100000, READ|WRITE, 0x141, 3, 0), after
 opening /dev/zero read/write. Flags are SHARED|AUTOGROW|AUTORESRV, outside the
-current private-mapping subset. After EINVAL, libinst iStringG::vprintf stores
+private-mapping subset at that checkpoint. After EINVAL, libinst iStringG::vprintf stores
 through the failed pointer: EPC 0x043e18d4, delay-slot sb at 0x043e18d8,
 register8 all ones, fault address 0xffffffff. Captured code matches the original
-library. Measure shared/autogrow semantics before extending the adapter.
+library. The following shared-mapping checkpoint resolves this boundary.
 No vendor bytes/returns are modified and no installer success is claimed.
 
 The native account helper now creates /usr/people/<username> homes with native
@@ -791,3 +791,43 @@ HOME=/; native administrator accounts are not relocated. Eight native
 execution and two known-fault controls pass, and both installer test guests
 halt cleanly. Graphical login persistence and catalog actions remain open.
 See Xiri's 2026-11-01-irix-installer and irix-freeware reports.
+
+
+### Shared mmap and zero-device AUTOGROW
+
+The mmap adapter now accepts IRIX SHARED and translates it explicitly to native
+MAP_SHARED. AUTOGROW is accepted only for the native zero character device,
+identified by vnode type/device number; symlink aliases qualify and a regular
+file named zero does not. A descriptor reference remains held through sys_mmap
+so a concurrent close cannot substitute another file after validation. Native
+mmap converts the device to anonymous memory, providing shared fork visibility,
+private COW and lifetime beyond descriptor close. No new core hook is added.
+
+Regular-file AUTOGROW remains EINVAL: the paired 6.5.22m reference keeps a
+17-byte file unchanged at mmap, then extends it to 12288 on either a shared
+read or store at offset8192. Private AUTOGROW supplies pages without changing
+the backing file; absent AUTOGROW, either mapping faults with SIGBUS. Native
+plain shared file mappings retain normal permissions and EOF behavior.
+Native zero-device access policy, page alignment, stricter invalid flags,
+empty/bad-protection errors and signed 32-bit offsets remain explicit limits.
+AUTORESRV does not establish IRIX logical-swap accounting/exhaustion behavior;
+LOCAL still requires one LWP and an unshared vmspace.
+
+Xiri lab/irix-mmap-shared compares 472 original records/backing files with
+1,180 native records/backing files and 44 native/vendor controls across LP64
+CI/ordinary and o32 CI. Both kernel builds and all final guests pass, with
+clean shutdown. Its size-snapshot lseek remains ENOSYS here; independent
+native copies verify every final backing byte. Retained failed archive exports
+are separate harness diagnostics, not qualified results.
+
+Original inst now passes the former MAP_FAILED crash. Its -H command prints
+an incomplete hardware report and maps the original machfile; the distribution
+dry run stops before reading packages when trap1129 sproc returns ENOSYS.
+The request uses PR_SADDR|PR_BLOCK|PR_NOLIBC (0x03000040), at libc _nsproc trap
+0x0fa75038 with entry0x0fa750a8. Plain fork is not the failing call. Measure
+child entry/stack, shared VM, parent release, PRDA and exec/exit cleanup before
+implementing this lifecycle. Signal registration, hardware queries, time and
+creat also remain observed gaps. Exit zero accompanies the fatal dry-run
+message and must not be treated as installation success. Native shared-home
+checks still pass with /usr/people/xiritest and original root HOME=/.
+See Xiri's 2026-11-01-irix-mmap-shared and irix-installer-shared reports.
