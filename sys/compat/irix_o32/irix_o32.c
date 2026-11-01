@@ -605,6 +605,25 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	return sys_open(l, &native, rval);
 }
 
+/* Directory creation uses native lookup, effective credentials, umask and
+ * filesystem ownership policy. Native CREATE lookup selects the emulation
+ * parent when present and falls back to the native namespace otherwise. */
+struct irix_mkdir_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) mode;
+};
+
+static int
+irix_mkdir(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_mkdir_args *uap = args;
+	struct sys_mkdir_args native = { 0 };
+
+	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
+	SCARG(&native, mode) = SCARG(uap, mode);
+	return sys_mkdir(l, &native, rval);
+}
+
 struct irix_chmod_args {
 	syscallarg(uint32_t) path;
 	syscallarg(uint32_t) mode;
@@ -2277,6 +2296,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getrlimit64,
 	},
+	[80] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_mkdir_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_mkdir,
+	},
 	[82] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_sginap_args),
@@ -2401,7 +2426,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [59] = "execve", [63] = "ulimit",
 	[15] = "chmod", [16] = "chown",
-	[75] = "getrlimit64", [148] = "getrlimit", [130] = "prctl",
+	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
