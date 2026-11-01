@@ -485,3 +485,26 @@ This is an explicit native-session integration policy; general layered-tty
 revoke behavior remains open. Original xwsh and the unchanged winterm launcher
 now execute native /bin/sh and accept XTest keyboard commands in the Xiri lab.
 See xiri's 2026-11-01 shell report for the accepted runs and limitations.
+
+### Experimental 4 KiB ELF data boundaries
+
+The `xiri/irix-elfmap-subpage` branch admits a data PT_LOAD with a 4 KiB
+boundary when its file and virtual offsets agree within a native page. This
+covers original 4Dwm's libimdUtil and libXpm on the 8 KiB LP64 kernel. Code
+segments retain the previous native-page restrictions. Code and data virtual
+pages must be disjoint; overlapping logical file segments remain rejected.
+
+Only an owned header copy is normalized. For nonempty data, mapping starts
+at the preceding native file-page boundary and includes those prefix bytes.
+For pure BSS, the prefix is zero-filled. A shared backing file page can appear
+in separate RX and private RW mappings; native COW keeps writes to the data
+alias from changing code or the file. Accounting, collision selection and
+rollback use the full normalized native-page ranges. The returned code base
+and common relocation displacement retain their previous contract, and the
+caller's original headers are unchanged.
+
+The paired synthetic fixtures in xiri's lab/irix-elfmap-subpage distinguish
+IRIX's 4 KiB page behavior from native padding and rejection policy. They
+retain all prior relocation inputs and add data/prefix/BSS, file-page COW,
+collision, protection, limit and invalid-layout checks. This is a bounded
+extension, not arbitrary ELF segment layout support.
