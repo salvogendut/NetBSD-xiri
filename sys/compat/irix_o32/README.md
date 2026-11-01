@@ -686,3 +686,53 @@ returning EINVAL. No additional image assets were staged. The CI desktop
 retains 4Dwm interaction and typed winterm shell execution; an ordinary run
 retains a failed terminal geometry check. These are bounded observations, not
 full desktop or startup-repeatability qualification.
+
+
+### Directory creation
+
+Trap1080 (mkdir) now copies a bounded foreign pathname, removes trailing
+slashes after checking the original length, and calls native do_sys_mkdir.
+The measured IRIX existing-file-with-trailing-slash result is EEXIST. Native
+CREATE lookup retains TRYEMULROOT parent selection/fallback, effective-credential
+checks, umask, filesystem authorization and ownership policy. No new core hook
+is introduced; the standard VFS helper performs creation.
+
+Source 1690de11a095134b6eee4d7f85a8b046b1a86c47 passes 3,200 native records
+against 1,280 original-IRIX records, with 1,540 new directories checked using
+independent native before/after find/stat snapshots and 44 native/vendor
+controls. The matrix covers o32/n32, direct/indirect dispatch, five real/effective
+credential combinations and umasks022/077 on LP64 CI/ordinary and o32 CI kernels.
+All three guests halt cleanly. See Xiri lab/irix-mkdir and its 2026-11-01 report.
+
+Native FFS assigns the parent directory's group; the tested original IRIX
+children receive effective GID. The qualifier retains 960 explicit group-policy
+records. Neither tested creation path retains special mode bits, including
+under the parent configured with setgid. All other recorded fields match the
+reference. Existing paths retain their native type, mode and UID/GID, and the
+native shadow remains untouched when the emulation parent is selected.
+
+This qualifies mkdir only. ACLs, supplementary groups, quota/full-filesystem
+behavior, concurrent namespace changes and physical hardware remain outside
+this matrix. Directory removal/rename, wider wait semantics and the complete
+file/icon desktop remain separate work.
+
+
+The original desktop retry now observes bgicons exit zero and Icon Catalog's
+main window in both CI and ordinary modes. The original defaults name its
+empty fallback page Blank; catalog page data is not staged, so emptiness alone
+is not a compatibility defect. No additional image assets were added.
+Generated state includes HOME/.desktop-xiri-indy and
+HOME/.desktophost/xiri-indy/Icons, created under native ownership policy.
+
+Both fm launches now exit 139 with SIGSEGV after pipe (1042) and sgikopt (1083)
+return ENOSYS. This identifies the next investigation, not a proven sole crash
+cause. Earlier wider-wait limitations remain unqualified. Measure original
+pipe semantics, add native descriptor support and retry before assigning the
+remaining fault to sgikopt or missing resources.
+
+4Dwm input/drag checks pass in both modes; only CI also passes the native shell
+handoff and typed-command marker. Ordinary mode retains TYPE_STATUS=3 with no
+terminal handoff and an interrupted XWD capture (BadDrawable). Both guarded
+sessions remove descendants and halt cleanly. See Xiri's
+2026-11-01-irix-desktop-mkdir report and pixel-verified CI PNG. Full desktop,
+repeatable startup, catalog actions and session saving remain unqualified.
