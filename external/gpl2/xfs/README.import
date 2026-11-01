@@ -1,0 +1,348 @@
+$NetBSD$
+
+Upstream: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+Mirror: https://github.com/torvalds/linux
+Tag: v6.12
+Commit: adc218676eef25575469234709c2d87185ca223a
+Import date: 2026-10-31
+License: GPL-2.0 or GPL-2.0+, as specified in each imported file.
+
+This is a pinned source subset for the initial metadata-reading milestones.
+v6.12 supplies both v4 and v5 disk definitions and a reproducible
+baseline; this is not a claim to track the latest Linux XFS release.
+
+Pristine files in dist/ come from fs/xfs/libxfs/ at that commit:
+
+    xfs_format.h
+    xfs_log_format.h
+    xfs_sb.c
+    xfs_sb.h
+    xfs_types.h
+    xfs_alloc.c
+    xfs_ialloc.c
+    xfs_cksum.h
+    xfs_btree.c
+    xfs_rmap_btree.c
+    xfs_refcount_btree.c
+    xfs_inode_buf.c
+    xfs_inode_fork.c
+    xfs_ialloc_btree.c
+    xfs_bmap_btree.c
+    xfs_da_format.h
+    xfs_da_btree.c
+    xfs_dir2.c
+    xfs_dir2_priv.h
+    xfs_dir2_sf.c
+    xfs_dir2_data.c
+    xfs_dir2_leaf.c
+    xfs_dir2_node.c
+    xfs_symlink_remote.c
+    xfs_attr_leaf.c
+    xfs_attr_remote.c
+
+dist/xfs_dir2_readdir.c, dist/xfs_log.c, dist/xfs_log_recover.c and xfs_acl.c come from
+fs/xfs/ (outside libxfs/) at that commit.
+dist/posix_acl.c comes from fs/posix_acl.c at the same commit.
+
+COPYING is the unmodified LICENSES/preferred/GPL-2.0 file from that commit.
+SHA256 records the hashes of these thirty-two upstream files. Verify them with
+"sha256sum -c SHA256" from this directory (or the equivalent sha256 tool).
+Do not edit dist/ for NetBSD adaptations.
+
+netbsd/xfs_sb.c selects these routines from dist/xfs_sb.c without changing
+their bodies:
+
+    xfs_sb_validate_v5_features
+    xfs_sb_good_version
+    xfs_sb_quota_from_disk
+    __xfs_sb_from_disk
+    xfs_sb_from_disk
+
+include/xfs_quota_flags.h selects the quota flag block from
+dist/xfs_log_format.h, from XFS_UQUOTA_ACCT through XFS_PQUOTA_CHKD.
+Their original copyright notices and GPL identifiers are retained.
+
+include/xfs_compat.h supplies the scalar types, endian conversions, assertions
+and UUID-copy operation used by these routines. Linux's opaque UUID bytes
+remain distinct from NetBSD's structured UUID representation.
+
+netbsd/xfs_cksum.c adapts xfs_start_cksum_safe / xfs_verify_cksum from
+dist/xfs_cksum.h: the field offset is checked, unaligned checksum loads use
+memcpy, and a software Castagnoli CRC replaces Linux's crc32c service.
+No checksum-generation/write path is exposed.
+The internal xfs_crc32c helper also feeds the noncontiguous journal checksum.
+
+include/xfs_log_layout.h selects the physical record and operation layouts
+from xfs_log_format.h, using the port UUID type. netbsd/xfs_read_log.c adapts
+cycle-stamp interpretation, head/record positioning, xlog_check_unmount_rec
+and packed cycle-data restoration from xfs_log_recover.c, and xlog_cksum /
+the unmount operation format from xfs_log.c. Log size/sector/stripe checks
+follow xfs_sb.c and the pinned xfs_fs.h limits. These adaptations deliberately:
+
+  - scan every cycle stamp rather than use the recovery search heuristics;
+  - reject nonmonotonic cycles, rollover and incomplete latest records,
+    without trimming to an older record, replaying or clearing stale blocks;
+  - bound sizes, require the record to end exactly at the head, verify its
+    LSNs/cycles, UUID and checksum when present, and restore cycle data only
+    afterward; v1 physical I/O rounds h_len up, as xlog_sync excludes padding;
+  - require exactly one well-formed modern eight-byte unmount operation to
+    report CLEAN, with explicit little/big-endian payload decoding; v1 also
+    accepts the historical 20-byte string documented in xfs_log_format.h;
+  - accept IRIX-style zero format/UUID/size fields only on a v1 journal,
+    requiring the entire unused header suffix and checksum field to be zero;
+    known-format v1 headers require a matching UUID and verification of any
+    nonzero CRC32C;
+  - check every v1 operation header, payload bound and count without
+    interpreting transaction items, and reject extra data in clean records;
+  - handle the special unchecksummed mkfs record only at cycle 1/block 0,
+    with canonical fields/padding and a verified unused log suffix (zero
+    blocks or canonical empty stale-block-clearing headers);
+  - return NEEDS_RECOVERY for a valid latest record without an unmount,
+    and errors for unsupported/malformed journals, preserving output on error.
+
+The checksum covers the used extended-header regions, not entire 512-byte
+header sectors. Both upstream header ABI sizes (324 and 328 bytes) are
+accepted. No transaction items are interpreted or replayed. Cleanliness
+does not imply global consistency, and metadata LSNs are not yet checked
+against the log. The caller must keep the entire image quiescent.
+The IRIX v1 identity exception follows xlog_header_check_mount. Unlike the
+v2 policy, v1 permits ordinary zero-checksum records; they cannot provide
+checksum integrity, and IRIX-style headers cannot bind a record to a UUID.
+Older nonzero legacy checksum algorithms remain unsupported. The exception
+does not apply to v5 superblocks or v2 logs.
+
+netbsd/xfs_ag.c adapts the following read-side checks to an explicit reader
+context, without creating placeholder Linux mount, buffer, or log objects:
+
+    xfs_agf_verify, xfs_agfl_verify, xfs_validate_ag_length,
+    xfs_agfl_needs_reset (xfs_alloc.c)
+    xfs_agi_verify (xfs_ialloc.c)
+    xfs_btree_compute_maxlevels, xfs_btree_space_to_height (xfs_btree.c)
+    xfs_rmapbt_compute_maxlevels (xfs_rmap_btree.c)
+    xfs_refcountbt_compute_maxlevels (xfs_refcount_btree.c)
+
+Unlike the unchanged superblock routines, these adaptations intentionally:
+
+  - return positive errno values and static diagnostics;
+  - require the exact AG length calculated from the primary superblock,
+    including the shortened last AG; concurrent growfs is unsupported;
+  - check tree-root block bounds, inode counters and active free-list slots;
+  - reject an inconsistent free-list ring instead of repairing/resetting it;
+  - check inactive v5 slots against the actual AG length, but ignore unused
+    v4 slots, which historical mkfs versions left uninitialized;
+  - interpret unlinked inode pointers as AG-relative inode numbers;
+  - do not call xfs_log_check_lsn: no log has been initialized or recovered.
+
+Tree-depth limits use upstream record sizes and fanout calculations, including
+the distinct reverse-map bound for reflink filesystems. The 64-block minimum
+AG size is XFS_MIN_AG_BLOCKS from libxfs/xfs_fs.h at the same pinned commit.
+These verifiers do not establish journal cleanliness or tree consistency.
+
+netbsd/xfs_read_inode.c adapts selected xfs_dinode_verify, fork/forkoff,
+nrext64 and extent-size hint checks from xfs_inode_buf.c, fork geometry
+checks from xfs_inode_fork.c, and xfs_imap_lookup / xfs_inobt_check_irec
+allocation checks from xfs_ialloc.c. Sparse holemask expansion follows
+xfs_inobt_irec_to_allocmask from xfs_ialloc_btree.c. The port always checks
+allocation, including for image-supplied inode numbers. It copies disk data
+to aligned structures, verifies v3 CRCs before trusting inode identity, and
+publishes a caller-owned inode image only after the selected checks pass.
+Inode-tree leaf records and interior keys use within-block chunk alignment,
+as in xfs_dialloc's XFS_AGINO_TO_OFFSET assertions; the 64-inode record width
+does not imply 64-inode start alignment on legacy layouts.
+
+netbsd/xfs_inode_stat.c adapts xfs_inode_from_disk and xfs_inode_from_disk_ts
+from xfs_inode_buf.c. It decodes ownership, v1/v2 link counts, allocation,
+generation, flags, changecount and legacy/bigtime timestamps into portable
+values. It rejects nanoseconds outside [0, 1000000000), bigtime seconds past
+XFS_BIGTIME_TIME_MAX and allocated byte counts exceeding INT64_MAX. It
+reports the presence of an attribute fork without interpreting its contents.
+
+netbsd/xfs_read_attr.c adapts xfs_attr_shortform_verify from xfs_attr_leaf.c,
+using the packed header/entry layout and namespace flags from xfs_da_format.h.
+It bounds the declared total against the inode fork before traversing entries,
+checks the exact count/size, lengths, namespace combinations, and forbidden
+local/incomplete bits. The unused header padding is ignored as upstream does.
+It additionally rejects embedded NUL names and duplicate byte names within
+each namespace. All structural checks precede callbacks, including corruption
+in later entries; iteration uses bounded stack offsets and allocates nothing.
+Empty retained extent forks are accepted. Parent-pointer attributes remain
+unsupported. Parent-pointer duplicate-name
+semantics are not treated as ordinary xattr semantics.
+
+netbsd/xfs_read_attr_external.c adapts the read-side leaf verification, node
+traversal and remote-value decoding from xfs_attr_leaf.c, xfs_da_btree.c and
+xfs_attr_remote.c. include/xfs_attr_layout.h selects their on-disk layouts
+from xfs_da_format.h. The shared bmap reader now accepts attribute forks with
+32-bit logical block addresses. Attribute mappings must match the inode's
+extent count; holes are allowed between objects, unwritten mappings are not.
+Mapped blocks, indexes and a 64 KiB value staging area occupy caller-owned
+workspace (8 MiB in mount_xfs). No allocator or Linux buffer cache is emulated.
+
+The reader verifies all mapped attribute blocks before callbacks. It checks
+tree depth, parent hashes, exact sibling chains, namespace/name/hash validity,
+record and free-map bounds/overlaps, used-byte counts, duplicate names and
+remote-value coverage. Leaf firstused may lag when holes are present, as in
+upstream split/move operations. It preserves the historical remote-name size
+round_up(11 + namelen, 4). On v5 it checks full-block CRC32C, metadata UUID,
+owner and physical address for tree and remote blocks, plus exact remote
+offsets/lengths. Remote headers occupy 56 bytes per filesystem block. V4
+remote blocks have no headers. Values may be up to 65536 bytes.
+
+Incomplete entries, parent pointers, shared/aliased attribute data blocks,
+unreferenced mapped blocks and missing remote blocks are rejected. Sorted
+name indexes detect duplicates without quadratic hash-collision scans.
+Pointers passed to callbacks are valid only during that callback; a remote
+value reuses staging space. Enumeration order is unspecified. The checks do
+not establish global allocation ownership or validate LSNs against the log.
+
+The separate xfs_attrs_check_readonly policy accepts user attributes, valid
+POSIX access/default ACLs, and the root directory's trusted xfs:autofsck
+property with values none, check, optimize or repair. It rejects malformed or
+inconsistent ACLs, security attributes, unknown trusted
+attributes, unknown property values, and the same property on other inodes.
+The property is exposed as metadata; it triggers no scanning or repair.
+Its layout/meaning follows the XFS filesystem-property documentation:
+https://kernel.googlesource.com/pub/scm/fs/xfs/xfs-documentation/+/master/design/XFS_Filesystem_Structure/fs_properties.asciidoc
+
+netbsd/xfs_read_acl.c adapts xfs_acl_from_disk from fs/xfs/xfs_acl.c and
+posix_acl_valid, posix_acl_equiv_mode and posix_acl_permission from fs/posix_acl.c.
+It reads the XFS big-endian count and 12-byte entries without allocation or
+unaligned dereferences. The v4 limit is 25 entries; v5 allows 5461 (64 KiB).
+It requires the exact value size, valid full-width tags, owner/group/other
+entries in order, a mask for named entries, permission bits within rwx,
+unique named IDs and no undefined named ID. Unused IDs and padding are ignored.
+Unsorted named IDs are accepted; duplicate detection uses a bounded scan
+only when an ID does not exceed the previous maximum. Access ACL mode bits
+must agree with inode owner/mask-or-group/other bits. Default ACLs are allowed
+only on directories and do not control existing directory access.
+
+Permission checks preserve upstream owner/named-user precedence, masking,
+matching-group denial without other fallback, and the requirement that one
+matching group grant the complete request. Numeric IDs have no Linux idmap
+or user-namespace translation. PUFFS handles privileged credentials with its
+existing root/kernel rules and rejects writes on the read-only mount.
+An accepted access ACL is copied into per-node storage and freed with the
+immutable inode, including all node-creation failure paths. No pointers into
+attribute scratch survive a callback. Search, access, open and user-attribute
+checks use the ACL. Existing file descriptors retain read access after a
+credential change; user-attribute requests recheck current credentials.
+ACLs are exposed as raw SGI_ACL_FILE/SGI_ACL_DEFAULT system attributes to
+privileged callers; this does not implement a native ACL manipulation API,
+inheritance/writes or Linux security-label policy.
+
+netbsd/xfs_read_btree.c adapts xfs_btree_{agblock,fsblock}_v5hdr_verify,
+xfs_btree_{agblock,fsblock}_verify, xfs_inobt_verify and xfs_bmbt_verify.
+The inode-tree and bmap traversals require exact owners and disk addresses,
+check every key and pointer in a visited node, enforce decreasing levels,
+and carry parent key intervals down to the child. Sibling addresses are
+bounded, but reciprocal links and unvisited subtrees are not verified.
+All inode/data/tree addresses exclude the AG headers and internal log.
+
+netbsd/xfs_read_file.c adapts xfs_bmbt_disk_get_all's packed extent decoding
+and bmap root layout from xfs_bmap_btree.c. Fork validation follows
+xfs_iformat_extents / xfs_iformat_btree from xfs_inode_fork.c. The bmap
+height limit conservatively allows a single root pointer over external
+nodes at minimum fanout, up to the maximum large data-fork extent count.
+Selected leaves are checked for order, overlap, parent range and physical
+bounds. Holes and unwritten extents return zeros without reading their
+backing data. File reads use caller-owned block scratch, clamp at EOF and
+report zero bytes completed on failure (the destination may be altered).
+
+include/xfs_dir_layout.h selects directory constants and structures from
+xfs_da_format.h, replacing uuid_t with the port's opaque UUID type. It does
+not import Linux-only accessor/attribute helpers into the compatibility layer.
+
+netbsd/xfs_read_directory.c adapts xfs_dir2_sf_verify and the shortform inode
+number/entry accessors, __xfs_dir3_data_check, xfs_dir3_data_verify and
+xfs_dir2_data_freefind_verify. Geometry and entry sizes follow xfs_dir2.c and
+xfs_dir2_priv.h. Name hashing uses xfs_da_hashname's rotate/XOR operation.
+The linear scan follows xfs_dir2_{sf,block,leaf}_getdents in xfs_dir2_readdir.c;
+leaf and node directories both enumerate their data blocks. The port also:
+
+  - bounds all variable-size fields before reading them, including unaligned
+    shortform inode numbers and tags;
+  - checks exact owner/address/UUID, directory dots and root parent, file
+    types, names, free-entry tags and the three largest free areas;
+  - uses a bitset to verify a bijection between live data entries and the
+    single-block directory's embedded hash index (including hash collisions);
+  - assembles directory blocks from possibly fragmented filesystem blocks;
+  - skips whole aligned holes, rejecting unwritten or partially missing data;
+  - rejects duplicate queried names and preserves lookup results on error.
+
+netbsd/xfs_read_dir_index.c adapts xfs_dir3_leaf_check_int,
+xfs_dir3_leaf_verify/header_check, xfs_dir3_free_verify/header_check and
+xfs_da3_node_verify. Lookup follows xfs_dir2_leaf_search_hash and the
+equal-hash matching rules of xfs_dir2_leaf_lookup_int, xfs_da3_node_lookup_int
+and xfs_dir2_leafn_lookup_for_entry, including collisions crossing leaves.
+The implementation loads the complete external directory into caller workspace,
+with no hidden allocation or persistent cache. In addition to upstream header
+and identity checks, it bounds leaf bests/free arrays, verifies hash order and
+parent maxima, enforces decreasing tree levels and reciprocal sibling links,
+and rejects missing/shared/cyclic/orphan index blocks. Per-data-block bitmaps
+prove a bijection between live records and index pointers; pointers into free
+records, names, holes or duplicate entries are rejected. Free-space summaries
+must agree with verified data bestfree records, including holes.
+
+All external data/index verification and I/O precede lookup or enumeration.
+Lookup descends the verified hash tree with lower-bound searches; enumeration
+retains logical data-block order for stable PUFFS cookies. Both operations
+revalidate the complete directory on each call. The server and inspector use
+8 MiB workspaces and reject directories whose mapped blocks and bookkeeping
+exceed that capacity. ASCII case-insensitive directories remain unsupported.
+Metadata LSN checks and global allocation ownership remain outside this port.
+
+netbsd/xfs_read_symlink.c adapts xfs_symlink_remote_read, xfs_symlink_verify
+and xfs_symlink_hdr_ok. It verifies complete mapped buffers (one header per
+extent, not per filesystem block), target offsets/lengths, exact inode owner,
+disk address, UUID, CRC and absence of embedded NULs. Targets must be shorter
+than XFS_SYMLINK_MAXLEN. Even a partial read checks every target chunk, rejecting
+holes and unwritten mappings. A contiguous two-block target on a v5 filesystem
+with 1 KiB blocks requires 2 KiB of scratch. Metadata LSN checks remain absent.
+
+netbsd/xfs_lookup_path.c is a new image-only adapter around these readers.
+It resolves absolute paths, dots and relative/absolute symlinks with caller
+workspace, a 4096-byte path bound and a 40-link limit. It checks allocation
+when opening every selected inode, preserves trailing-slash semantics and
+never passes image path components to the host filesystem. It does not
+implement credentials, access control or NetBSD namei/VFS integration.
+
+These readers are image-inspection adaptations, not a replacement for all
+live-kernel verifiers or xfs_repair. In particular they do not cross-check
+global extent/block counts, rmap ownership, other allocation trees, inode
+timestamp consistency or log LSNs.
+Inline and external attributes are verified separately by xfs_read_attrs;
+xfs_read_inode remains a structural inode/data-fork reader.
+Bmap blocks are verified lazily during file reads. Unknown read-only-compatible features
+block inode access even though the superblock probe permits inspection.
+Zero-length directories/symlinks are explicitly unsupported.
+No Linux cache, locking, transaction or recovery object is
+emulated; those contracts remain work for future caching/recovery milestones.
+
+puffs/mount_xfs.c is a new direct libpuffs adapter. It checks journal
+cleanliness before mounting and applies the complete attribute mount policy
+before publishing each node, so unsupported access-control metadata cannot be
+silently ignored. All engine I/O stays in user space
+through a read-only regular-file descriptor. The adapter supplies credentials,
+stable inode cookies, vattr translation, directory cookies and read-only
+operation/error handling using NetBSD's public libpuffs API. getextattr and
+listextattr expose raw names through NetBSD's user/system namespaces, checking
+file read permissions for user attributes and privileged credentials for
+system attributes. There is no Linux-style name-prefix translation.
+The accompanying BSD-licensed lib/libpuffs/dispatcher.c changes reserve
+reply capacity for GETEXTATTR/LISTEXTATTR, matching READ/READDIR. Without it,
+large attribute callbacks can overrun the received header-sized frame. This
+is a libpuffs allocation fix. The dispatcher also translates the kernel's
+0400/0200/0100 access bits into the documented PUFFS_VREAD/VWRITE/VEXEC
+callback values (4/2/1), rejecting unrepresentable rights. This fixes native
+access(2) decisions without changing callback constants or the wire protocol.
+No GPL code is incorporated into libpuffs.
+
+The wrapper, compatibility definitions, tests and scripts are GPL-2.0-only.
+No SGI/Linux code has been relicensed as BSD code. This directory is not wired
+into the installed header set or default base-system build. It now lives in
+external/gpl2/xfs for a user-space PUFFS/libpuffs server; the earlier location
+was sys/external/gpl2/xfs. Moving the code does not change its license.
+
+For a future import, update the commit and original files together, review
+changes to the selected routines and compatibility layer, regenerate SHA256,
+and rerun all tests before accepting any new feature bits.

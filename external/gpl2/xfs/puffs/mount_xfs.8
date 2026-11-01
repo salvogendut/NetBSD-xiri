@@ -1,0 +1,133 @@
+.\" SPDX-License-Identifier: GPL-2.0-only
+.\" $NetBSD$
+.Dd October 31, 2026
+.Dt MOUNT_XFS 8
+.Os
+.Sh NAME
+.Nm mount_xfs
+.Nd experimental read-only XFS filesystem in user space
+.Sh SYNOPSIS
+.Nm
+.Op Fl ds
+.Op Fl o Cm ro
+.Ar image mountpoint
+.Sh DESCRIPTION
+.Nm
+serves a quiescent XFS regular image file through
+.Xr puffs 4
+and
+.Xr puffs 3 .
+The XFS reader runs in the server process.
+The journal must contain a complete clean unmount record;
+dirty, ambiguous, malformed and unsupported journals are rejected.
+There is no journal replay or write support.
+.Pp
+Internal v1 and v2 journals are supported, including IRIX-style v1 headers
+without a filesystem UUID or checksum.
+V1 records undergo geometry, cycle, LSN and operation-layout checks;
+records without checksums cannot provide checksum-based corruption detection.
+A dirty IRIX journal requires recovery before this server can mount it.
+Only extracted regular filesystem images are accepted; SGI partition discovery
+and direct disk-device access are not implemented.
+.Pp
+The mount is always read-only, nodev, nosuid and noatime.
+The only accepted mount option is
+.Cm ro .
+The
+.Fl s
+option keeps the server in the foreground.
+Otherwise it detaches using
+.Fn puffs_daemon .
+The
+.Fl d
+option also keeps the server in the foreground and reports inode creation,
+kernel reclamation and shutdown release to standard error, including the
+inode number and retained ACL byte count.
+Attribute names, values and caller credentials are not logged.
+.Pp
+Regular files, directories and symbolic links are supported.
+UIDs, GIDs and mode bits are preserved, and directory search and access
+checks use the credentials supplied by PUFFS.
+Verified inline and external user attributes are supported, along with the root
+directory's trusted
+.Li xfs:autofsck
+property with values none, check, optimize or repair.
+The property triggers no maintenance operations.
+POSIX access ACLs are enforced using the caller's numeric UID and groups.
+Owner and named-user entries take precedence; named users and groups are
+limited by the ACL mask.
+A matching entry cannot fall back to the other class after denial.
+Directory default ACLs are validated as inheritance metadata and do not
+control access to an existing directory.
+Inodes with malformed or mode-inconsistent ACLs, security labels,
+unknown trusted attributes, parent pointers
+or incomplete attribute updates are rejected.
+External leaf and node trees, attribute bmap trees and remote values up to
+65536 bytes are supported within an 8 MiB verification workspace.
+Larger attribute sets are rejected.
+Special files, external logs and realtime devices are unsupported.
+.Pp
+Native
+.Xr extattr_get_file 2
+and
+.Xr extattr_list_file 2
+operations expose raw XFS names in the user namespace, and
+.Li xfs:autofsck
+in the system namespace.
+User attributes require file read permission; system attributes require
+privileged credentials, including for descriptor operations.
+Empty/binary values, size queries, truncated reads and both list delimiter
+formats are supported.
+Linux-style user./trusted. name-prefix translation is not provided.
+Raw
+.Li SGI_ACL_FILE
+and
+.Li SGI_ACL_DEFAULT
+values are available in the privileged system namespace.
+Native ACL manipulation, inheritance on creation and Linux ID mappings are
+not implemented.
+This server requires libpuffs with the attribute reply-buffer allocation
+and access-mode translation fixes included in this source tree.
+.Pp
+The backing file is opened read-only and held under an advisory shared lock.
+It must remain unchanged for the entire mount.
+A detected size, modification-time or change-time change causes subsequent
+operations to fail with
+.Er ESTALE .
+This detection and the advisory lock do not provide snapshot isolation.
+.Pp
+The initial server uses synchronous reads and disables PUFFS name, attribute
+and page caches.
+Verified access ACLs are retained with each immutable inode.
+Memory mapping and execution of files from this mount are unsupported.
+External directory data, hash trees and free-space indexes are verified
+before lookup or listing, including index-to-data agreement.
+Lookup follows the verified hash tree and handles hash collisions.
+Each operation still reads and verifies the complete directory.
+Mapped blocks and bookkeeping must fit in the 8 MiB workspace;
+oversized directories fail with
+.Er EIO .
+Directory offsets are stable entry ordinals on the immutable image.
+Global allocation consistency and metadata LSNs are not verified.
+.Pp
+Use
+.Xr umount 8
+to unmount.
+SIGINT and SIGTERM request an unmount through libpuffs.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+mount_xfs -s -o ro /var/tmp/test.xfs /mnt/xfs
+ls /mnt/xfs
+umount /mnt/xfs
+.Ed
+.Sh SEE ALSO
+.Xr extattr_get_file 2 ,
+.Xr extattr_list_file 2 ,
+.Xr puffs 3 ,
+.Xr puffs 4 ,
+.Xr mount 8 ,
+.Xr umount 8
+.Sh HISTORY
+This experimental GPL port uses SGI/Linux XFS sources pinned to Linux v6.12.
+It is built explicitly from external/gpl2/xfs/puffs and is not part of the
+default base-system build.
