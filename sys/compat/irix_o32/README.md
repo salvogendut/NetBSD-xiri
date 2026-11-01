@@ -820,9 +820,10 @@ clean shutdown. Its size-snapshot lseek remains ENOSYS here; independent
 native copies verify every final backing byte. Retained failed archive exports
 are separate harness diagnostics, not qualified results.
 
-Original inst now passes the former MAP_FAILED crash. Its -H command prints
+At the shared-mmap checkpoint, original inst passed the former MAP_FAILED
+crash. Its -H command printed
 an incomplete hardware report and maps the original machfile; the distribution
-dry run stops before reading packages when trap1129 sproc returns ENOSYS.
+dry run stopped before reading packages when trap1129 sproc returned ENOSYS.
 The request uses PR_SADDR|PR_BLOCK|PR_NOLIBC (0x03000040), at libc _nsproc trap
 0x0fa75038 with entry0x0fa750a8. Plain fork is not the failing call. Measure
 child entry/stack, shared VM, parent release, PRDA and exec/exit cleanup before
@@ -833,12 +834,12 @@ checks still pass with /usr/people/xiritest and original root HOME=/.
 See Xiri's 2026-11-01-irix-mmap-shared and irix-installer-shared reports.
 
 
-### Original sproc reference (implementation pending)
+### Original sproc reference
 
 Xiri's 2026-11-01-irix-sproc-reference checkpoint checks 112 executions and
 200 records on original IRIX 6.5.22m, covering o32/n32, direct/indirect traps,
-and root/UID1234. NetBSD trap1129 still returns ENOSYS; no kernel code is
-changed by this measurement cycle, and the installer has not advanced.
+and root/UID1234. Those original measurements precede the bounded native
+implementation below; they do not establish package-installation success.
 
 With PR_SADDR|PR_BLOCK|PR_NOLIBC, explicit procblk unblock releases the parent.
 PR_UNBLKONEXEC releases it on successful exec OR child exit; failed exec
@@ -856,16 +857,72 @@ its top minus 64 bytes; a1 is still zero at this raw boundary. A null-stack
 cleanup only, not an errno or signal. Full register-width and FP state,
 signals, nested groups, parent death and broader map operations remain open.
 
-Implementation needs explicit share-group/LOCAL range ownership, map-update
-coordination and the measured exec/exit release distinction. Existing LWP /
-vmspace-reference guards alone will not detect separate vmspaces sharing
-backing objects. Neither a fork alias nor plain FORK_SHAREVM preserves these
-semantics. Prefer current UVM/process interfaces and personality-owned state
-for the eventual compat_linux-style module; do not copy the historical
-adapter's obsolete VM API or documented procblk locking problems.
+The implementation therefore needs explicit share-group/LOCAL ownership and
+the measured exec/exit distinction. A fork alias or plain FORK_SHAREVM cannot
+preserve these semantics. The adapter below uses current UVM/process APIs
+and personality-owned state for the eventual compat_linux-style module.
 
 All 112 reference groups were absent after cleanup, including 24 bounded
 watchdog groups; smoke and full guests halted cleanly. See Xiri lab/irix-sproc
 and docs/results/2026-11-01-irix-sproc-reference.md for raw records, limitations
-and the independent qualifier. Native implementation/matrices and the next
-original-inst retry remain pending.
+and the independent qualifier.
+
+
+### Bounded two-member sproc adapter
+
+irix_sproc.c implements syscall entries 129/131/132 and measured prctl options 2/6/13/14.
+A founder may create one single-LWP child with NOLIBC and optional SADDR,
+BLOCK and SFDS. Separate native vmspaces retain private PRDA/LOCAL mappings;
+fork temporarily shares other backing and restores both maps' original
+inheritance before user execution. Nonfixed mmap reserves an exact free
+peer range and extracts shared backing; failure rolls back owned mappings.
+SFDS uses native descriptor sharing. Other sharing flags remain unsupported.
+
+A group mutex/cv owns membership and pending parent release. Explicit unblock
+releases PR_BLOCK. Armed UNBLKONEXEC releases on successful exec or exit;
+failed exec retains membership and the arrangement. Each member retains its
+old vmspace until its emulation exec/exit hook. Departures clear incoming
+target pointers and remove owned automatic stacks from surviving maps.
+Explicit user stacks are not removed. The founder may repeat after child
+exit; native fork subsequently retains its original COW behavior.
+
+LOCAL intervals are coalesced and bounded to 32. Fixed replacements and partial
+unmaps prepare metadata before native mutation and commit only on success.
+Active pairs reject ordinary fork, nested creation, LOCAL/fixed mmap, munmap,
+mprotect, break, ELFMAP and PR_INIT_THREADS. Pthread-initialized and ptraced
+processes are rejected. Automatic stacks use the native soft limit, capped at
+64 MiB, without growth. Zero entry is explicitly EFAULT; the original reference
+only established a watchdog result. Procblk only releases an existing wait,
+not its general counting semaphore. Prctl targets are the caller/current peer.
+
+The adapter adds no core kernel hook; it uses existing emulation callbacks,
+fork and UVM APIs. It remains built in pending the compat_linux-style module.
+Full multi-member groups, parent-death races, caught-signal/restart behavior,
+resource-exhaustion fork failure injection and full-width register/FP state
+remain unqualified. See Xiri lab/irix-sproc and the native sproc report for
+record layouts, native-policy guard tests, qualification and installer status.
+
+Native sproc qualification passes 340 executions, 600 records / 38,400 words and
+44 native/vendor controls across LP64 CI/ordinary and o32 CI. All 340 groups
+are absent after cleanup, including 40 measured unarmed-exit/exec watchdogs;
+all three guests halt cleanly. Extra native fixtures check rejected operations,
+LOCAL middle-page replacement, ordinary-fork COW and 12 alternating shared/
+nonshared child creations under a 192 MiB address-space ceiling with 16 MiB
+stacks. The original 128 MiB fixture ceiling was too small for LP64's 120 MiB
+reserved main stack; those early failures are retained as harness diagnostics.
+
+Original inst now creates its child, arms UNBLKONEXEC and execs native /bin/sh.
+Its next concrete failure is fcntl(F_DUPFD): selector 0 returns EINVAL for the
+requested fd4->stdout and fd6->stderr pipe duplications. The parent later
+repeats gettimeofday ENOSYS and reaches its 30-second watchdog. Helper searches
+for ls/mkdir also omit native /bin. Fix descriptor setup before interpreting
+that timeout as a time-only problem. Shared-home/native controls still pass;
+no distribution reading, package installation or catalog hook is qualified.
+See Xiri's 2026-11-01-irix-sproc and irix-installer-sproc reports.
+
+The unchanged shared-mmap regression suite also passes 1,180 mapping records,
+1,180 whole backing files and 44 controls on these kernels across LP64
+CI/ordinary and o32 CI. Both kernel builds and all final/diagnostic guests
+finish cleanly; the initial missing-declaration/dispatch build failure was
+corrected before qualification. Qualified source is f32cbf59a52; subsequent
+documentation commits do not change the pinned kernel artifacts.
