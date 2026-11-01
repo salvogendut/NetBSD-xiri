@@ -109,6 +109,7 @@
 #include <sys/uio.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
+#include <sys/vfs_syscalls.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
