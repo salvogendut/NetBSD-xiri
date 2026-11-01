@@ -959,5 +959,49 @@ Original inst now receives descriptor 1 and 2 from its F_DUPFD requests before
 native shell exec. Its dry run still reaches its bounded watchdog amid
 gettimeofday ENOSYS calls; helper searches continue to omit native /bin.
 Shared-home and native controls pass, but no distribution reading or package
-installation is qualified. The next cycle covers time/gettimeofday for the
-installer and xclock, whose earlier trace requires both calls.
+installation was qualified at that checkpoint. The time follow-up below
+addresses both calls required by the installer and original xclock.
+
+
+### Measured time and gettimeofday
+
+Traps 1013 and 1128 now use native microtime with explicit IRIX return/layout
+rules. Raw time consumes no arguments and returns signed32-bit seconds without
+writing a destination. This differs from the historical SVR4 pointer-taking
+adapter; the actual installed IRIX probe governs this implementation.
+Gettimeofday consumes one pointer and copies exactly two signed32-bit fields,
+seconds followed by microseconds. It returns zero, preserves V1, ignores a
+second argument and returns EFAULT for a null or inaccessible destination.
+Native copyout permits unaligned buffers and preserves the measured prefix
+when an eight-byte write crosses into an inaccessible page. The native LP64
+timeval layout is never copied directly to the foreign application.
+
+Both direct and indirect forms share the handlers. No native clock-setting
+behavior or core hook changes. Deployment remains built in pending the
+planned compat_linux-style module. Only current positive signed32-bit dates
+are qualified; pre-epoch dates, 2038 overflow, clock adjustment and timezone/DST
+remain unqualified.
+
+Source 76de548ab644cb471f4c5b97ec89671c1d385c5b builds cleanly for LP64 and o32.
+The companion lab/irix-time records 192 original IRIX executions and checks
+480 native records with 44 native/vendor controls across LP64 CI/ordinary and
+o32 CI. Checks include independent guest-date bounds, ordering, microseconds,
+progression after sleep, exact returns, identities, guarded writes, partial
+faults, read-only memory and ignored arguments. Native time/select and prior
+native/vendor execution controls pass before and after. Twelve corrupted
+records are rejected; all case groups are absent and guests halt cleanly.
+
+Original xclock now displays current UTC time and advances. The companion
+report retains analog/digital update and Expose captures under both identities
+and execution modes, native controls and before/after PNGs. Interactive clocks
+use an intentional bounded watchdog; this does not qualify natural app exit,
+longer sessions or a combined desktop session.
+
+The unchanged installer dry run receives three successful time calls and
+54 successful gettimeofday calls, but still reaches its 30-second watchdog.
+Its child still duplicates stdout/stderr and executes native /bin/sh; helper
+searches omit /bin for ls/mkdir. Next capture helper arguments/output and
+qualify paths and parent output/completion handling. Signal registration,
+hardware/system information, umask and creat remain observed gaps. No
+package distribution read or installation is qualified. See Xiri's
+2026-11-01-irix-time and irix-installer-time reports for complete evidence.
