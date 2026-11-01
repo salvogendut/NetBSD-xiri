@@ -1688,6 +1688,9 @@ lwp_userret(struct lwp *l)
 	KASSERT(l->l_stat == LSONPROC);
 	p = l->l_proc;
 
+	if (p->p_emul->e_sigmask != NULL)
+		(*p->p_emul->e_sigmask)(l);
+
 	for (;;) {
 		/*
 		 * This is the main location that user preemptions are

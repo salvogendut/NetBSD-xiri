@@ -87,6 +87,7 @@
 #include <sys/filio.h>
 #include <sys/kauth.h>
 #include <sys/ktrace.h>
+#include <sys/kmem.h>
 #include <sys/mbuf.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
@@ -146,6 +147,15 @@ irix_pointer(uint32_t value)
 
 #define IRIX_PRDA_ADDRESS 0x00200000U
 #define IRIX_PRDA_SYS_OFFSET 0xe00U
+#define IRIX_PRDA_FLAGS (IRIX_PRDA_ADDRESS + 0xe6cU)
+#define IRIX_PRDA_HOLD (IRIX_PRDA_ADDRESS + 0xe70U)
+
+struct irix_process {
+	bool threads;
+	bool reset_hold;
+};
+
+static void irix_prda_sigmask(struct lwp *);
 
 static void
 irix_o32_child_return(void *arg)
@@ -158,6 +168,18 @@ irix_o32_child_return(void *arg)
 	if (copyout(&pid, irix_pointer(IRIX_PRDA_ADDRESS +
 	    IRIX_PRDA_SYS_OFFSET), sizeof(pid)) != 0)
 		sigexit(l, SIGSEGV);
+	struct irix_process *ip = l->l_proc->p_emuldata;
+	if (ip->reset_hold) {
+		uint32_t flags;
+		if (copyin(irix_pointer(IRIX_PRDA_FLAGS), &flags,
+		    sizeof(flags)) != 0)
+			sigexit(l, SIGSEGV);
+		flags &= ~1U;
+		if (copyout(&flags, irix_pointer(IRIX_PRDA_FLAGS),
+		    sizeof(flags)) != 0)
+			sigexit(l, SIGSEGV);
+		ip->reset_hold = false;
+	}
 	child_return(arg);
 }
 
@@ -172,6 +194,8 @@ irix_o32_fork(struct lwp *l, const void *args, register_t *rval)
 	vm_map_lock_read(map);
 	writable = uvm_map_checkprot(map,
 	    IRIX_PRDA_ADDRESS + IRIX_PRDA_SYS_OFFSET,
+	    ((struct irix_process *)l->l_proc->p_emuldata)->threads ?
+	    IRIX_PRDA_FLAGS + sizeof(uint32_t) :
 	    IRIX_PRDA_ADDRESS + IRIX_PRDA_SYS_OFFSET + sizeof(uint32_t),
 	    VM_PROT_WRITE);
 	vm_map_unlock_read(map);
@@ -1756,6 +1780,144 @@ static const uint8_t irix_signal_map[32] = {
 	SIGTSTP, SIGCONT, SIGTTIN, SIGTTOU, SIGVTALRM, SIGPROF, SIGXCPU, SIGXFSZ,
 };
 
+/* The initial pthread has one native LWP. PRDA signal holds become active
+ * only after PR_INIT_THREADS, independently of the user-writable flag word.
+ * Thread creation, scheduling and realtime signal delivery are separate work. */
+static uint32_t
+irix_mask_word(const sigset_t *mask)
+{
+	uint32_t word = 0;
+
+	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
+		if (sigismember(mask, irix_signal_map[i]))
+			word |= 1U << (i - 1);
+	return word;
+}
+
+static void
+irix_prda_sigmask(struct lwp *l)
+{
+	struct proc *p = l->l_proc;
+	struct irix_process *ip = p->p_emuldata;
+	uint32_t hold[2];
+	sigset_t mask;
+
+	if (ip == NULL || !ip->threads)
+		return;
+	/* Like the existing PRDA fork policy, a damaged reserved mapping is
+	 * not repaired behind UVM's protection checks. No user address is
+	 * retained or dereferenced directly by the kernel. */
+	if (copyin(irix_pointer(IRIX_PRDA_HOLD), hold, sizeof(hold)) != 0)
+		sigexit(l, SIGSEGV);
+	mutex_enter(p->p_lock);
+	mask = l->l_sigmask;
+	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++) {
+		if (hold[1] & (1U << (i - 1)))
+			sigaddset(&mask, irix_signal_map[i]);
+		else
+			sigdelset(&mask, irix_signal_map[i]);
+	}
+	/* Keep unmapped native signals, and let native signal policy strip
+	 * SIGKILL/SIGSTOP. Only the measured traditional signals are mapped. */
+	(void)sigprocmask1(l, SIG_SETMASK, &mask, NULL);
+	mutex_exit(p->p_lock);
+}
+
+static int
+irix_prda_maskout(struct lwp *l)
+{
+	struct proc *p = l->l_proc;
+	struct irix_process *ip = p->p_emuldata;
+	uint32_t hold[2] = { 0, 0 };
+
+	if (!ip->threads)
+		return 0;
+	mutex_enter(p->p_lock);
+	hold[1] = irix_mask_word(&l->l_sigmask);
+	mutex_exit(p->p_lock);
+	return copyout(hold, irix_pointer(IRIX_PRDA_HOLD), sizeof(hold));
+}
+
+struct irix_prctl_args {
+	syscallarg(uint32_t) option;
+};
+
+static int
+irix_prctl(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_prctl_args *uap = args;
+	struct proc *p = l->l_proc;
+	struct irix_process *ip = p->p_emuldata;
+	uint32_t flags, hold[2] = { 0, 0 };
+	int error;
+
+	if (SCARG(uap, option) != 20) /* PR_INIT_THREADS */
+		return ENOSYS;
+	if (ip->threads) {
+		*rval = 0;
+		return 0;
+	}
+	if (p->p_nlwps != 1 || p->p_vmspace->vm_refcnt != 1)
+		return EOPNOTSUPP;
+	if ((error = copyin(irix_pointer(IRIX_PRDA_FLAGS), &flags,
+	    sizeof(flags))) != 0)
+		return error;
+	mutex_enter(p->p_lock);
+	hold[1] = irix_mask_word(&l->l_sigmask);
+	mutex_exit(p->p_lock);
+	/* Both ABIs on the reference use a big-endian 64-bit kernel hold:
+	 * the traditional signals occupy the second explicit 32-bit word.
+	 * Publish the valid bit last and preserve unrelated PRDA contents. */
+	if ((error = copyout(hold, irix_pointer(IRIX_PRDA_HOLD),
+	    sizeof(hold))) != 0)
+		return error;
+	flags |= 1U;
+	if ((error = copyout(&flags, irix_pointer(IRIX_PRDA_FLAGS),
+	    sizeof(flags))) != 0)
+		return error;
+	ip->threads = true;
+	*rval = 0;
+	return 0;
+}
+
+static void
+irix_proc_exec(struct proc *p, struct exec_package *epp)
+{
+	struct irix_process *ip = p->p_emuldata;
+
+	if (ip == NULL)
+		p->p_emuldata = kmem_zalloc(sizeof(*ip), KM_SLEEP);
+	else
+		memset(ip, 0, sizeof(*ip));
+}
+
+static void
+irix_proc_fork(struct proc *child, struct lwp *parent, int flags)
+{
+	const struct irix_process *old = parent->l_proc->p_emuldata;
+	struct irix_process *ip = kmem_zalloc(sizeof(*ip), KM_SLEEP);
+
+	ip->reset_hold = old->threads;
+	child->p_emuldata = ip;
+}
+
+static void
+irix_proc_exit(struct proc *p)
+{
+	struct irix_process *ip = p->p_emuldata;
+
+	p->p_emuldata = NULL;
+	kmem_free(ip, sizeof(*ip));
+}
+
+static void
+irix_trapsignal(struct lwp *l, ksiginfo_t *ksi)
+{
+
+	irix_prda_sigmask(l);
+	trapsignal(l, ksi);
+}
+
 struct irix_sigprocmask_args {
 	syscallarg(int32_t) how;
 	syscallarg(uint32_t) set;
@@ -1798,6 +1960,9 @@ irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
 	    &old);
 	mutex_exit(p->p_lock);
 	if (error != 0)
+		return error;
+	if (SCARG(uap, set) != 0 &&
+	    (error = irix_prda_maskout(l)) != 0)
 		return error;
 	if (SCARG(uap, oldset) != 0) {
 		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
@@ -2205,6 +2370,11 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_waitsys,
 	},
+	[130] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_prctl_args),
+		.sy_call = irix_prctl,
+	},
 	[134] = {
 		.sy_narg = 6,
 		.sy_argsize = sizeof(struct irix_o32_mmap_args),
@@ -2231,7 +2401,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [59] = "execve", [63] = "ulimit",
 	[15] = "chmod", [16] = "chown",
-	[75] = "getrlimit64", [148] = "getrlimit",
+	[75] = "getrlimit64", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
@@ -2273,6 +2443,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 		    (uint32_t)reg->r_regs[_R_A3]);
 		ktr_kuser("irix_o32", record, len);
 	}
+	irix_prda_sigmask(l);
 	curcpu()->ci_data.cpu_nsyscall++;
 	reg->r_regs[_R_PC] = (cause & MIPS_CR_BR_DELAY) ?
 	    mips_emul_branch(tf, pc, 0, false) : pc + sizeof(uint32_t);
@@ -2313,6 +2484,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1106: code = 106; break;
 	case 1107: code = 107; break;
 	case 1108: code = 108; break;
+	case 1130: code = 130; break;
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
@@ -2417,8 +2589,12 @@ static struct emul emul_irix_o32 = {
 	.e_nomodbits = irix_o32_nomodbits,
 	.e_syscallnames = irix_o32_syscallnames,
 	.e_sendsig = irix_o32_sendsig,
-	.e_trapsignal = trapsignal,
+	.e_trapsignal = irix_trapsignal,
 	.e_setregs = irix_o32_setregs,
+	.e_proc_exec = irix_proc_exec,
+	.e_proc_fork = irix_proc_fork,
+	.e_proc_exit = irix_proc_exit,
+	.e_sigmask = irix_prda_sigmask,
 	.e_syscall_intern = irix_o32_syscall_intern,
 #ifdef _LP64
 	.e_vm_default_addr = netbsd32_vm_default_addr,

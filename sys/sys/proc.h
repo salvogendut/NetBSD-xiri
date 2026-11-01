@@ -200,6 +200,10 @@ struct emul {
 	/* Emulation specific support for ktracing signal posts */
 	void		(*e_ktrpsig)(int, sig_t, const sigset_t *,
 			    const struct ksiginfo *);
+
+	/* Refresh an emulation-managed mask before pending-signal delivery.
+	 * Called in the current LWP context without process/LWP locks held. */
+	void		(*e_sigmask)(struct lwp *);
 };
 
 /*
