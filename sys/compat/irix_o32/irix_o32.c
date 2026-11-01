@@ -2274,6 +2274,9 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_dup_args),
 		.sy_call = (sy_call_t *)sys_dup,
 	},
+	/* IRIX pipe has no kernel arguments and returns both fds in v0/v1.
+	 * Native allocation owns limits, rollback and descriptor lifetime. */
+	[42] = { .sy_call = sys_pipe },
 	[59] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_execve_args),
@@ -2436,7 +2439,7 @@ static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
-	[33] = "access", [41] = "dup", [59] = "execve", [63] = "ulimit",
+	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
 	[15] = "chmod", [16] = "chown",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
@@ -2503,6 +2506,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1033: code = 33; break;
 	case 1040: code = 40; break;
 	case 1041: code = 41; break;
+	case 1042: code = 42; break;
 	case 1047: code = 47; break;
 	case 1054: code = 54; break;
 	case 1056: code = 56; break;
