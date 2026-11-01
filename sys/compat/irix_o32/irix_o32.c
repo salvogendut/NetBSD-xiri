@@ -1863,6 +1863,71 @@ irix_ulimit(struct lwp *l, const void *args, register_t *rval)
 	return 0;
 }
 
+/* IRIX n32 keeps 32-bit pointers but uses 64-bit rlim_t even for the
+ * ordinary getrlimit entry. o32 selects that layout with getrlimit64. */
+struct irix_getrlimit_args {
+	syscallarg(int32_t) resource;
+	syscallarg(uint32_t) limits;
+};
+
+static int
+irix_getrlimit_common(struct lwp *l, const void *args, register_t *rval,
+    bool wide)
+{
+	const struct irix_getrlimit_args *uap = args;
+	static const int native_resources[] = {
+		RLIMIT_CPU, RLIMIT_FSIZE, RLIMIT_DATA, RLIMIT_STACK,
+		RLIMIT_CORE, RLIMIT_NOFILE, RLIMIT_AS, RLIMIT_RSS,
+		RLIMIT_NTHR
+	};
+	struct proc *p = l->l_proc;
+	const int resource = SCARG(uap, resource);
+	struct rlimit limit;
+	int error;
+
+	/* Validate the selector before touching user storage, including the
+	 * invalid-selector/NULL combination measured on original IRIX. */
+	if ((unsigned)resource >= __arraycount(native_resources))
+		return EINVAL;
+	mutex_enter(p->p_lock);
+	limit = p->p_rlimit[native_resources[resource]];
+	mutex_exit(p->p_lock);
+
+	wide = wide || p->p_md.md_abi == _MIPS_BSD_API_N32;
+	if (wide) {
+		const uint64_t values[2] = {
+			MIN(limit.rlim_cur, INT64_MAX),
+			MIN(limit.rlim_max, INT64_MAX)
+		};
+		error = copyout(values, irix_pointer(SCARG(uap, limits)),
+		    sizeof(values));
+	} else {
+		const uint32_t values[2] = {
+			MIN(limit.rlim_cur, INT32_MAX),
+			MIN(limit.rlim_max, INT32_MAX)
+		};
+		error = copyout(values, irix_pointer(SCARG(uap, limits)),
+		    sizeof(values));
+	}
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+static int
+irix_getrlimit(struct lwp *l, const void *args, register_t *rval)
+{
+
+	return irix_getrlimit_common(l, args, rval, false);
+}
+
+static int
+irix_getrlimit64(struct lwp *l, const void *args, register_t *rval)
+{
+
+	return irix_getrlimit_common(l, args, rval, true);
+}
+
 struct irix_waitsys_args {
 	syscallarg(int32_t) type;
 	syscallarg(int32_t) pid;
@@ -2030,6 +2095,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_fcntl_args),
 		.sy_call = irix_fcntl,
 	},
+	[75] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_getrlimit_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_getrlimit64,
+	},
 	[82] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_sginap_args),
@@ -2093,6 +2164,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_gethostname,
 	},
+	[148] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_getrlimit_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_getrlimit,
+	},
 	[158] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_xstat_args),
@@ -2143,6 +2220,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [59] = "execve", [63] = "ulimit",
 	[15] = "chmod", [16] = "chown",
+	[75] = "getrlimit64", [148] = "getrlimit",
 	[2] = "fork", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
@@ -2212,6 +2290,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1059: code = 59; break;
 	case 1062: code = 62; break;
 	case 1063: code = 63; break;
+	case 1075: code = 75; break;
 	case 1082: code = 82; break;
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
@@ -2226,6 +2305,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
+	case 1148: code = 148; break;
 	case 1158: code = 158; break;
 	case 1160: code = 160; break;
 	case 1164: code = 164; break;
@@ -2436,6 +2516,9 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			return ENOEXEC;
 		switch (p->p_type) {
 		case PT_LOAD:
+			/* bgicons declares 4 KiB data alignment, although both
+			 * its address and offset satisfy the native page mask.
+			 * Keep that mask and all extent/protection checks. */
 			if (nload == 2 ||
 			    p->p_flags != (nload == 0 ? PF_R | PF_X : PF_R | PF_W) ||
 			    p->p_memsz == 0 || p->p_memsz > 16 * 1024 * 1024 ||
@@ -2445,7 +2528,8 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			    p->p_offset > INT32_MAX - p->p_filesz ||
 			    (p->p_vaddr & PAGE_MASK) != 0 ||
 			    (p->p_offset & PAGE_MASK) != 0 ||
-			    p->p_align < PAGE_SIZE || p->p_align > 1024 * 1024 ||
+			    p->p_align < (!interpreter && nload == 1 ? 4096 :
+			    PAGE_SIZE) || p->p_align > 1024 * 1024 ||
 			    !powerof2(p->p_align) ||
 			    p->p_vaddr % p->p_align != p->p_offset % p->p_align)
 				return ENOEXEC;
