@@ -902,19 +902,44 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_mmap_args * const uap = args;
 	struct sys_mmap_args native = { 0 };
+	const int flags = SCARG(uap, flags);
 
-	/* Private non-fixed mappings only. In IRIX, 0x1000 is NOT MAP_ANON. */
+	/* IRIX PRIVATE=0x2, FIXED=0x10, LOCAL=0x80. No other foreign
+	 * flags reach the native call: in particular 0x1000 is NOT MAP_ANON. */
 	if (SCARG(uap, addr) >= IRIX_MAXUSER_ADDRESS ||
 	    SCARG(uap, len) == 0 ||
 	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
-	    SCARG(uap, flags) != 0x2 || SCARG(uap, pos) < 0 ||
+	    (flags & ~0x92) != 0 || (flags & 0x2) == 0 ||
+	    SCARG(uap, pos) < 0 ||
 	    (SCARG(uap, pos) & PAGE_MASK) != 0)
 		return EINVAL;
-	/* Native non-fixed hints may fall back but never replace mappings. */
+	if ((flags & 0x10) != 0) {
+		const uint64_t size = ((uint64_t)SCARG(uap, len) +
+		    PAGE_MASK) & ~(uint64_t)PAGE_MASK;
+		if ((SCARG(uap, addr) & PAGE_MASK) != 0)
+			return EINVAL;
+		if (size > IRIX_MAXUSER_ADDRESS - SCARG(uap, addr))
+			return ENOMEM;
+	}
+	if ((flags & 0x80) != 0) {
+		struct proc *p = l->l_proc;
+		bool single;
+		/* LOCAL isolates mappings from sproc share-group members.
+		 * This personality cannot create such members or LWPs. Do not
+		 * silently drop that property if a shared vmspace is added. */
+		mutex_enter(p->p_lock);
+		single = p->p_nlwps == 1 && p->p_vmspace->vm_refcnt == 1;
+		mutex_exit(p->p_lock);
+		if (!single)
+			return EOPNOTSUPP;
+	}
+	/* Native mmap owns descriptor/protection checks, page rounding and
+	 * fixed replacement. Non-fixed hints retain their fallback behavior. */
 	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
 	SCARG(&native, len) = SCARG(uap, len);
 	SCARG(&native, prot) = SCARG(uap, prot);
-	SCARG(&native, flags) = MAP_PRIVATE;
+	SCARG(&native, flags) = MAP_PRIVATE |
+	    ((flags & 0x10) != 0 ? MAP_FIXED : 0);
 	SCARG(&native, fd) = SCARG(uap, fd);
 	SCARG(&native, pos) = SCARG(uap, pos); /* signed 32-bit to native off_t */
 	return sys_mmap(l, &native, rval);
