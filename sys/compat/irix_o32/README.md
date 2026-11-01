@@ -911,8 +911,8 @@ nonshared child creations under a 192 MiB address-space ceiling with 16 MiB
 stacks. The original 128 MiB fixture ceiling was too small for LP64's 120 MiB
 reserved main stack; those early failures are retained as harness diagnostics.
 
-Original inst now creates its child, arms UNBLKONEXEC and execs native /bin/sh.
-Its next concrete failure is fcntl(F_DUPFD): selector 0 returns EINVAL for the
+At the sproc checkpoint, original inst creates its child, arms UNBLKONEXEC
+and execs native /bin/sh. Its next concrete failure there is fcntl(F_DUPFD): selector 0 returns EINVAL for the
 requested fd4->stdout and fd6->stderr pipe duplications. The parent later
 repeats gettimeofday ENOSYS and reaches its 30-second watchdog. Helper searches
 for ls/mkdir also omit native /bin. Fix descriptor setup before interpreting
@@ -926,3 +926,38 @@ CI/ordinary and o32 CI. Both kernel builds and all final/diagnostic guests
 finish cleanly; the initial missing-declaration/dispatch build failure was
 corrected before qualification. Qualified source is f32cbf59a52; subsequent
 documentation commits do not change the pinned kernel artifacts.
+
+
+### Measured F_DUPFD
+
+The fcntl adapter now explicitly maps IRIX selector 0 to native F_DUPFD,
+converts its lower bound from signed 32 bits and preserves the newly allocated
+descriptor return. It does not pass arbitrary foreign commands into native
+fcntl or normalize this success to zero like the flag-setting cases.
+Native descriptor allocation owns the source reference, bounds, publication
+and clearing of the new close-on-exec/fork flags. No core hook is added.
+
+Xiri lab/irix-dupfd measures 168 original IRIX records and matches all 64 words
+of 420 native records across LP64 CI/ordinary and o32 CI, with 44 native/vendor
+controls. Both kernel builds pass at source 572dcb832cb. The tests cover lowest
+available descriptor selection, holes, signed/limit errors, source-error
+precedence, exhaustion and exact slot recovery, independent descriptor flags,
+shared offsets/status, lifetime after close and close-on-exec behavior.
+The installer's closed stdout/stderr pipe-writer pattern passes for both ABIs,
+dispatch forms and identities. Native controls additionally check native
+close-on-fork flag handling and forked pipe output. All native case groups
+are absent after cleanup; reference and native guests halt cleanly.
+
+This adds only F_DUPFD, not broad fcntl support, new foreign close-on-fork
+semantics, system-wide resource-pressure guarantees or concurrent descriptor
+stress. Deployment remains built in pending the compat_linux-style module.
+See Xiri docs/results/2026-11-01-irix-dupfd.md for the pinned fixtures,
+independent qualifier, regressions and installer follow-up.
+
+The unchanged pipe regressions pass another 220 records and 44 controls.
+Original inst now receives descriptor 1 and 2 from its F_DUPFD requests before
+native shell exec. Its dry run still reaches its bounded watchdog amid
+gettimeofday ENOSYS calls; helper searches continue to omit native /bin.
+Shared-home and native controls pass, but no distribution reading or package
+installation is qualified. The next cycle covers time/gettimeofday for the
+installer and xclock, whose earlier trace requires both calls.
