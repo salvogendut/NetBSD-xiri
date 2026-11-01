@@ -641,3 +641,48 @@ Original bgicons, fm and Icon Catalog now pass table allocation and its
 following fixed mapping. Their next observed failure is trap 1130,
 prctl(PR_INIT_THREADS=20), returning IRIX ENOSYS before libpthread's
 INIT_THREADS panic. General pthread initialization and creation remain open.
+
+
+### Measured first-pthread initialization
+
+PR_INIT_THREADS (prctl option20) now initializes the measured PRDA signal hold
+for one native LWP and an unshared vmspace. It copies the effective traditional
+signal mask to the second word at 0x200e70 and ORs bit0 at 0x200e6c, preserving
+other PRDA data and flags. Per-process emulation data activates the hold;
+forging or clearing its user validity bit does not change that kernel state.
+Repeated initialization succeeds without resetting the hold. Fork inherits the
+effective mask and user bytes but starts the child uninitialized with its
+validity bit clear and its own PID. Exec resets the foreign state; native exec
+removes the PRDA mapping and frees emulation data.
+
+The adapter imports user holds before foreign syscalls, traps and pending
+signal delivery, and exports the mask after supported sigprocmask changes.
+The new optional emul.e_sigmask callback runs from lwp_userret in current-LWP
+context, without process/LWP locks held. It handles direct PRDA writes followed
+by asynchronous delivery without another syscall. Native-only mask bits are
+preserved; native signal machinery keeps SIGKILL/SIGSTOP unmaskable. This
+callback is another core dependency to resolve for the desired compat_linux-
+style loadable module, alongside the existing select helper.
+
+Code revision a9e715bb082a755881799234dfdb54abca5a04c1 passes 260 native
+executions / 860 records against 104 original-IRIX executions / 344 records,
+32 asynchronous-signal controls, 12 initialized foreign-to-native exec
+controls, and the retained native/vendor/cleanup, page-zero and damaged-PRDA
+checks. LP64 CI/ordinary and o32 CI kernels are covered. The additional native
+exec checks verify inherited SIGUSR1/SIGINFO/SIGRTMIN holds, PRDA removal and
+native fork/wait. See Xiri lab/irix-init-threads and its 2026-11-01 reports.
+
+Traditional foreign signals1..31 are the supported mapping. Thread creation,
+realtime delivery, foreign handlers and general pthread semantics remain open.
+PR_GETNSHARE/PR_GETSHMASK remain ENOSYS. NetBSD's PRDA protection policy is
+explicit: initialization on read-only/inaccessible memory returns EFAULT even
+where IRIX succeeds; the kernel does not bypass UVM protections. An unreadable
+active hold terminates with SIGSEGV.
+
+Original bgicons, fm and Icon Catalog now pass initialization and reach
+session-directory setup. mkdir returns ENOSYS; Icon Catalog displays a fatal
+Desktop session-directory dialog. fm also encounters waitsys(options=3)
+returning EINVAL. No additional image assets were staged. The CI desktop
+retains 4Dwm interaction and typed winterm shell execution; an ordinary run
+retains a failed terminal geometry check. These are bounded observations, not
+full desktop or startup-repeatability qualification.
