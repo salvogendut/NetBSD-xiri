@@ -831,3 +831,41 @@ creat also remain observed gaps. Exit zero accompanies the fatal dry-run
 message and must not be treated as installation success. Native shared-home
 checks still pass with /usr/people/xiritest and original root HOME=/.
 See Xiri's 2026-11-01-irix-mmap-shared and irix-installer-shared reports.
+
+
+### Original sproc reference (implementation pending)
+
+Xiri's 2026-11-01-irix-sproc-reference checkpoint checks 112 executions and
+200 records on original IRIX 6.5.22m, covering o32/n32, direct/indirect traps,
+and root/UID1234. NetBSD trap1129 still returns ENOSYS; no kernel code is
+changed by this measurement cycle, and the installer has not advanced.
+
+With PR_SADDR|PR_BLOCK|PR_NOLIBC, explicit procblk unblock releases the parent.
+PR_UNBLKONEXEC releases it on successful exec OR child exit; failed exec
+leaves it blocked. Without that arrangement, child exit or successful exec
+alone does not release it. Child data and parent-stack writes are visible
+with SADDR, as is a newly created mapping after child exit. PRDA user storage
+and a preexisting LOCAL mapping remain private copies. Descriptors remain
+independent unless SFDS is requested. GETNSHARE is zero before creation, two
+in the child, one in the surviving parent, and zero after child exec.
+
+Raw child entry preserves the measured low words of s0-s3, passes the argument
+in a0, clears a1-a3/v0/ra and sets v1=1. An explicit sprocsp stack enters at
+its top minus 64 bytes; a1 is still zero at this raw boundary. A null-stack
+4096-byte request returns EINVAL. The zero-entry watchdog case establishes
+cleanup only, not an errno or signal. Full register-width and FP state,
+signals, nested groups, parent death and broader map operations remain open.
+
+Implementation needs explicit share-group/LOCAL range ownership, map-update
+coordination and the measured exec/exit release distinction. Existing LWP /
+vmspace-reference guards alone will not detect separate vmspaces sharing
+backing objects. Neither a fork alias nor plain FORK_SHAREVM preserves these
+semantics. Prefer current UVM/process interfaces and personality-owned state
+for the eventual compat_linux-style module; do not copy the historical
+adapter's obsolete VM API or documented procblk locking problems.
+
+All 112 reference groups were absent after cleanup, including 24 bounded
+watchdog groups; smoke and full guests halted cleanly. See Xiri lab/irix-sproc
+and docs/results/2026-11-01-irix-sproc-reference.md for raw records, limitations
+and the independent qualifier. Native implementation/matrices and the next
+original-inst retry remain pending.
