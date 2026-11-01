@@ -2603,10 +2603,14 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 
 	if (error != 0)
 		return error;
+	/* Original IRIX libGL explicitly maps its dispatch area at the page
+	 * containing 0x1000 (zero on 8 KiB machines). Permit that range only
+	 * after accepting an IRIX image. Native exec still uses its normal
+	 * exec_vm_minaddr guard; no global user_va0_disable change is needed. */
+	epp->ep_vm_minaddr = VM_MIN_ADDRESS;
 #ifdef _LP64
 	/* Only package state here; setregs commits the selected process ABI. */
 	epp->ep_flags |= EXEC_32;
-	epp->ep_vm_minaddr = exec_vm_minaddr(VM_MIN_ADDRESS);
 	epp->ep_vm_maxaddr = USRSTACK32;
 #endif
 	return 0;
