@@ -1902,9 +1902,13 @@ irix_getrlimit_common(struct lwp *l, const void *args, register_t *rval,
 		error = copyout(values, irix_pointer(SCARG(uap, limits)),
 		    sizeof(values));
 	} else {
+		/* Original o32 distinguishes infinity from a finite limit
+		 * too large for the 32-bit field (UINT32_MAX). */
 		const uint32_t values[2] = {
-			MIN(limit.rlim_cur, INT32_MAX),
-			MIN(limit.rlim_max, INT32_MAX)
+			limit.rlim_cur == RLIM_INFINITY ? INT32_MAX :
+			    MIN(limit.rlim_cur, UINT32_MAX),
+			limit.rlim_max == RLIM_INFINITY ? INT32_MAX :
+			    MIN(limit.rlim_max, UINT32_MAX)
 		};
 		error = copyout(values, irix_pointer(SCARG(uap, limits)),
 		    sizeof(values));
