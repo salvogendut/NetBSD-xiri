@@ -884,6 +884,43 @@ irix_fxstat(struct lwp *l, const void *args, register_t *rval)
 	    SCARG(uap, buf), rval);
 }
 
+/* The measured raw IRIX time trap has no arguments. The libc wrapper,
+ * not the kernel, handles the optional time_t destination. */
+static int
+irix_time(struct lwp *l, const void *args, register_t *rval)
+{
+	struct timeval now;
+
+	microtime(&now);
+	*rval = (int32_t)now.tv_sec;
+	return 0;
+}
+
+struct irix_gettimeofday_args {
+	syscallarg(uint32_t) tv;
+};
+
+static int
+irix_gettimeofday(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_gettimeofday_args *uap = args;
+	struct timeval now;
+	struct { int32_t sec, usec; } tv;
+	int error;
+
+	CTASSERT(sizeof(tv) == 8);
+	microtime(&now);
+	tv.sec = (int32_t)now.tv_sec;
+	tv.usec = (int32_t)now.tv_usec;
+	/* One destination only, including EFAULT for NULL. Native copyout
+	 * permits unaligned buffers and preserves measured partial writes
+	 * when a destination crosses into an inaccessible page. */
+	error = copyout(&tv, irix_pointer(SCARG(uap, tv)), sizeof(tv));
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 /* Both supported IRIX ABIs use 32-bit fd-mask words and timeval fields. */
 struct irix_select_args {
 	syscallarg(int32_t) nd;
@@ -2305,6 +2342,7 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_close_args),
 		.sy_call = (sy_call_t *)sys_close,
 	},
+	[13] = { .sy_call = irix_time },
 	[17] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_o32_break_args),
@@ -2478,6 +2516,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_waitsys,
 	},
+	[128] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_gettimeofday_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_gettimeofday,
+	},
 	[129] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_sproc_args),
@@ -2525,7 +2569,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
-	[15] = "chmod", [16] = "chown",
+	[13] = "time", [15] = "chmod", [16] = "chown", [128] = "gettimeofday",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
@@ -2583,6 +2627,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1013: code = 13; break;
 	case 1015: code = 15; break;
 	case 1016: code = 16; break;
 	case 1017: code = 17; break;
@@ -2611,6 +2656,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1106: code = 106; break;
 	case 1107: code = 107; break;
 	case 1108: code = 108; break;
+	case 1128: code = 128; break;
 	case 1129: code = 129; break;
 	case 1130: code = 130; break;
 	case 1131: code = 131; break;
