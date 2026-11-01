@@ -567,3 +567,46 @@ The original resources must be readable, and SG_manageSession/SG_autoSave
 are explicitly disabled. Saved-state file operations, the unexpected Trusted
 Path panel, startup repeatability and complete desktop services remain open.
 See Xiri's 2026-11-01 4Dwm report, including retained failed startup attempts.
+
+### Measured resource-limit queries and executable data alignment
+
+Trap 1148 (`getrlimit`) and 1075 (`getrlimit64`) translate IRIX selectors
+0 through 8 to native CPU, FSIZE, DATA, STACK, CORE, NOFILE, AS, RSS and NTHR
+limits. The selector is validated before user storage is touched. Invalid
+selectors return EINVAL; invalid or read-only output storage returns EFAULT.
+Unaligned writable storage is accepted. The native process limits are read
+under the process lock and copied through explicit fixed-width arrays.
+
+The original IRIX measurements establish an ABI-dependent layout: ordinary
+o32 getrlimit returns two 32-bit fields, while n32 getrlimit and either ABI's
+getrlimit64 return two 64-bit fields. Infinity is 0x7fffffff or
+0x7fffffffffffffff respectively. Finite o32 values above INT32_MAX remain
+unsigned values; those above UINT32_MAX saturate to UINT32_MAX, distinct from
+infinity. Soft and hard fields are converted independently. Fork and exec use
+the existing native limit inheritance; no new emulation-private limit state
+is introduced.
+
+PTHREAD reports native NTHR policy, not a fixed successful placeholder. Its
+native accounting rules are not a claim of full IRIX thread equivalence.
+Foreign setrlimit calls, pthread creation and synchronization remain outside
+this query subset. Native controls set distinct soft/hard descriptor, thread
+and large file-size limits before foreign exec to verify actual translation.
+See Xiri's lab/irix-rlimit and paired original/NetBSD records.
+
+The bounded runtime executable validator additionally accepts a declared
+4 KiB alignment for its RW data segment, as used by original bgicons. Both
+virtual address and file offset must still satisfy the native page mask.
+Text and interpreter minimum alignment, size/protection/overlap checks,
+metadata validation and native VM mapping remain unchanged. Synthetic cases
+exercise initialized data and BSS, half-page rejection, invalid alignments,
+permissions and the previous loader matrix. This is separate from SGI_ELFMAP's
+existing subpage library support.
+
+The paired qualification passes 1,168 original-IRIX records, 4,760 NetBSD
+records across LP64 CI/ordinary and o32 CI, 280 loader executions and 24
+native/vendor controls. The application follow-up now executes bgicons and
+successfully queries PTHREAD in all four file/icon launches. The next observed
+failure is mmap with flags 0x102 (PRIVATE|AUTORESRV), returning EINVAL before
+libpthread's table-allocation panic. AUTORESRV and general pthread behavior
+remain unsupported; see Xiri's 2026-11-01 resource-limit and desktop-startup-fixes
+reports for the exact pins, trace evidence and interaction limitations.
