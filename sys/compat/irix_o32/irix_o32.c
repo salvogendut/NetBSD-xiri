@@ -617,11 +617,22 @@ static int
 irix_mkdir(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_mkdir_args *uap = args;
-	struct sys_mkdir_args native = { 0 };
+	char path[MAXPATHLEN];
+	size_t len;
+	int error;
 
-	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
-	SCARG(&native, mode) = SCARG(uap, mode);
-	return sys_mkdir(l, &native, rval);
+	/* IRIX returns EEXIST for a regular file followed by slashes.
+	 * Check the original length before trimming, as for xstat/access. */
+	error = copyinstr(irix_pointer(SCARG(uap, path)), path,
+	    sizeof(path), &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	error = do_sys_mkdir(path, SCARG(uap, mode), UIO_SYSSPACE);
+	if (error == 0)
+		*rval = 0;
+	return error;
 }
 
 struct irix_chmod_args {
