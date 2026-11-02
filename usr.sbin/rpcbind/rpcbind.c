@@ -288,6 +288,8 @@ init_transport(struct netconfig *nconf)
 	int aicode;
 	int addrlen;
 	int nhostsbak;
+	int i;
+	const char *loopback;
 	int bound;
 	u_int32_t host_addr[4];  /* IPv4 or IPv6 */
 	struct sockaddr *sa;
@@ -371,15 +373,23 @@ init_transport(struct netconfig *nconf)
 			syslog(LOG_ERR, "Can't grow hosts array");
 			return 1;
 		}
-		if (nhostsbak == 1)
+		if (nhosts == 0)
 			hosts[0] = __UNCONST("*");
 		else {
-			if (hints.ai_family == AF_INET) {
-				hosts[nhostsbak - 1] = __UNCONST("127.0.0.1");
-			} else if (hints.ai_family == AF_INET6) {
-				hosts[nhostsbak - 1] = __UNCONST("::1");
-			} else
+			if (hints.ai_family == AF_INET)
+				loopback = "127.0.0.1";
+			else if (hints.ai_family == AF_INET6)
+				loopback = "::1";
+			else
 				return 1;
+			/* Do not add a loopback address already specified by -h. */
+			for (i = 0; i < nhosts; i++)
+				if (strcmp(hosts[i], loopback) == 0)
+					break;
+			if (i == nhosts)
+				hosts[nhosts] = __UNCONST(loopback);
+			else
+				nhostsbak = nhosts;
 		}
 
 		/*
