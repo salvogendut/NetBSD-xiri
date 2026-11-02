@@ -901,8 +901,8 @@ irix_readlink(struct lwp *l, const void *args, register_t *rval)
 	struct vnode *vp;
 	struct iovec iov;
 	struct uio uio;
-	char path[MAXPATHLEN];
-	size_t len, count;
+	char path[MAXPATHLEN], *target;
+	size_t len, count, allocated;
 	int error;
 
 	/* Preserve IRIX's pathname ordering and trailing-slash treatment. */
@@ -930,18 +930,31 @@ irix_readlink(struct lwp *l, const void *args, register_t *rval)
 		goto out;
 	/* The observed signed negative count behaves like zero capacity. */
 	count = SCARG(uap, count) > 0 ? SCARG(uap, count) : 0;
-	iov.iov_base = irix_pointer(SCARG(uap, buf));
+	if (count == 0) {
+		*rval = 0;
+		goto out;
+	}
+	count = MIN(count, MAXPATHLEN);
+	allocated = count;
+	target = kmem_alloc(allocated, KM_SLEEP);
+	iov.iov_base = target;
 	iov.iov_len = count;
 	memset(&uio, 0, sizeof(uio));
 	uio.uio_iov = &iov;
 	uio.uio_iovcnt = 1;
 	uio.uio_rw = UIO_READ;
-	uio.uio_vmspace = l->l_proc->p_vmspace;
+	UIO_SETUP_SYSSPACE(&uio);
 	uio.uio_resid = count;
-	/* Native uiomove preserves a copied prefix on a later EFAULT. */
+	/* Some native fast-symlink implementations discard uiomove errors.
+	 * Read into kernel memory, then own the fault-reporting user copy. */
 	error = VOP_READLINK(vp, &uio, l->l_cred);
-	if (error == 0)
-		*rval = count - uio.uio_resid;
+	if (error == 0) {
+		count -= uio.uio_resid;
+		error = copyout(target, irix_pointer(SCARG(uap, buf)), count);
+		if (error == 0)
+			*rval = count;
+	}
+	kmem_free(target, allocated);
 out:
 	vput(vp);
 	return error;

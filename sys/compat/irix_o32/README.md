@@ -1066,7 +1066,7 @@ The desktop follow-up adds raw 1087 `poll` and raw 1081/1205/1207/1208
 IRIX probes cover both ABIs, direct/indirect traps and root/UID 1234.
 
 Directory conversion uses native vnode credentials, native inode numbers and
-filesystem cookies, with explicit 12/16-byte-aligned o32 record sizes (4-byte
+filesystem cookies, with explicit o32 record sizes (4-byte
 alignment) or 24/32-byte n32/64 record sizes (8-byte alignment). n32 selects the
 64-bit format even through the older syscall numbers. Small buffers preserve
 the next unreturned entry. ngetdents writes its required EOF pointer after
@@ -1084,3 +1084,8 @@ socket readiness supports the desktop's RPC port-mapper exchange. Native
 pipe readiness differs from IRIX: the read end does not report POLLOUT, and
 POLLHUP does not add unrequested POLLRDNORM. These differences are explicit
 qualification limits, not claimed IRIX equivalence.
+
+The guarded readlink probes exposed native FFS fast-symlink reads discarding
+uiomove errors. The adapter reads into a bounded kernel buffer and performs
+its own user copyout so invalid output pointers report EFAULT and preserve
+any already copied prefix.
