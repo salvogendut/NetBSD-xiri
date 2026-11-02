@@ -1,6 +1,9 @@
 Newport decorated console: manual emulator/hardware regression
 =============================================================
 
+For implementation guidance and extending this to other framebuffer drivers,
+see README.decor-porting in this directory.
+
 Build the sgimips GENERIC32_IP2x kernel configuration (or include it in a
 local configuration).  Boot an Indy/IP24 or Indigo2/IP22 with Newport graphics
 and PROM console=g.  XZ/GR2 is a separate driver and is not decorated by this

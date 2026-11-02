@@ -1,0 +1,243 @@
+Porting console decoration to other framebuffer drivers
+======================================================
+
+This describes the Newport implementation merged into xiri in November 2026
+and a proposed approach for extending it.  Only Newport currently implements
+the decoration.  NEWPORT_DECOR is a driver option, not a generic wscons API.
+The feature is a live text console with a fixed background; text, erasure,
+scrolling, cursor movement, and virtual-screen restoration all participate.
+
+The default scheme is black at the top, Octane-style green (#008060) at the
+bottom, and white kernel messages.  GENERIC32_IP2x enables it for Newport;
+GENERIC64_IP2x and GENERIC64_32_IP2x inherit that setting.  Other framebuffer
+drivers in those kernels receive white kernel text but no gradient.
+
+All source paths below are relative to the repository root.  The companion
+tests/dev/wscons/README.newport-decor documents the manual regression suite
+and the emulator revisions actually tested.
+
+Reference implementation
+------------------------
+
+sys/arch/sgimips/gio/newport.c:
+
+    newport_setup_decor_cmap  Reserve gradient and inverse-cursor colours.
+    newport_fill_background  Paint a rectangle at absolute screen positions.
+    newport_fill_rectangle   Use colour-index drawing for decorated fills.
+    newport_putchar          Restore the cell background, then draw the glyph.
+    newport_erasecols        Restore backgrounds for partial-line erasure.
+    newport_eraserows        Restore rows and, on full clears, screen margins.
+    newport_init_screen     Enable decoration and vcons redraw-on-copy flags.
+    newport_attach          Paint the initial background and replay boot text.
+    newport_cursor          Invert pixels in place, preserving the background.
+    newport_setup_hw        Restore the appropriate palette for the mode.
+    newport_ioctl           Restore hardware and text on return to emulation.
+
+sys/arch/sgimips/gio/files.gio declares NEWPORT_DECOR in opt_newport.h.
+share/man/man4/man4.sgimips/newport.4 describes its user-visible behaviour.
+sys/dev/wscons/wsdisplay_vcons.c and wsdisplay_vconsvar.h supply the saved
+characters/attributes, redraw callbacks, and VCONS_NO_COPY* flags.
+
+Rendering contract
+------------------
+
+Use one background painter for glyph cells, erase operations, full clears,
+and margins.  Its output must depend on absolute visible-screen coordinates,
+not the rectangle being repainted, the text row, or the scroll offset.  Two
+partial paints must produce the same pixels as one paint of their union.
+
+Newport uses N = 112 horizontal bands across the visible height H.  For a
+pixel row y, with 0 <= y < H, the band and its colour are:
+
+    band = floor(y * N / H)
+    colour(band) = (0, floor(128 * band / (N - 1)),
+                      floor(96 * band / (N - 1)))
+
+A band ends at ceil((band + 1) * H / N).  Splitting rectangles at those
+boundaries keeps partial erasure identical to full-screen painting.  A new
+driver should clip rectangles to its visible bounds, reject empty areas,
+use arithmetic wide enough for its dimensions, and handle small modes when
+choosing N.  Include rasops ri_xorigin/ri_yorigin when mapping text cells.
+Convert to the hardware coordinate system only at the drawing boundary.
+
+For each glyph, decode the effective background attribute after reverse
+video handling.  If it is black, restore the gradient under the entire cell
+and draw only foreground glyph pixels.  Otherwise render a solid background
+and the glyph normally.  Spaces must erase old pixels too; underlined spaces
+must still draw the underline.  Keep highlight, reverse video, font strides,
+and supported character widths working.
+
+Black is the transparency key, including explicitly requested ANSI black.
+The current implementation does not distinguish that from the terminal's
+default background.  Do not substitute zero-valued pixel tests for decoding
+attributes unless the target driver's colour mapping guarantees equivalence.
+Newport's attribute shifts are rasops-specific; older drivers can encode
+foreground/background colours differently.
+
+If glyphs are cached as fully rendered rectangles, their background becomes
+position-dependent.  Bypass that cache for decorated cells or cache glyph
+masks and composite at the destination.  Copying a cached cell from another
+screen position can copy the wrong gradient.
+
+Saved text and scrolling
+------------------------
+
+Moving framebuffer pixels also moves the background baked into those pixels.
+For a first port, redraw characters from saved text at their destination.
+In a vcons driver's init_screen callback, install the decorated drawing
+operations and set these flags on every decorated screen:
+
+    scr->scr_flags |= VCONS_NO_COPYCOLS | VCONS_NO_COPYROWS;
+
+vcons then uses putchar-based copies while maintaining its text buffer.
+Keep the accelerated copy operations available for the option-disabled path.
+Although a purely vertical gradient can permit horizontal copies, disabling
+both paths initially avoids dependencies on the background's shape.
+
+A driver with direct wsdisplay textops but no saved text cannot obtain this
+behaviour by setting flags alone.  First migrate it to vcons, preserving its
+existing plain console behaviour, or provide equivalent character/attribute
+storage and redraw support.  Prefer vcons to a second buffer implementation.
+
+Do not replace the two flags with VCONS_DONT_READ without reviewing cursors.
+VCONS_DONT_READ also selects VCONS_NO_CURSOR and its putchar-based cursor.
+The current vcons_cursor_noread handling can leave cursor pixels behind when
+hiding it with all DONT_READ flags set.  Newport retains its own reversible
+in-place inversion.  A separate hardware cursor plane is another option.
+Every strategy must restore the exact prior cell when hiding or moving.
+
+Pixel formats and palettes
+--------------------------
+
+For indexed colour, identify the entries actually used by terminal text and
+reserve them before allocating the ramp.  They need not be palette indices
+0 through 15: Newport uses RGB332 indices derived from rasops_cmap.  It also
+reserves each text entry's index XOR 0xff for the pixel-inverting cursor.
+The remaining pairs supply 112 gradient entries and their RGB complements.
+
+This count and XOR pairing are Newport-specific.  Recompute the budget from
+the target's colour mapping, depth, cursor operation, and other palette
+users.  Use fewer bands or a different cursor strategy if necessary.  Keep
+software palette copies and GETCMAP/PUTCMAP behaviour consistent where the
+driver exposes them.  Audit extended-colour and anti-aliased text paths as
+well as the basic terminal colours before calling any entries unused.
+
+Verify that fills and glyphs select compatible pixel interpretation and
+write masks.  Newport's decorated fills use colour-index drawing without
+RGB fast clear; simply changing the palette while keeping its old RGB fill
+path did not provide the required rendering behaviour.
+
+For direct-colour framebuffers, pack the ramp using the driver's actual
+channel sizes/positions, byte order, stride, and write masks.  Palette
+reservation may be unnecessary, but gamma tables or indexed overlay planes
+can still be shared with graphics applications.  Pixel inversion must avoid
+damaging reserved or alpha bits.  Alpha glyphs must blend against the actual
+gradient at each destination pixel instead of a single constant background.
+For a simple initial port, selecting a supported bitmap font is an alternative
+to implementing the alpha path immediately; document that limitation.
+
+Attachment and mode transitions
+-------------------------------
+
+Keep early console output usable before saved text and full driver state
+exist.  Newport leaves early cnattach on its plain drawing path, enables
+decoration during vcons screen initialization, paints the full display, and
+replays the kernel message buffer after attachment.  New drawing callbacks
+must respect the target's console locking and FIFO rules and avoid sleeping
+allocations during output, including polling/debugger paths.
+
+Make initialization work for both the console device and screens allocated
+later.  Keep palette/mode state per device and redraw flags per screen.  On
+virtual-screen switches, repaint the selected screen's saved content at the
+same absolute background coordinates.  RI_FULLCLEAR plus a suitable full
+eraserows callback also restores margins outside the text area.
+
+Treat WSDISPLAYIO_SMODE as a transition of ownership.  Graphics mode needs
+the hardware/palette state expected by graphics clients.  Returning to
+WSDISPLAYIO_MODE_EMUL must restore console depth, drawing state, and the
+decoration palette before vcons_redraw_screen draws the active screen.
+Audit blank/unblank, resume, font changes, and geometry changes too: any path
+that resets hardware or clears pixels needs to reconstruct the console.
+
+For a new driver, add its own option declaration and generated option header,
+guard the new state/drawing paths, and start with an opt-in configuration.
+Test enabled and disabled kernels before changing that driver's defaults.
+White WS_KERNEL_FG is a kernel configuration choice that can affect other
+console drivers in the same kernel; it is separate from enabling decoration.
+
+Likely sgimips ports
+-------------------
+
+XZ/GR2: sys/arch/sgimips/gio/grtwo.c
+
+    This driver uses direct wsdisplay textops, rejects extra screens, and
+    lacks an SMODE restoration path.  Start with a vcons conversion and
+    verify plain text, copying, and attachment before adding decoration.
+    Its GR2_ATTR_* encoding differs from rasops attributes.  Its glyph
+    commands consume rows bottom-to-top and use a different Y origin;
+    preserve the existing glyph/XMAP fixes when adapting the renderer.
+    Audit fill limits: attachment currently clears one text row at a time
+    because of a documented large-fill problem.  The VC1 hardware cursor
+    can avoid Newport's inverse-palette scheme if it remains independent of
+    the decorated pixels.  Verify its palette/position handling separately.
+
+Light/LG1/LG2: sys/arch/sgimips/gio/light.c
+
+    This also uses direct textops and rejects extra screens.  It needs saved
+    text before decorated scrolling, uses LIGHT_ATTR_* encoding, and has a
+    stub cursor callback.  Review the REX opaque-pattern mode when painting
+    foreground glyphs over a restored background.  Its SVIDEO unblank path
+    currently clears the display; a decorated console would need to restore
+    saved text and background there.  Establish cursor and mode-restoration
+    behaviour as part of the port.
+
+O2/CRM: sys/arch/sgimips/dev/crmfb.c
+
+    This already uses vcons and redraws on return to emulation mode.  The
+    main integration points are crmfb_init_screen, crmfb_putchar,
+    crmfb_putchar_aa, erasecols/eraserows, setup_palette, and SMODE handling.
+    Use sc_console_depth and the rasops channel layout, not an assumption
+    that every console is 8-bit.  Both glyph paths currently fill a solid
+    cell background; the alpha path then blends over that cell.  Both need
+    the background painter, and the bitmap path needs transparent stippling
+    for black backgrounds.  Review the inversion cursor for each depth.
+
+Software-rendered linear framebuffers can follow the same vcons contract,
+but need a renderer that preserves background pixels where glyph bits are
+clear.  Wrapping a background fill around an opaque rasops putchar alone
+will paint the gradient and immediately overwrite it with a solid cell.
+
+Validation before enabling another driver
+-----------------------------------------
+
+Reuse tests/dev/wscons/newport_decor.c: despite the name, it drives terminal
+escape sequences and wsdisplay ioctls rather than Newport registers.  Follow
+README.newport-decor for the command sequence and exact image comparisons.
+Record unsupported operations on an incomplete port; an ioctl failure is not
+a successful mode-restoration test.
+
+Verify boot/replay, partial erasure, full clears and margins, forward/reverse
+scrolling, column insertion/deletion, colours, underline, reverse video,
+cursor show/hide/movement, VT switches, and mapped-to-emulation restoration.
+Also scroll nonblank text to verify character order and attributes.  The
+current blank-scroll comparisons specifically detect background movement
+and do not establish correct nonblank text movement on a newly ported driver.
+Test supported fonts, depths, resolutions, and blank/resume paths separately.
+
+Compare visible RGB captures, not just framebuffer indices: a broken palette
+can leave index images looking correct.  Wait for the exerciser's DONE marker
+and rendering completion; fixed short delays can capture half a redraw.
+After a full vcons redraw, hide the cursor again before comparing pixels
+(the current exerciser uses m followed by c).  Check gradient endpoints and
+monotonic colour progression as well as text legibility near the bottom.
+
+Use disposable disk/NVRAM copies when testing with Iris and Prismatic, and
+record the kernel/emulator revisions, graphics model, and build settings.
+The existing Newport results do not qualify another framebuffer or physical
+hardware.  Measure redraw cost and verify FIFO ordering on the target board;
+redrawing every character is more work than a hardware scroll copy.
+
+Once a second driver works, consider extracting shared gradient geometry
+and policy into a wscons helper.  Keep pixel packing, palette ownership,
+hardware rendering, and cursor strategy in the drivers until their common
+requirements are demonstrated by working implementations.
