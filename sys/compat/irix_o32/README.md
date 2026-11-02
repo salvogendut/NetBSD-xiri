@@ -1038,3 +1038,21 @@ deployment remains built in pending the compat_linux-style module.
 Installer retries are deferred in favor of copying already installed apps
 and their original catalog registration from the user's image. This does
 not qualify inst, package history, upgrade/removal or every imported app.
+
+## Desktop symbolic links and MAC feature discovery
+
+The desktop needs `lxstat(1159)` and `readlink(1116)` to inspect its original
+application links. lxstat shares xstat's measured serializer and path validation,
+while leaving the final symlink unresolved. readlink retains native vnode lookup,
+credentials and copyout, with IRIX trailing-slash handling and signed capacity.
+The observed negative capacity behaves as zero, without bypassing lookup.
+
+`SGI_SYSCONF` selector 28 (`_SC_MAC`) now reports zero: this personality does not
+provide IRIX mandatory access control. Returning EINVAL made 4Dwm interpret -1
+as a true feature value and show its Trusted Path panel. Native NetBSD access
+checks remain authoritative. This query does not grant an IRIX security mode.
+
+The Xiri labs `irix-lxstat` and `irix-desktop-queries` contain independent
+o32/n32, direct/indirect, root/UID1234 reference fixtures and qualification.
+They measure 672 metadata and 240 query/readlink executions on IRIX 6.5.22m.
+Native qualification and desktop results are recorded by the Xiri repository.

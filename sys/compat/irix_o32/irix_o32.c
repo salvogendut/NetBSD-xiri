@@ -527,6 +527,9 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 		case 11: /* _SC_PAGESIZE */
 			*rval = PAGE_SIZE;
 			return 0;
+		case 28: /* _SC_MAC: no IRIX mandatory access control */
+			*rval = 0;
+			return 0;
 		case 29: /* _SC_CAP: CAP_SYS_DISABLED, traditional uid permissions */
 			*rval = 0;
 			return 0;
@@ -829,7 +832,8 @@ irix_stat_copyout(struct lwp *l, const struct stat *st, int32_t stat_version,
 }
 
 static int
-irix_xstat(struct lwp *l, const void *args, register_t *rval)
+irix_path_stat(struct lwp *l, const void *args, register_t *rval,
+    bool follow)
 {
 	const struct irix_xstat_args *uap = args;
 	struct stat st;
@@ -851,7 +855,8 @@ irix_xstat(struct lwp *l, const void *args, register_t *rval)
 	pb = pathbuf_create(path);
 	if (pb == NULL)
 		return ENOMEM;
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | TRYEMULROOT, pb);
+	NDINIT(&nd, LOOKUP, (follow ? FOLLOW : NOFOLLOW) | LOCKLEAF |
+	    TRYEMULROOT, pb);
 	error = namei(&nd);
 	if (error == 0) {
 		error = vn_stat(nd.ni_vp, &st);
@@ -862,6 +867,80 @@ irix_xstat(struct lwp *l, const void *args, register_t *rval)
 		return error;
 	return irix_stat_copyout(l, &st, SCARG(uap, version),
 	    SCARG(uap, buf), rval);
+}
+
+static int
+irix_xstat(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_path_stat(l, args, rval, true);
+}
+
+static int
+irix_lxstat(struct lwp *l, const void *args, register_t *rval)
+{
+	/* The final component is the link itself, even with trailing slashes. */
+	return irix_path_stat(l, args, rval, false);
+}
+
+struct irix_readlink_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) buf;
+	syscallarg(int32_t) count;
+};
+
+static int
+irix_readlink(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_readlink_args *uap = args;
+	struct pathbuf *pb;
+	struct nameidata nd;
+	struct vnode *vp;
+	struct iovec iov;
+	struct uio uio;
+	char path[MAXPATHLEN];
+	size_t len, count;
+	int error;
+
+	/* Preserve IRIX's pathname ordering and trailing-slash treatment. */
+	error = copyinstr(irix_pointer(SCARG(uap, path)), path,
+	    sizeof(path), &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	pb = pathbuf_create(path);
+	if (pb == NULL)
+		return ENOMEM;
+	NDINIT(&nd, LOOKUP, NOFOLLOW | LOCKLEAF | LOCKSHARED | TRYEMULROOT, pb);
+	error = namei(&nd);
+	pathbuf_destroy(pb);
+	if (error != 0)
+		return error;
+	vp = nd.ni_vp;
+	if (vp->v_type != VLNK) {
+		error = EINVAL;
+		goto out;
+	}
+	if ((vp->v_mount->mnt_flag & MNT_SYMPERM) != 0 &&
+	    (error = VOP_ACCESS(vp, VREAD, l->l_cred)) != 0)
+		goto out;
+	/* The observed signed negative count behaves like zero capacity. */
+	count = SCARG(uap, count) > 0 ? SCARG(uap, count) : 0;
+	iov.iov_base = irix_pointer(SCARG(uap, buf));
+	iov.iov_len = count;
+	memset(&uio, 0, sizeof(uio));
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_rw = UIO_READ;
+	uio.uio_vmspace = l->l_proc->p_vmspace;
+	uio.uio_resid = count;
+	/* Native uiomove preserves a copied prefix on a later EFAULT. */
+	error = VOP_READLINK(vp, &uio, l->l_cred);
+	if (error == 0)
+		*rval = count - uio.uio_resid;
+out:
+	vput(vp);
+	return error;
 }
 
 struct irix_fxstat_args {
@@ -2503,6 +2582,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_gethostname,
 	},
+	[116] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_readlink_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_readlink,
+	},
 	[148] = {
 		.sy_narg = 2,
 		.sy_argsize = sizeof(struct irix_getrlimit_args),
@@ -2514,6 +2599,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_xstat_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_xstat,
+	},
+	[159] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_xstat_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_lxstat,
 	},
 	[160] = {
 		.sy_narg = 3,
@@ -2591,11 +2682,11 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
-	[136] = "mprotect", [158] = "xstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
+	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
 	[102] = "sendmsg", [105] = "setsockopt",
-	[106] = "shutdown", [107] = "socket", [108] = "gethostname",
+	[106] = "shutdown", [107] = "socket", [108] = "gethostname", [116] = "readlink",
 };
 
 /* Symbolic native indices avoid importing the obsolete positional table. */
