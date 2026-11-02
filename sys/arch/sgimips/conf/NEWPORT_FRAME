@@ -1,0 +1,5 @@
+# Experimental framed console using the supplied SGI-style background.
+include "arch/sgimips/conf/GENERIC32_IP2x"
+
+ident "NEWPORT_FRAME"
+options NEWPORT_FRAME

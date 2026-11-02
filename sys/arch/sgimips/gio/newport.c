@@ -60,6 +60,14 @@ __KERNEL_RCSID(0, "$NetBSD: newport.c,v 1.26 2026/08/18 21:27:29 adrian Exp $");
 #define NEWPORT_DECOR_STEPS	112
 #endif
 
+#ifdef NEWPORT_FRAME
+#include <sgimips/gio/newport_frame.h>
+CTASSERT(NEWPORT_FRAME_COLOURS + 32 + 1 <= 256);
+#define NEWPORT_DECOR_COLOURS MAX(NEWPORT_DECOR_STEPS, NEWPORT_FRAME_COLOURS)
+#else
+#define NEWPORT_DECOR_COLOURS NEWPORT_DECOR_STEPS
+#endif
+
 struct newport_dcb_cs_params {
 	int cs_width;
 	int cs_hold;
@@ -137,7 +145,10 @@ struct newport_devconfig {
 	struct vcons_data	dc_vd;
 #ifdef NEWPORT_DECOR
 	bool			dc_decor;
-	uint8_t			dc_decor_index[NEWPORT_DECOR_STEPS];
+	uint8_t			dc_decor_index[NEWPORT_DECOR_COLOURS];
+#endif
+#ifdef NEWPORT_FRAME
+	bool			dc_frame;
 #endif
 };
 
@@ -583,6 +594,14 @@ newport_fill_background(struct newport_devconfig *dc, int x, int y,
 	int band, top, bottom;
 
 	if (dc->dc_decor && (color & 0xff) == 0 && wi > 0 && he > 0) {
+#ifdef NEWPORT_FRAME
+		/* All text cells lie within the image's uniform inner panel. */
+		if (dc->dc_frame) {
+			newport_fill_rectangle(dc, x, y, wi, he,
+			    dc->dc_decor_index[NEWPORT_FRAME_PANEL]);
+			return;
+		}
+#endif
 		for (top = y; top < y + he; top = bottom) {
 			band = top * NEWPORT_DECOR_STEPS / dc->dc_yres;
 			bottom = MIN(y + he,
@@ -595,6 +614,24 @@ newport_fill_background(struct newport_devconfig *dc, int x, int y,
 #endif
 	newport_fill_rectangle(dc, x, y, wi, he, color);
 }
+
+#ifdef NEWPORT_FRAME
+static void
+newport_paint_frame(struct newport_devconfig *dc)
+{
+	const struct newport_frame_rect *rect;
+	unsigned int i;
+	int wi;
+
+	for (i = 0; i < __arraycount(newport_frame_rects); i++) {
+		rect = &newport_frame_rects[i];
+		/* Some VC2 timings expose two extra columns at the right edge. */
+		wi = MIN(rect->width, dc->dc_xres - rect->x);
+		newport_fill_rectangle(dc, rect->x, rect->y, wi, rect->height,
+		    dc->dc_decor_index[rect->colour]);
+	}
+}
+#endif
 
 static void
 newport_bitblt(struct newport_devconfig *dc, int xs, int ys, int xd,
@@ -883,7 +920,7 @@ newport_setup_decor_cmap(struct newport_devconfig *dc)
 {
 	bool used[256] = { false };
 	unsigned int i, index, step;
-	uint8_t green, blue;
+	uint8_t red, green, blue;
 
 	/*
 	 * Preserve the 16 RGB332 text colours and their inverted cursor colours.
@@ -896,16 +933,50 @@ newport_setup_decor_cmap(struct newport_devconfig *dc)
 		used[index] = used[index ^ 0xff] = true;
 	}
 
+#ifdef NEWPORT_FRAME
+	if (dc->dc_frame) {
+		/* Only the uniform panel and terminal colours meet the cursor. */
+		for (index = 0; index < 128; index++) {
+			if (!used[index])
+				break;
+		}
+		KASSERT(index < 128);
+		dc->dc_decor_index[NEWPORT_FRAME_PANEL] = index;
+		used[index] = used[index ^ 0xff] = true;
+		red = newport_frame_cmap[NEWPORT_FRAME_PANEL][0];
+		green = newport_frame_cmap[NEWPORT_FRAME_PANEL][1];
+		blue = newport_frame_cmap[NEWPORT_FRAME_PANEL][2];
+		newport_cmap_setrgb(dc, index, red, green, blue);
+		newport_cmap_setrgb(dc, index ^ 0xff, 255 - red,
+		    255 - green, 255 - blue);
+		index = 0;
+		for (step = 0; step < NEWPORT_FRAME_COLOURS; step++) {
+			if (step == NEWPORT_FRAME_PANEL)
+				continue;
+			while (index < 256 && used[index])
+				index++;
+			KASSERT(index < 256);
+			dc->dc_decor_index[step] = index;
+			newport_cmap_setrgb(dc, index,
+			    newport_frame_cmap[step][0],
+			    newport_frame_cmap[step][1],
+			    newport_frame_cmap[step][2]);
+			index++;
+		}
+		return;
+	}
+#endif
 	step = 0;
 	for (index = 0; index < 128 && step < NEWPORT_DECOR_STEPS; index++) {
 		if (used[index])
 			continue;
 		dc->dc_decor_index[step] = index;
 		/* Octane-style teal green, #008060, at the bottom of the screen. */
+		red = 0;
 		green = 0x80 * step / (NEWPORT_DECOR_STEPS - 1);
 		blue = 0x60 * step / (NEWPORT_DECOR_STEPS - 1);
-		newport_cmap_setrgb(dc, index, 0, green, blue);
-		newport_cmap_setrgb(dc, index ^ 0xff, 255,
+		newport_cmap_setrgb(dc, index, red, green, blue);
+		newport_cmap_setrgb(dc, index ^ 0xff, 255 - red,
 		    255 - green, 255 - blue);
 		step++;
 	}
@@ -1085,6 +1156,42 @@ newport_attach_common(struct newport_devconfig *dc, struct gio_attach_args *ga)
 
 	dc->dc_screen = &newport_screen;
 	dc->dc_mode = WSDISPLAYIO_MODE_EMUL;
+#ifdef NEWPORT_FRAME
+	dc->dc_frame = dc->dc_yres == NEWPORT_FRAME_HEIGHT &&
+	    (dc->dc_xres == NEWPORT_FRAME_WIDTH ||
+	     dc->dc_xres == NEWPORT_FRAME_WIDTH - 2);
+	if (dc->dc_frame) {
+		/* The uniform text panel also permits early hardware scrolling. */
+		dc->dc_decor = true;
+		newport_setup_decor_cmap(dc);
+		newport_paint_frame(dc);
+	}
+#endif
+}
+
+static void
+newport_configure_screen(struct newport_devconfig *dc, struct rasops_info *ri)
+{
+	int width = dc->dc_xres, height = dc->dc_yres;
+
+#ifdef NEWPORT_FRAME
+	if (dc->dc_frame) {
+		width = NEWPORT_FRAME_TEXT_WIDTH;
+		height = NEWPORT_FRAME_TEXT_HEIGHT;
+	}
+#endif
+	rasops_reconfig(ri, height / ri->ri_font->fontheight,
+	    width / ri->ri_font->fontwidth);
+#ifdef NEWPORT_FRAME
+	if (dc->dc_frame) {
+		/* All drawing uses accelerated textops, not ri_bits. */
+		ri->ri_xorigin = NEWPORT_FRAME_TEXT_X;
+		ri->ri_yorigin = NEWPORT_FRAME_TEXT_Y;
+	}
+#endif
+	/* Also describe screens allocated when Newport is not the boot console. */
+	dc->dc_screen->ncols = ri->ri_cols;
+	dc->dc_screen->nrows = ri->ri_rows;
 }
 
 static void
@@ -1161,6 +1268,10 @@ newport_cnattach(struct gio_attach_args *ga)
 
 	ri->ri_hw = &newport_console_screen;
 	ri->ri_depth = newport_console_dc.dc_depth;
+#ifdef NEWPORT_FRAME
+	if (newport_console_dc.dc_frame)
+		ri->ri_depth = 8;
+#endif
 	ri->ri_width = newport_console_dc.dc_xres;
 	ri->ri_height = newport_console_dc.dc_yres;
 	/*
@@ -1173,8 +1284,7 @@ newport_cnattach(struct gio_attach_args *ga)
 	ri->ri_flg = RI_CENTER | RI_NO_AUTO | RI_FULLCLEAR | RI_8BIT_IS_RGB;
 	rasops_init(ri, 0, 0);
 	ri->ri_caps = WSSCREEN_WSCOLORS;
-	rasops_reconfig(ri, ri->ri_height / ri->ri_font->fontheight,
-	    ri->ri_width / ri->ri_font->fontwidth);
+	newport_configure_screen(&newport_console_dc, ri);
 	ri->ri_ops.copyrows  = newport_copyrows;
 	ri->ri_ops.eraserows = newport_eraserows;
 	ri->ri_ops.copycols  = newport_copycols;
@@ -1209,8 +1319,7 @@ newport_init_screen(void *cookie, struct vcons_screen *scr,
 	rasops_init(ri, 0, 0);
 	ri->ri_caps = WSSCREEN_WSCOLORS;
 
-	rasops_reconfig(ri, dc->dc_yres / ri->ri_font->fontheight,
-		    dc->dc_xres / ri->ri_font->fontwidth);
+	newport_configure_screen(dc, ri);
 
 	ri->ri_hw = scr;
 	ri->ri_ops.copyrows  = newport_copyrows;
@@ -1220,7 +1329,7 @@ newport_init_screen(void *cookie, struct vcons_screen *scr,
 	ri->ri_ops.cursor    = newport_cursor;
 	ri->ri_ops.putchar   = newport_putchar;
 #ifdef NEWPORT_DECOR
-	/* Early cnattach has no saved text to redraw, so enable only in vcons. */
+	/* A gradient under text needs saved characters before enabling it. */
 	if (!dc->dc_decor) {
 		dc->dc_decor = true;
 		if (dc->dc_mode == WSDISPLAYIO_MODE_EMUL)
@@ -1397,6 +1506,18 @@ newport_eraserows(void *c, int startrow, int nrows, long attr)
 	struct newport_devconfig *dc = scr->scr_cookie;
 	struct wsdisplay_font *font = ri->ri_font;
 
+#ifdef NEWPORT_FRAME
+	if (dc->dc_frame) {
+		if (startrow == 0 && nrows == ri->ri_rows)
+			newport_paint_frame(dc);
+		/* Even coloured clears must preserve the frame and its padding. */
+		newport_fill_background(dc, ri->ri_xorigin,
+		    startrow * font->fontheight + ri->ri_yorigin,
+		    ri->ri_emuwidth, nrows * font->fontheight,
+		    ri->ri_devcmap[(attr >> 16) & 0xf]);
+		return;
+	}
+#endif
 	if (startrow == 0 && nrows == ri->ri_rows) {
 		newport_fill_background(dc,
 		    0,							/* x1 */

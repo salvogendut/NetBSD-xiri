@@ -1,0 +1,87 @@
+Newport framed console: build and regression
+============================================
+
+Build sys/arch/sgimips/conf/NEWPORT_FRAME for sgimips/mipseb.  It includes
+GENERIC32_IP2x and enables NEWPORT_FRAME, which implies NEWPORT_DECOR.  The
+generic kernels continue to use the black-to-green gradient.  Test all three
+builds: framed, gradient only, and a local configuration with neither option.
+
+At 1280x1024 or 1282x1024 the text viewport is x=288, y=176, width=704,
+height=672.  With an 8x16 font, TIOCGWINSZ must report 42 rows and 88 columns.
+Early cnattach and vcons attachment use the same viewport.  At other sizes
+the frame option falls back to the full-screen gradient.  Firmware output
+before the NetBSD console attaches remains controlled by the PROM.
+
+The asset and regeneration instructions are in
+sys/arch/sgimips/gio/newport-decor/README.  All 161 source colours are retained.
+The PNG is converted into constant palette/rectangle data ahead of kernel
+builds.  The panel is uniform, allowing hardware scrolling before vcons
+attaches while the outer image stays fixed.
+
+Run newport_decor.c as described in README.newport-decor.  Capture the native
+visible framebuffer, excluding any emulator UI.  Check that:
+
+  - Blank clears reproduce sgiconsole.png exactly (crop the last two columns
+    of the reference for a 1280-wide display).
+  - Forward/reverse scrolling, column insertion/deletion, and erasure do not
+    move or damage the backdrop; cursor hide restores the exact prior pixels.
+  - The a command makes only the text rectangle red, including its final
+    row and column.  The bevel and padding retain their source pixels.
+  - n and N produce identical text and colours after scrolling three rows.
+  - Underline, reverse video, and explicit background colours work inside
+    the panel.  Long messages wrap within the reported width.
+  - m followed by c restores the entire prior text image and backdrop.
+  - Creating ttyE1, selecting it, and returning to ttyE0 restores each
+    screen's contents, frame, padding, and 42x88 geometry.
+  - Boot-message replay, normal shell output, and coloured full clears never
+    change pixels outside the text viewport.
+
+For RGB captures, compare every pixel outside [288,992) x [176,848) with the
+reference PNG after each operation.  Also compare the entire image for blank
+scroll/cursor checks and n/N or text/mode-restoration pairs.  Wait for DONE
+and rendering completion before capturing.  VT switching is asynchronous;
+wait for the switch to finish before typing c to hide the restored cursor.
+Raw framebuffer-index checks
+are useful for diagnosing emulators, but do not establish correct palette
+or final display composition.
+
+Keep disposable disk/NVRAM copies and record exact emulator revisions or
+binary hashes.  A stale composed frame can differ from the raw framebuffer;
+inspect both before changing the driver to compensate for an emulator bug.
+Physical hardware still needs timing and performance validation.
+
+Validation on 2026-11-02
+------------------------
+
+Framed, gradient-only, and option-disabled mipseb kernels built successfully.
+On an R4400 Indy with 256 MB RAM and a 1282x1024 Newport display, the guest
+reported 42 rows and 88 columns.  The frame matched the source PNG exactly
+outside the text rectangle during boot and the console exerciser.
+
+The baseline emulator sources were:
+
+    Iris      a9b63183c130a23b199f82f01000b51cf70f26e2
+    Prismatic cd1b0315b339bb859c4cad07bd0a5db2d89ceaf5
+
+Iris checks used raw framebuffer-index captures because this build's composed
+offscreen screenshot is black.  Prismatic checks used its native RGB capture.
+Blank forward/reverse scrolling, column operations, erasure, cursor movement,
+numbered coloured text scrolling, and mode restoration matched their
+reference captures.  Pixel comparisons confirmed that all these operations
+preserved the image outside the viewport.
+Prismatic also reported 42x88 on a newly allocated ttyE1 and restored the
+exact ttyE0 text image after a VT round trip, with the cursor hidden again.
+Nine captures from early kernel output through the single-user shell prompt
+preserved the source image outside the viewport, including the early NetBSD
+banner before vcons attachment.
+
+Prismatic display-refresh limitation: a large solid colour clear followed
+by no further drawing can leave a partial clear in the composed capture,
+even though rex fbdump shows all 704x672 text pixels correctly filled.
+The exerciser's a command reproduces it; c triggers another redraw and the
+RGB capture then shows the complete red rectangle with the frame intact.
+This occurred with the baseline above and with the current test binary
+(SHA256 039f55db138ab903717e507655f5ae7dc9c8551ee0cd6dd29a76b7e0d8c96bb9).
+The colour-clear check therefore validated the complete raw fill first, then
+the RGB result after c.  This is an outstanding emulator display issue, not
+an unconditional pass of the idle composed-clear check.

@@ -75,6 +75,20 @@ main(int argc, char **argv)
 				    "\033[0m\033[2K", i);
 			printf("\033[H\033[J");
 			break;
+		case 'a':	/* A coloured full clear must preserve decorations. */
+			printf("\033[41m\033[2J\033[H\033[0m");
+			break;
+		case 'n':	/* Scroll saved text and attributes up three rows. */
+		case 'N':	/* Direct rendering of the expected scroll result. */
+			printf("\033[0m\033[2J\033[H");
+			for (i = command == 'n' ? 1 : 4; i <= size.ws_row; i++)
+				printf("\033[%d;1H\033[%dmRow %03d\033[0m",
+				    command == 'n' ? i : i - 3,
+				    i % 2 ? 37 : 33, i);
+			if (command == 'n') {
+				printf("\033[%u;1H\n\n\n", size.ws_row);
+			}
+			break;
 		case 'c':	/* Cursor inversion must be exactly reversible. */
 			for (i = 1; i <= size.ws_row; i++)
 				printf("\033[%d;%uH\033[?25h\033[?25l",

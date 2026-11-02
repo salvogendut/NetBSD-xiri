@@ -1,0 +1,33 @@
+Newport framed console asset
+============================
+
+sgiconsole.png is the background supplied for this feature.  Its native size
+is 1282x1024; the final two columns are black.  NEWPORT_FRAME uses the image
+at 1282x1024 or clips those columns at 1280x1024.  Other display sizes retain
+the normal NEWPORT_DECOR gradient and full-screen text area.
+
+The text rectangle is (288,176) through (991,847), inclusive: 704x672 pixels,
+or 88 columns by 42 rows with the normal 8x16 font.  It lies entirely inside
+the uniform grey panel, leaving padding between text and the bevel.
+
+Regenerate the checked-in newport_frame.h from this directory with:
+
+    python3 mkframe.py
+    python3 mkframe.py --check
+
+Pillow is needed for regeneration only.  Kernel builds use the generated
+header and do not need Python, Pillow, the PNG, or a runtime image decoder.
+The header records the source SHA256 and encodes disjoint filled rectangles.
+The converter verifies that they reconstruct every source pixel exactly.
+
+All 161 source colours are preserved.  The driver reserves the RGB332 text
+colours and their inverse cursor colours, plus the grey panel's inverse.
+Only the panel and text colours can appear under a bounded text cursor, so
+the other image colours do not need inverse entries.  The converter permits
+at most 223 image colours to leave room for those reservations.
+
+Changing the image requires reviewing the text rectangle in mkframe.py.
+It must remain within a uniform panel: early hardware scrolling and the
+fast cell-background fill depend on that property.  A background with a
+pattern beneath the text would require restoring that pattern per cell and
+deferring decorated scrolling until vcons has saved characters to redraw.

@@ -13,6 +13,7 @@ include "arch/sgimips/hpc/files.hpc"
 
 # XL graphics
 defflag opt_newport.h NEWPORT_DECOR
+defflag opt_newport.h NEWPORT_FRAME: NEWPORT_DECOR
 device	newport: wsemuldisplaydev, vcons, rasops8
 attach	newport at gio
 file	arch/sgimips/gio/newport.c	newport needs-flag
