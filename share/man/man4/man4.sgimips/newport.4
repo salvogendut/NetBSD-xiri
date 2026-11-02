@@ -27,7 +27,7 @@
 .\"
 .\" <<Id: LICENSE_GC,v 1.1 2001/10/01 23:24:05 cgd Exp>>
 .\"
-.Dd February 17, 2017
+.Dd November 2, 2026
 .Dt NEWPORT 4 sgimips
 .Os
 .Sh NAME
@@ -36,11 +36,47 @@
 .Sh SYNOPSIS
 .Cd "newport* at gio? slot ?"
 .Cd "wsdisplay* at newport? console ?"
+.Cd "options NEWPORT_DECOR"
 .Sh DESCRIPTION
 The
 .Nm
 driver supports the SGI NG1 (a.k.a. Indy 8-bit, Indy 24-bit, and
 XL) graphics controllers, often found on Indy and Indigo2 machines.
+.Pp
+The experimental
+.Dv NEWPORT_DECOR
+kernel option enables a built-in vertical gradient behind live console text,
+from black at the top to an Octane-style teal green at the bottom.
+The driver reserves unused palette entries for the gradient while preserving
+the terminal colours and their inverted cursor colours.
+Black text backgrounds reveal the decoration; other background colours
+remain opaque.
+Scrolling redraws characters at their new positions to keep the decoration
+fixed on the display.
+This costs more rendering work than the normal accelerated scrolling.
+.Pp
+Decoration starts when the virtual console attaches.
+Earlier boot messages use the normal solid background and are replayed
+when the decorated console becomes available.
+The option applies to all virtual screens on Newport displays, including
+restoring text mode after a graphics application exits.
+It does not change the text area or provide image loading or runtime
+configuration.
+.Pp
+The
+.Pa GENERIC32_IP2x
+kernel configuration and its
+.Pa GENERIC64_IP2x
+and
+.Pa GENERIC64_32_IP2x
+variants enable this option and select white kernel messages for contrast
+against the green background.
+The
+.Pa NEWPORT_DECOR
+configuration inherits these defaults.
+To restore a solid background in a configuration that includes one of these
+files, add
+.Dq no options NEWPORT_DECOR .
 .Sh SEE ALSO
 .Xr sgimips/gio 4 ,
 .Xr sgimips/grtwo 4 ,

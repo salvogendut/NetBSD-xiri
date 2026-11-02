@@ -1,0 +1,4 @@
+# Named configuration for the default Indy/Indigo2 Newport console gradient.
+include "arch/sgimips/conf/GENERIC32_IP2x"
+
+ident "NEWPORT_DECOR"

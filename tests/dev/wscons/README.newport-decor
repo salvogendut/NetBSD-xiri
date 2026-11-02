@@ -1,0 +1,93 @@
+Newport decorated console: manual emulator/hardware regression
+=============================================================
+
+Build the sgimips GENERIC32_IP2x kernel configuration (or include it in a
+local configuration).  Boot an Indy/IP24 or Indigo2/IP22 with Newport graphics
+and PROM console=g.  XZ/GR2 is a separate driver and is not decorated by this
+option.
+NEWPORT_DECOR and white kernel messages are enabled by default in
+GENERIC32_IP2x, GENERIC64_IP2x, and GENERIC64_32_IP2x.  The named NEWPORT_DECOR
+configuration inherits the same defaults from GENERIC32_IP2x.
+The gradient uses 112 palette levels from black to #008060.  Text colours and
+their inverse cursor colours are reserved; every gradient entry also has an
+inverse cursor entry.  The default white boot messages ensure that
+they remain legible at the green end of the screen.
+
+Use disposable disk/NVRAM copies with Iris and Prismatic.  Keep graphics
+enabled: Iris --ci provides offscreen graphics, whereas --headless disables
+them.  Prismatic can run under Xvfb.  Boot via the PROM with TFTP or a boot
+disk, so that firmware initializes the display before NetBSD attaches.
+
+On the guest, compile and run as root on ttyE0:
+
+    cc -O2 -Wall -Wextra -Werror newport_decor.c -o newport_decor
+    ./newport_decor
+
+An optional progress-file argument records READY (with rows/columns) and
+DONE for each command.  With a graphical console, /dev/ttyZ0 can send these
+markers to the emulator's serial B log.  Wait for DONE and for rendering to
+settle before capturing; a full-screen redraw can take several seconds.
+
+The program disables echo and hides the cursor.  Capture the blank screen,
+then type each key below and capture another image after output settles:
+
+    s   scroll up more than one screen
+    r   reverse scroll more than one screen
+    i   insert/delete columns on every row
+    e   fill with red, erase columns, erase rows
+    c   show/hide/move cursor across every row
+
+Every image must equal the initial blank image pixel for pixel.  The vertical
+black-to-green gradient must stay at the same display coordinates.  This
+detects moving wallpaper, incomplete erasure and cursor remnants.
+
+Type t to draw text across the backdrop, including underline, reverse video,
+and red background.  Check legibility and opaque red/reverse backgrounds.
+Capture it, type m then c, and compare: restoring emulation mode after mapped
+mode must reproduce the same text and background.  The extra c hides the
+cursor that vcons enables on a full redraw.  Type b to clear, q to exit.
+
+Also create/switch between wscons screens with wsconscfg, verify text and
+decoration are restored, and return to screen 0 before removing test screens.
+Creation/deletion uses zero-based indices (wsconscfg 1 creates ttyE1), but
+the current wsconscfg -s/-g uses one-based VT numbers: -s 2 selects ttyE1
+and -s 1 returns to ttyE0.
+Boot a kernel without NEWPORT_DECOR to check the normal solid console path:
+add "no options NEWPORT_DECOR" after including the generic configuration.
+Physical Newport hardware remains necessary to qualify FIFO timing and the
+cost of redrawing every character on scroll.
+
+Validation on 2026-11-02
+------------------------
+
+Built mipseb kernels with and without NEWPORT_DECOR.  Ran the exerciser on
+an emulated R4400 Indy with 256 MB RAM and Newport at 1282x1024 (160x64 text):
+
+    Iris      a9b63183c130a23b199f82f01000b51cf70f26e2
+    Prismatic cd1b0315b339bb859c4cad07bd0a5db2d89ceaf5
+
+The initial background passed exact visible-pixel comparisons in both for
+forward/reverse scrolling, column insertion/deletion, coloured fills and
+erasure, cursor movement, and mapped-to-emulation restoration (with the
+cursor hidden again).
+Underline, reverse video and opaque coloured backgrounds were also inspected
+in Prismatic's native framebuffer capture.
+Prismatic also restored the exact text image after switching ttyE0 to ttyE1
+and back (with the cursor hidden again).
+The option-disabled kernel booted to a single-user shell with the normal
+solid black console background in Prismatic.
+
+This Iris build's iris-ci screenshot returned black images even at the PROM.
+Its regression comparisons therefore used rex fbdump's ci.png, cropped to
+the visible 1282x1024 pixels.  Prismatic captures checked the final RGB output.
+No physical hardware or XZ decoration has been qualified.
+
+The gradient update was rebuilt with and without NEWPORT_DECOR and checked
+in Prismatic.  Its capture contains all 112 levels, with black at the top,
+#008060 at the bottom, and monotonically increasing green/blue components.
+Forward/reverse scrolling, column insertion/deletion, erasure, cursor
+movement, and mode restoration again passed exact RGB image comparisons.
+
+After enabling the scheme by default, both the default and explicitly
+disabled mipseb kernels built successfully.  Generated configurations for
+all three IP2x generic variants enable NEWPORT_DECOR and white kernel text.
