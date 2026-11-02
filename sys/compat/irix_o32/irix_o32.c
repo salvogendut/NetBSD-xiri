@@ -1893,6 +1893,170 @@ out:
 	return error;
 }
 
+/* IRIX 6.5.22 has a 36-byte o32 flock and a 48-byte n32 flock.
+ * Keep explicit halves: the kernel may itself use either supported ABI. */
+struct irix_flock32 {
+	int16_t type, whence;
+	int32_t start, len, sysid, pid, pad[4];
+};
+struct irix_flock64 {
+	int16_t type, whence;
+	uint32_t align, start_hi, start_lo, len_hi, len_lo;
+	int32_t sysid, pid, pad[4];
+};
+
+static int
+irix_fcntl_lock(struct lwp *l, int fd, int command, uint32_t arg,
+    register_t *rval)
+{
+	union {
+		struct irix_flock32 small;
+		struct irix_flock64 wide;
+	} foreign;
+	struct flock fl = { 0 };
+	struct stat st;
+	proc_t *p = l->l_proc;
+	file_t *fp;
+	off_t base = 0;
+	const bool wide = p->p_md.md_abi == _MIPS_BSD_API_N32;
+	const bool query = command == 14;
+	const size_t bytes = wide ? sizeof(foreign.wide) : sizeof(foreign.small);
+	int error, operation, flags = F_POSIX;
+
+	CTASSERT(sizeof(struct irix_flock32) == 36);
+	CTASSERT(sizeof(struct irix_flock64) == 48);
+	CTASSERT(offsetof(struct irix_flock64, start_hi) == 8);
+	CTASSERT(offsetof(struct irix_flock64, pid) == 28);
+	if ((fp = fd_getfile(fd)) == NULL)
+		return EBADF;
+	if (fp->f_type != DTYPE_VNODE || fp->f_ops->fo_advlock == NULL) {
+		error = ENOSYS;
+		goto out;
+	}
+	error = copyin(irix_pointer(arg), &foreign, bytes);
+	if (error != 0)
+		goto out;
+	fl.l_whence = foreign.small.whence;
+	if (wide) {
+		fl.l_start = (int64_t)((uint64_t)foreign.wide.start_hi << 32 |
+		    foreign.wide.start_lo);
+		fl.l_len = (int64_t)((uint64_t)foreign.wide.len_hi << 32 |
+		    foreign.wide.len_lo);
+	} else {
+		fl.l_start = foreign.small.start;
+		fl.l_len = foreign.small.len;
+	}
+	switch (foreign.small.type) {
+	case 1: fl.l_type = F_RDLCK; break;
+	case 2: fl.l_type = F_WRLCK; break;
+	case 3: fl.l_type = F_UNLCK; break;
+	default:
+		error = EINVAL;
+		goto out;
+	}
+	/* The BSD selectors retain IRIX's permission-independent locking.
+	 * Ownership, byte ranges and close/exit release are process based. */
+	if (!query && (command == 6 || command == 7) &&
+	    ((fl.l_type == F_RDLCK && !(fp->f_flag & FREAD)) ||
+	    (fl.l_type == F_WRLCK && !(fp->f_flag & FWRITE)))) {
+		error = EBADF;
+		goto out;
+	}
+	switch (fl.l_whence) {
+	case SEEK_SET:
+		break;
+	case SEEK_CUR:
+		vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
+		base = fp->f_offset;
+		VOP_UNLOCK(fp->f_vnode);
+		break;
+	case SEEK_END:
+		error = (*fp->f_ops->fo_stat)(fp, &st);
+		if (error != 0)
+			goto out;
+		base = st.st_size;
+		break;
+	default:
+		error = EINVAL;
+		goto out;
+	}
+	/* Normalize before the native vnode helper, avoiding its unchecked
+	 * SEEK_CUR addition and translating IRIX's range errors explicitly. */
+	if (base < 0 || fl.l_start > __type_max(off_t) - base) {
+		error = EOVERFLOW;
+		goto out;
+	}
+	fl.l_start += base;
+	fl.l_whence = SEEK_SET;
+	/* IRIX distinguishes a range wholly before offset zero from one
+	 * whose negative start reaches zero. Use unsigned magnitude for
+	 * INT64_MIN rather than negating it in signed arithmetic. */
+	if (fl.l_start < 0) {
+		const uint64_t magnitude = -(uint64_t)fl.l_start;
+		error = fl.l_len > 0 && (uint64_t)fl.l_len >= magnitude ?
+		    EINVAL : EOVERFLOW;
+		goto out;
+	}
+	if ((fl.l_len < 0 && fl.l_len < -fl.l_start) ||
+	    (fl.l_len > 0 && fl.l_len > __type_max(off_t) - fl.l_start)) {
+		error = EOVERFLOW;
+		goto out;
+	}
+	if (fl.l_len < 0) {
+		error = EINVAL;
+		goto out;
+	}
+	if (query) {
+		operation = F_GETLK;
+	} else if (fl.l_type == F_UNLCK) {
+		operation = F_UNLCK;
+	} else {
+		operation = F_SETLK;
+		if (command == 7 || command == 13)
+			flags |= F_WAIT;
+		mutex_enter(p->p_lock);
+		p->p_flag |= PK_ADVLOCK;
+		mutex_exit(p->p_lock);
+	}
+	error = (*fp->f_ops->fo_advlock)(fp, p, operation, &fl, flags);
+	if (error == EAGAIN)
+		error = EACCES;
+	if (error != 0)
+		goto out;
+	if (query) {
+		foreign.small.type = fl.l_type == F_UNLCK ? 3 :
+		    fl.l_type == F_RDLCK ? 1 : 2;
+		/* A no-conflict query changes only l_type. Preserve padding and
+		 * the caller's original relative range, as the vendor kernel does. */
+		if (fl.l_type != F_UNLCK) {
+			foreign.small.whence = fl.l_whence;
+			if (wide) {
+				foreign.wide.start_hi = (uint64_t)fl.l_start >> 32;
+				foreign.wide.start_lo = fl.l_start;
+				foreign.wide.len_hi = (uint64_t)fl.l_len >> 32;
+				foreign.wide.len_lo = fl.l_len;
+				foreign.wide.sysid = 0;
+				foreign.wide.pid = fl.l_pid;
+			} else {
+				if (fl.l_start > INT32_MAX || fl.l_len > INT32_MAX) {
+					error = EOVERFLOW;
+					goto out;
+				}
+				foreign.small.start = fl.l_start;
+				foreign.small.len = fl.l_len;
+				foreign.small.sysid = 0;
+				foreign.small.pid = fl.l_pid;
+			}
+		}
+		error = copyout(&foreign, irix_pointer(arg), bytes);
+	}
+	if (error == 0)
+		*rval = 0;
+out:
+	fd_putfile(fd);
+	return error;
+}
+
 struct irix_fcntl_args {
 	syscallarg(int32_t) fd;
 	syscallarg(int32_t) cmd;
@@ -1941,6 +2105,13 @@ irix_fcntl(struct lwp *l, const void *args, register_t *rval)
 		fd_putfile(SCARG(uap, fd));
 		*rval = irix_fileflags(value, socket);
 		return 0;
+	case 6: /* F_SETLK */
+	case 7: /* F_SETLKW */
+	case 12: /* F_SETBSDLK */
+	case 13: /* F_SETBSDLKW */
+	case 14: /* F_GETLK */
+		return irix_fcntl_lock(l, SCARG(uap, fd), SCARG(uap, cmd),
+		    arg, rval);
 	case 4: /* F_SETFL: append and canonicalized nonblocking subset. */
 		if (arg & ~(3U | 0x4U | 0x8U | 0x80U | 0x200U))
 			return EINVAL;
