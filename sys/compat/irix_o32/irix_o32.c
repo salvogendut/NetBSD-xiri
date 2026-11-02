@@ -75,8 +75,12 @@
 #define ELFSIZE 32
 #include <sys/cdefs.h>
 #include <sys/param.h>
+#include <sys/poll.h>
 #include <sys/cpu.h>
 #include <sys/domain.h>
+#include <sys/dirent.h>
+#include <sys/endian.h>
+#include <sys/malloc.h>
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
 #include <sys/fcntl.h>
@@ -1513,8 +1517,209 @@ irix_sginap(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
-/* Hostname output uses the host's current name, with a private snapshot so
- * no user fault is taken while holding the sysctl tree lock. */
+/* IRIX directory records contain no native d_type/d_namlen fields. n32
+ * selects the 64-bit record even through getdents/ngetdents. Directory
+ * cookies remain filesystem values; commit only entries returned to userland. */
+struct irix_getdents_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) buf;
+	syscallarg(uint32_t) count;
+	syscallarg(uint32_t) eof;
+};
+
+static int
+irix_readdir(struct lwp *l, const void *args, register_t *rval,
+    bool wide, bool report_eof)
+{
+	const struct irix_getdents_args *uap = args;
+	struct file *fp;
+	struct vnode *vp;
+	struct vm_map *map = &l->l_proc->p_vmspace->vm_map;
+	const uint32_t count = SCARG(uap, count);
+	const vaddr_t addr = SCARG(uap, buf);
+	off_t off, next, *cookies = NULL;
+	char *buf;
+	unsigned char record[280];
+	size_t used = 0, pos, length, nameoff, reclen, fields;
+	int error, eof = 0, ncookies;
+	bool mapped, writable;
+
+	if ((error = fd_getvnode(SCARG(uap, fd), &fp)) != 0)
+		return error;
+	if ((fp->f_flag & FREAD) == 0) {
+		error = EBADF;
+		goto put;
+	}
+	vp = fp->f_vnode;
+	if (vp->v_type != VDIR) {
+		error = ENOTDIR;
+		goto put;
+	}
+	if ((int32_t)count <= 0) {
+		error = EINVAL;
+		goto put;
+	}
+	if (addr >= 0x80000000U || count > 0x80000000U - addr) {
+		error = EFAULT;
+		goto put;
+	}
+	/* IRIX checks the requested output span, including unused capacity.
+	 * A later concurrent unmap is still handled by copyout. */
+	vm_map_lock_read(map);
+	mapped = uvm_map_checkprot(map, addr, addr + count, VM_PROT_NONE);
+	writable = uvm_map_checkprot(map, addr, addr + count, VM_PROT_WRITE);
+	vm_map_unlock_read(map);
+	if (!mapped || !writable) {
+		error = mapped ? EACCES : EFAULT;
+		goto put;
+	}
+	wide |= l->l_proc->p_md.md_abi == _MIPS_BSD_API_N32;
+	nameoff = wide ? 18 : 10;
+	buf = kmem_alloc(MAXBSIZE, KM_SLEEP);
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	mutex_enter(&fp->f_lock);
+	off = fp->f_offset;
+	mutex_exit(&fp->f_lock);
+	for (;;) {
+		struct iovec iov = { .iov_base = buf, .iov_len = MAXBSIZE };
+		struct uio uio = { .uio_iov = &iov, .uio_iovcnt = 1,
+		    .uio_offset = off, .uio_resid = MAXBSIZE, .uio_rw = UIO_READ };
+		UIO_SETUP_SYSSPACE(&uio);
+		ncookies = 0;
+		error = VOP_READDIR(vp, &uio, fp->f_cred, &eof,
+		    &cookies, &ncookies);
+		if (error != 0)
+			goto unlock;
+		length = MAXBSIZE - uio.uio_resid;
+		if (length == 0) {
+			eof = 1;
+			break;
+		}
+		int index = 0;
+		for (pos = 0; pos < length; index++) {
+			const struct dirent *de = (const void *)(buf + pos);
+			if (length - pos < offsetof(struct dirent, d_name) ||
+			    de->d_reclen == 0 || de->d_reclen > length - pos ||
+			    de->d_namlen > NAME_MAX ||
+			    offsetof(struct dirent, d_name) + de->d_namlen + 1 >
+			    de->d_reclen || (cookies && index >= ncookies)) {
+				error = EIO;
+				goto unlock;
+			}
+			next = cookies ? cookies[index] : off + de->d_reclen;
+			if (de->d_fileno == 0) {
+				off = next;
+				pos += de->d_reclen;
+				continue;
+			}
+			fields = nameoff + de->d_namlen + 1;
+			reclen = roundup(fields, wide ? 8 : 4);
+			if (reclen > count - used) {
+				eof = 0;
+				goto commit;
+			}
+			if (!wide && (de->d_fileno > UINT32_MAX ||
+			    next < 0 || (uint64_t)next > UINT32_MAX)) {
+				error = EOVERFLOW;
+				goto unlock;
+			}
+			memset(record, 0, sizeof(record));
+			if (wide) {
+				be64enc(record, de->d_fileno);
+				be64enc(record + 8, next);
+			} else {
+				be32enc(record, de->d_fileno);
+				be32enc(record + 4, next);
+			}
+			be16enc(record + nameoff - 2, reclen);
+			memcpy(record + nameoff, de->d_name, de->d_namlen);
+			/* Padding is unspecified. Leave it untouched, as observed
+			 * for aligned buffers on IRIX; never expose kernel bytes. */
+			error = copyout(record, irix_pointer(addr + used), fields);
+			if (error != 0)
+				goto unlock;
+			used += reclen;
+			off = next;
+			pos += de->d_reclen;
+		}
+		if (cookies) {
+			free(cookies, M_TEMP);
+			cookies = NULL;
+		}
+		if (eof)
+			break;
+	}
+commit:
+	mutex_enter(&fp->f_lock);
+	fp->f_offset = off;
+	mutex_exit(&fp->f_lock);
+	*rval = used;
+	/* ngetdents requires this pointer, even at EOF. As on IRIX, an EOF
+	 * copyout fault does not roll back the directory cursor or records. */
+	if (report_eof)
+		error = copyout(&eof, irix_pointer(SCARG(uap, eof)), sizeof(eof));
+unlock:
+	VOP_UNLOCK(vp);
+	if (cookies)
+		free(cookies, M_TEMP);
+	kmem_free(buf, MAXBSIZE);
+put:
+	fd_putfile(SCARG(uap, fd));
+	return error;
+}
+
+static int
+irix_getdents(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_readdir(l, args, rval, false, false);
+}
+
+static int
+irix_getdents64(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_readdir(l, args, rval, true, false);
+}
+
+static int
+irix_ngetdents(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_readdir(l, args, rval, false, true);
+}
+
+static int
+irix_ngetdents64(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_readdir(l, args, rval, true, true);
+}
+
+struct irix_poll_args {
+	syscallarg(uint32_t) fds;
+	syscallarg(uint32_t) nfds;
+	syscallarg(int32_t) timeout;
+};
+
+static int
+irix_poll(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_poll_args *uap = args;
+	struct sys_poll_args native = { 0 };
+
+	/* Both foreign ABIs use the native fixed-width pollfd layout and
+	 * event assignments. Native poll owns descriptor and readiness checks. */
+	CTASSERT(sizeof(struct pollfd) == 8);
+	CTASSERT(offsetof(struct pollfd, events) == 4);
+	CTASSERT(offsetof(struct pollfd, revents) == 6);
+	CTASSERT(POLLIN == 1 && POLLPRI == 2 && POLLOUT == 4);
+	CTASSERT(POLLERR == 8 && POLLHUP == 16 && POLLNVAL == 32);
+	CTASSERT(POLLRDNORM == 64 && POLLRDBAND == 128 && POLLWRBAND == 256);
+	SCARG(&native, fds) = irix_pointer(SCARG(uap, fds));
+	SCARG(&native, nfds) = SCARG(uap, nfds);
+	SCARG(&native, timeout) = SCARG(uap, timeout) < 0 ? INFTIM :
+	    SCARG(uap, timeout);
+	return sys_poll(l, &native, rval);
+}
+
+/* Hostname output uses a private snapshot outside the sysctl tree lock. */
 struct irix_gethostname_args {
 	syscallarg(uint32_t) name;
 	syscallarg(uint32_t) len;
@@ -2402,8 +2607,18 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 }
 
 static struct sysent irix_o32_sysent[] = {
+	[81] = { .sy_narg = 3, .sy_argsize = 3 * sizeof(register_t),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_getdents },
+	[205] = { .sy_narg = 3, .sy_argsize = 3 * sizeof(register_t),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_getdents64 },
+	[207] = { .sy_narg = 4, .sy_argsize = 4 * sizeof(register_t),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_ngetdents },
+	[208] = { .sy_narg = 4, .sy_argsize = 4 * sizeof(register_t),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_ngetdents64 },
 	[37] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_kill_args),
 	    .sy_call = irix_kill },
+	[87] = { .sy_narg = 3, .sy_argsize = sizeof(struct irix_poll_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_poll },
 	[88] = { .sy_narg = 3, .sy_argsize = sizeof(struct irix_sigreturn_args),
 	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_sigreturn },
 	[162] = { .sy_narg = 4, .sy_argsize = sizeof(struct irix_sigaction_args),
@@ -2674,6 +2889,10 @@ static struct sysent irix_o32_sysent[] = {
 
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
+	[81] = "getdents",
+	[205] = "getdents64",
+	[207] = "ngetdents",
+	[208] = "ngetdents64",
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[37] = "kill", [88] = "sigreturn", [162] = "sigaction",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
@@ -2682,7 +2901,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
-	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [82] = "sginap", [91] = "connect",
+	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [82] = "sginap", [87] = "poll", [91] = "connect",
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
 	[102] = "sendmsg", [105] = "setsockopt",
@@ -2756,6 +2975,11 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1075: code = 75; break;
 	case 1080: code = 80; break;
 	case 1082: code = 82; break;
+	case 1081: code = 81; break;
+	case 1205: code = 205; break;
+	case 1207: code = 207; break;
+	case 1208: code = 208; break;
+	case 1087: code = 87; break;
 	case 1088: code = 88; break;
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
@@ -2767,6 +2991,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1106: code = 106; break;
 	case 1107: code = 107; break;
 	case 1108: code = 108; break;
+	case 1116: code = 116; break;
 	case 1128: code = 128; break;
 	case 1129: code = 129; break;
 	case 1130: code = 130; break;
@@ -2777,6 +3002,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1136: code = 136; break;
 	case 1148: code = 148; break;
 	case 1158: code = 158; break;
+	case 1159: code = 159; break;
 	case 1160: code = 160; break;
 	case 1162: code = 162; break;
 	case 1164: code = 164; break;

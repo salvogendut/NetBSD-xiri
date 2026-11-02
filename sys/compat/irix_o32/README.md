@@ -1056,3 +1056,31 @@ The Xiri labs `irix-lxstat` and `irix-desktop-queries` contain independent
 o32/n32, direct/indirect, root/UID1234 reference fixtures and qualification.
 They measure 672 metadata and 240 query/readlink executions on IRIX 6.5.22m.
 Native qualification and desktop results are recorded by the Xiri repository.
+
+Desktop directory and RPC adapters (2026-11-02)
+----------------------------------------------
+
+The desktop follow-up adds raw 1087 `poll` and raw 1081/1205/1207/1208
+`getdents`/`getdents64`/`ngetdents`/`ngetdents64`, and completes the explicit
+1116/1159 dispatch entries for the preceding link adapters. The original
+IRIX probes cover both ABIs, direct/indirect traps and root/UID 1234.
+
+Directory conversion uses native vnode credentials, native inode numbers and
+filesystem cookies, with explicit 12/16-byte-aligned o32 record sizes (4-byte
+alignment) or 24/32-byte n32/64 record sizes (8-byte alignment). n32 selects the
+64-bit format even through the older syscall numbers. Small buffers preserve
+the next unreturned entry. ngetdents writes its required EOF pointer after
+committing successful records and the cursor, including when that pointer
+faults. Full requested spans are checked before copying; read-only spans use
+EACCES as observed on IRIX. Padding is unspecified and left untouched. The
+unmapped-buffer precheck deliberately avoids IRIX's occasional partial-byte
+write on an unaligned fault. Filesystem ordering, inode values and cookies
+are native values, not fabricated IRIX/XFS values. Union-mount traversal is
+outside this adapter's current scope.
+
+Poll forwards the shared fixed-width pollfd layout and flag assignments to
+native poll, normalizing all negative timeouts to an indefinite wait. Native
+socket readiness supports the desktop's RPC port-mapper exchange. Native
+pipe readiness differs from IRIX: the read end does not report POLLOUT, and
+POLLHUP does not add unrequested POLLRDNORM. These differences are explicit
+qualification limits, not claimed IRIX equivalence.
