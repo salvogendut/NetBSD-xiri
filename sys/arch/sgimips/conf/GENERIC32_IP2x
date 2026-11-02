@@ -142,8 +142,8 @@ options 	NFS_BOOT_DHCP,NFS_BOOT_BOOTPARAM
 #options 	WSEMUL_SUN		# sun terminal emulation
 options 	WSEMUL_VT100		# VT100 / VT220 emulation
 options 	WSDISPLAY_COMPAT_USL		# wsconscfg VT handling
-# different kernel output - see dev/wscons/wsdisplayvar.h
-options 	WS_KERNEL_FG=WSCOL_GREEN
+# Keep kernel messages legible over the Newport gradient.
+options 	WS_KERNEL_FG=WSCOL_WHITE
 #options 	WS_KERNEL_BG=WSCOL_BLACK
 # compatibility to other console drivers
 options 	WSDISPLAY_COMPAT_RAWKBD		# can get raw scancodes
@@ -187,6 +187,7 @@ hpc2 		at gio? addr 0x1f980000
 
 newport*	at gio?			# Newport (NG1) graphics
 wsdisplay* 	at newport? console ?
+options 	NEWPORT_DECOR		# black-to-green console gradient
 
 grtwo*		at gio?			# Express (GR2) graphics
 wsdisplay*	at grtwo? console ?

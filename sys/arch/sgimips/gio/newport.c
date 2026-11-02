@@ -38,6 +38,8 @@ __KERNEL_RCSID(0, "$NetBSD: newport.c,v 1.26 2026/08/18 21:27:29 adrian Exp $");
 #include <sys/device.h>
 #include <sys/kmem.h>
 
+#include "opt_newport.h"
+
 #include <machine/sysconf.h>
 #include <machine/machtype.h>
 
@@ -53,6 +55,10 @@ __KERNEL_RCSID(0, "$NetBSD: newport.c,v 1.26 2026/08/18 21:27:29 adrian Exp $");
 #include <sgimips/gio/giovar.h>
 #include <sgimips/gio/newportvar.h>
 #include <sgimips/gio/newportreg.h>
+
+#ifdef NEWPORT_DECOR
+#define NEWPORT_DECOR_STEPS	112
+#endif
 
 struct newport_dcb_cs_params {
 	int cs_width;
@@ -129,6 +135,10 @@ struct newport_devconfig {
 	struct wsscreen_descr	*dc_screen;
 	int			dc_mode;
 	struct vcons_data	dc_vd;
+#ifdef NEWPORT_DECOR
+	bool			dc_decor;
+	uint8_t			dc_decor_index[NEWPORT_DECOR_STEPS];
+#endif
 };
 
 static int  newport_match(device_t, struct cfdata *, void *);
@@ -164,7 +174,8 @@ static struct wsscreen_descr newport_screen = {
 	.nrows		= 64,
 	.fontwidth	= 8,
 	.fontheight	= 16,
-	.capabilities	= WSSCREEN_WSCOLORS | WSSCREEN_HILIT | WSSCREEN_REVERSE
+	.capabilities	= WSSCREEN_WSCOLORS | WSSCREEN_HILIT |
+			  WSSCREEN_REVERSE | WSSCREEN_UNDERLINE
 };
 
 static const struct wsscreen_descr *_newport_screenlist[] = {
@@ -522,6 +533,10 @@ newport_fill_rectangle(struct newport_devconfig *dc, int x1, int y1, int wi,
 {
 	int x2 = x1 + wi - 1;
 	int y2 = y1 + he - 1;
+	uint32_t mode;
+
+	if (wi <= 0 || he <= 0)
+		return;
 
 	rex3_wait_gfifo(dc);
 	
@@ -529,8 +544,7 @@ newport_fill_rectangle(struct newport_devconfig *dc, int x1, int y1, int wi,
 	    REX3_DRAWMODE0_ADRMODE_BLOCK | REX3_DRAWMODE0_DOSETUP |
 	    REX3_DRAWMODE0_STOPONX | REX3_DRAWMODE0_STOPONY);
 	rex3_write(dc, REX3_REG_CLIPMODE, 0x1e00);
-	rex3_write(dc, REX3_REG_DRAWMODE1,
-	    REX3_DRAWMODE1_PLANES_RGB |
+	mode = REX3_DRAWMODE1_PLANES_RGB |
 	    REX3_DRAWMODE1_DD_DD8 |
 	    REX3_DRAWMODE1_RWPACKED |
 	    REX3_DRAWMODE1_HD_HD8 |
@@ -539,12 +553,47 @@ newport_fill_rectangle(struct newport_devconfig *dc, int x1, int y1, int wi,
 	    REX3_DRAWMODE1_COMPARE_GT |
 	    REX3_DRAWMODE1_RGBMODE |
 	    REX3_DRAWMODE1_FASTCLEAR |
-	    REX3_DRAWMODE1_LO_SRC);
+	    REX3_DRAWMODE1_LO_SRC;
+#ifdef NEWPORT_DECOR
+	/* Use the same CI pixel path as the glyphs, without RGB fast clear. */
+	if (dc->dc_decor) {
+		mode &= ~(REX3_DRAWMODE1_RGBMODE | REX3_DRAWMODE1_FASTCLEAR);
+		rex3_write(dc, REX3_REG_COLORI, color & 0xff);
+	}
+#endif
+	rex3_write(dc, REX3_REG_DRAWMODE1, mode);
 	rex3_write(dc, REX3_REG_WRMASK, 0xffffffff);
 	rex3_write(dc, REX3_REG_COLORVRAM, color);
 	rex3_write(dc, REX3_REG_XYSTARTI, (x1 << REX3_XYSTARTI_XSHIFT) | y1);
 
 	rex3_write_go(dc, REX3_REG_XYENDI, (x2 << REX3_XYENDI_XSHIFT) | y2);
+}
+
+/*
+ * A vertical black-to-green gradient anchored to the display, not to
+ * character cells.  Repainting any rectangle must produce the same pixels as
+ * repainting the whole screen.
+ * Only black backgrounds are transparent; other terminal colours stay solid.
+ */
+static void
+newport_fill_background(struct newport_devconfig *dc, int x, int y,
+    int wi, int he, uint32_t color)
+{
+#ifdef NEWPORT_DECOR
+	int band, top, bottom;
+
+	if (dc->dc_decor && (color & 0xff) == 0 && wi > 0 && he > 0) {
+		for (top = y; top < y + he; top = bottom) {
+			band = top * NEWPORT_DECOR_STEPS / dc->dc_yres;
+			bottom = MIN(y + he,
+			    howmany((band + 1) * dc->dc_yres, NEWPORT_DECOR_STEPS));
+			newport_fill_rectangle(dc, x, top, wi, bottom - top,
+			    dc->dc_decor_index[band]);
+		}
+		return;
+	}
+#endif
+	newport_fill_rectangle(dc, x, y, wi, he, color);
 }
 
 static void
@@ -828,6 +877,42 @@ newport_setup_hw_rgb2_cmap(struct newport_devconfig *dc)
 		newport_cmap_setrgb(dc, 0x1f00 + i, i, i, i);
 }
 
+#ifdef NEWPORT_DECOR
+static void
+newport_setup_decor_cmap(struct newport_devconfig *dc)
+{
+	bool used[256] = { false };
+	unsigned int i, index, step;
+	uint8_t green, blue;
+
+	/*
+	 * Preserve the 16 RGB332 text colours and their inverted cursor colours.
+	 * This leaves at least 112 pairs for a ramp and its cursor complements.
+	 */
+	for (i = 0; i < 16; i++) {
+		index = (rasops_cmap[i * 3] & 0xe0) |
+		    ((rasops_cmap[i * 3 + 1] >> 3) & 0x1c) |
+		    (rasops_cmap[i * 3 + 2] >> 6);
+		used[index] = used[index ^ 0xff] = true;
+	}
+
+	step = 0;
+	for (index = 0; index < 128 && step < NEWPORT_DECOR_STEPS; index++) {
+		if (used[index])
+			continue;
+		dc->dc_decor_index[step] = index;
+		/* Octane-style teal green, #008060, at the bottom of the screen. */
+		green = 0x80 * step / (NEWPORT_DECOR_STEPS - 1);
+		blue = 0x60 * step / (NEWPORT_DECOR_STEPS - 1);
+		newport_cmap_setrgb(dc, index, 0, green, blue);
+		newport_cmap_setrgb(dc, index ^ 0xff, 255,
+		    255 - green, 255 - blue);
+		step++;
+	}
+	KASSERT(step == NEWPORT_DECOR_STEPS);
+}
+#endif
+
 /*
  * Setup the XMAP9 mode registers with the given mode.
  *
@@ -930,6 +1015,10 @@ newport_setup_hw(struct newport_devconfig *dc, int depth)
 	 * this driver to map RGB 332 -> the Newport interlaced RGB8 format.
 	 */
 	newport_setup_hw_ci_cmap(dc);
+#ifdef NEWPORT_DECOR
+	if (dc->dc_decor && dc->dc_mode == WSDISPLAYIO_MODE_EMUL && depth == 8)
+		newport_setup_decor_cmap(dc);
+#endif
 
 	/*
 	 * Write a ramp into RGB2 CMAP.
@@ -1042,6 +1131,11 @@ newport_attach(device_t parent, device_t self, void *aux)
 		newport_console_screen.scr_flags |= VCONS_SCREEN_IS_STATIC;
 		vcons_init_screen(&sc->sc_dc->dc_vd, &newport_console_screen,
 		    1, &defattr);
+#ifdef NEWPORT_DECOR
+		/* Also paint the margins before replaying the early console. */
+		newport_eraserows(&newport_console_screen.scr_ri, 0,
+		    newport_console_screen.scr_ri.ri_rows, defattr);
+#endif
 		sc->sc_dc->dc_screen->textops =
 		    &newport_console_screen.scr_ri.ri_ops;
 		vcons_replay_msgbuf(&newport_console_screen);
@@ -1125,6 +1219,15 @@ newport_init_screen(void *cookie, struct vcons_screen *scr,
 	ri->ri_ops.erasecols = newport_erasecols;
 	ri->ri_ops.cursor    = newport_cursor;
 	ri->ri_ops.putchar   = newport_putchar;
+#ifdef NEWPORT_DECOR
+	/* Early cnattach has no saved text to redraw, so enable only in vcons. */
+	if (!dc->dc_decor) {
+		dc->dc_decor = true;
+		if (dc->dc_mode == WSDISPLAYIO_MODE_EMUL)
+			newport_setup_decor_cmap(dc);
+	}
+	scr->scr_flags |= VCONS_NO_COPYCOLS | VCONS_NO_COPYROWS;
+#endif
 }
 
 /**** wsdisplay textops ****/
@@ -1172,16 +1275,23 @@ newport_putchar(void *c, int row, int col, u_int ch, long attr)
 	struct wsdisplay_font *font = PICK_FONT(ri, ch);
 	uint8_t *bitmap = (u_int8_t *)font->data + (ch - font->firstchar) * 
 	    font->fontheight * font->stride;
-	uint32_t pattern;
+	uint32_t pattern, mode;
 	int i;
 	int x = col * font->fontwidth + ri->ri_xorigin;
 	int y = row * font->fontheight + ri->ri_yorigin;
 
-	rex3_wait_gfifo(dc);
-	
-	rex3_write(dc, REX3_REG_DRAWMODE0, REX3_DRAWMODE0_OPCODE_DRAW |
+	mode = REX3_DRAWMODE0_OPCODE_DRAW |
 	    REX3_DRAWMODE0_ADRMODE_BLOCK | REX3_DRAWMODE0_STOPONX |
-	    REX3_DRAWMODE0_ENZPATTERN | REX3_DRAWMODE0_ZPOPAQUE);
+	    REX3_DRAWMODE0_ENZPATTERN | REX3_DRAWMODE0_ZPOPAQUE;
+#ifdef NEWPORT_DECOR
+	if (dc->dc_decor && ((attr >> 16) & 0xf) == WSCOL_BLACK) {
+		newport_fill_background(dc, x, y, font->fontwidth,
+		    font->fontheight, 0);
+		mode &= ~REX3_DRAWMODE0_ZPOPAQUE;
+	}
+#endif
+	rex3_wait_gfifo(dc);
+	rex3_write(dc, REX3_REG_DRAWMODE0, mode);
 
 	rex3_write(dc, REX3_REG_DRAWMODE1,
 	    REX3_DRAWMODE1_PLANES_CI |
@@ -1206,6 +1316,8 @@ newport_putchar(void *c, int row, int col, u_int ch, long attr)
 	if (font->stride == 1) {
 		for (i = 0; i < font->fontheight; i++) {
 			pattern = *bitmap << 24;
+			if ((attr & WSATTR_UNDERLINE) && i == font->fontheight - 2)
+				pattern = 0xffffffff;
 
 			rex3_write_go(dc, REX3_REG_ZPATTERN, pattern);
 
@@ -1215,6 +1327,8 @@ newport_putchar(void *c, int row, int col, u_int ch, long attr)
 		uint16_t *bitmap16 = (uint16_t *)bitmap;
 		for (i = 0; i < font->fontheight; i++) {
 			pattern = *bitmap16 << 16;
+			if ((attr & WSATTR_UNDERLINE) && i == font->fontheight - 2)
+				pattern = 0xffffffff;
 
 			rex3_write_go(dc, REX3_REG_ZPATTERN, pattern);
 
@@ -1250,7 +1364,7 @@ newport_erasecols(void *c, int row, int startcol, int ncols,
 	struct newport_devconfig *dc = scr->scr_cookie;
 	struct wsdisplay_font *font = ri->ri_font;
 
-	newport_fill_rectangle(dc,
+	newport_fill_background(dc,
 	    startcol * font->fontwidth + ri->ri_xorigin,	/* x1 */
 	    row * font->fontheight + ri->ri_yorigin,		/* y1 */
 	    ncols * font->fontwidth,				/* wi */
@@ -1284,14 +1398,14 @@ newport_eraserows(void *c, int startrow, int nrows, long attr)
 	struct wsdisplay_font *font = ri->ri_font;
 
 	if (startrow == 0 && nrows == ri->ri_rows) {
-		newport_fill_rectangle(dc,
+		newport_fill_background(dc,
 		    0,							/* x1 */
 		    0,							/* y1 */
 		    dc->dc_xres,					/* wi */
 		    dc->dc_yres,					/* he */
 		    ri->ri_devcmap[(attr >> 16) & 0xf]);
 	} else {
-		newport_fill_rectangle(dc,
+		newport_fill_background(dc,
 		    0,							/* x1 */
 		    startrow * font->fontheight + ri->ri_yorigin,	/* y1 */
 		    dc->dc_xres,					/* wi */
