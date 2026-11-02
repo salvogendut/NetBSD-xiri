@@ -31,6 +31,7 @@ int getfilename(const char *prompt, char *buf, int nbuf)
 
 		case 0x7f: /* del, erase */
 		case 0x08: /* backspace */
+		case KEY_BACKSPACE:
 			if (cpos == 0) continue;
 			buf[--cpos] = '\0';
 			break;
@@ -60,7 +61,10 @@ do_tab:
 
 			if (have_glob && gl.gl_pathc > 0) {
 				/* copy next match into buf */
-				strlcpy(buf, gl.gl_pathv[idx], nbuf);
+				if (strlen(gl.gl_pathv[idx]) < (size_t)nbuf)
+					strlcpy(buf, gl.gl_pathv[idx], nbuf);
+				else
+					beep();
 				/* cycling through all matches */
 				idx = (idx + 1) % gl.gl_pathc;
 			}
@@ -69,7 +73,9 @@ do_tab:
 			break;
 
 		default:
-			if (cpos < nbuf - 1) {
+			if (k >= 0x0100)
+				beep();
+			else if (cpos < nbuf - 1) {
 				  buf[cpos++] = k;
 				  buf[cpos] = '\0';
 			}

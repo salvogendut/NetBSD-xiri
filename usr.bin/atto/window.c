@@ -6,9 +6,10 @@ int win_cnt = 0;
 
 window_t* new_window(void)
 {
-	window_t *wp = (window_t *)malloc(sizeof(window_t));
+	window_t *wp = malloc(sizeof(window_t));
 	
-	assert(wp != NULL); /* call fatal instead XXX */
+	if (wp == NULL)
+		fatal("Failed to allocate required memory.");
 	wp->w_next = NULL;
 	wp->w_bufp = NULL;
 	wp->w_point = 0;

@@ -46,7 +46,7 @@ int main(int argc, char **argv)
 	}
 
 	setlocale(LC_ALL, "") ; /* required for 3,4 byte UTF8 chars */
-	if (initscr() == NULL) fatal("%s: Failed to initialize the screen.\n");
+	if (initscr() == NULL) fatal("Failed to initialize the screen.");
 	raw();
 	noecho();
 	keypad(stdscr, TRUE);
@@ -69,13 +69,19 @@ int main(int argc, char **argv)
 
 	if (argc) {
 		for (i = 0; i < argc; ++i) {
+			if (strlen(argv[i]) >= sizeof(curbp->b_fname))
+				fatal("File name too long.");
 			curbp = find_buffer(argv[i], TRUE);
+			if (curbp == NULL)
+				fatal("Failed to allocate required memory.");
 			(void) insert_file(argv[i], FALSE);
 			/* Save filename regardless of load() success. */
 			strlcpy(curbp->b_fname, argv[i], sizeof(curbp->b_fname));
 		}
 	} else {
 		curbp = create_scratch();
+		if (curbp == NULL)
+			fatal("Failed to allocate required memory.");
 	}
 
 	wheadp = curwp = new_window();
@@ -83,10 +89,12 @@ int main(int argc, char **argv)
 	associate_b2w(curbp, curwp);
 
 #ifndef SMALL
-	create_menu();
+	if (create_menu() == -1) {
+		msg("Warning: couldn't initialize menu.");
+	}
 #endif
 
-	if (!growgap(curbp, CHUNK)) fatal("%s: Failed to allocate required memory.\n");
+	if (!growgap(curbp, CHUNK)) fatal("Failed to allocate required memory.");
 
 	while (!done) {
 #ifndef SMALL
@@ -131,7 +139,7 @@ void fatal(const char *msg)
 		endwin();
 		putchar('\n');
 	}
-	fprintf(stderr, msg, PROG_NAME);
+	fprintf(stderr, "%s: %s\n", PROG_NAME, msg);
 	exit(1);
 }
 

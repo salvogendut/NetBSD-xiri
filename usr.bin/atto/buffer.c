@@ -22,6 +22,7 @@ void buffer_init(buffer_t *bp)
 	bp->b_egap = NULL;
 	bp->b_next = NULL;
 	bp->b_fname[0] = '\0';
+	bp->b_bname[0] = '\0';
 }
 
 /* Find a buffer by filename or create if requested */
@@ -39,7 +40,7 @@ buffer_t* find_buffer (const char *fname, int cflag)
 	}
 
 	if (cflag != FALSE) {
-		if ((bp = (buffer_t *) malloc (sizeof (buffer_t))) == NULL)
+		if ((bp = malloc (sizeof (buffer_t))) == NULL)
 			return (0);
 
 		buffer_init(bp);
@@ -141,6 +142,8 @@ int modified_buffers(void)
 buffer_t *create_scratch(void)
 {
 	buffer_t *bp = find_buffer("*scratch*", TRUE);
+	if (bp == NULL)
+		return NULL;
 	strlcpy(bp->b_bname, "*scratch*", sizeof(bp->b_bname));
 	return bp;
 }

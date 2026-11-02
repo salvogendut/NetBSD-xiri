@@ -55,15 +55,15 @@ typedef struct buffer_t
 	point_t b_epage;          /* end of page */
 	point_t b_reframe;        /* force a reframe of the display */
 	int b_cnt;                /* count of windows referencing this buffer */
-	int b_size;               /* current size of text being edited (not including gap) */
-	int b_psize;              /* previous size */
+	point_t b_size;           /* current size of text being edited (not including gap) */
+	point_t b_psize;          /* previous size */
 	char_t *b_buf;            /* start of buffer */
 	char_t *b_ebuf;           /* end of buffer */
 	char_t *b_gap;            /* start of gap */
 	char_t *b_egap;           /* end of gap */
 	int b_row;                /* cursor row */
 	int b_col;                /* cursor col */
-	char b_fname[NAME_MAX + 1]; /* filename */
+	char b_fname[PATH_MAX];   /* filename (full path) */
 	char b_bname[STRBUF_S];   /* buffer name */
 	char b_flags;             /* buffer flags */
 } buffer_t;
@@ -76,8 +76,8 @@ typedef struct window_t
 	point_t w_mark;
 	point_t w_page;
 	point_t w_epage;
-	char w_top;	    /* Origin 0 top row of window */
-	char w_rows;        /* no. of rows of text in window */
+	int w_top;	    /* Origin 0 top row of window */
+	int w_rows;         /* no. of rows of text in window */
 	int w_row;          /* cursor row */
 	int w_col;          /* cursor col */
 	int w_update;
