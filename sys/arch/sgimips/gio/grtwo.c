@@ -600,7 +600,8 @@ grtwo_putchar(void *c, int row, int col, u_int ch, long attr)
 {
 	struct grtwo_devconfig *dc = (void *) c;
 	struct wsdisplay_font *font = dc->dc_fontdata;
-	u_int8_t        *bitmap = (u_int8_t *) font->data + (ch - font->firstchar + 1) * font->fontheight * font->stride;
+	u_int8_t        *bitmap = (u_int8_t *)font->data +
+	    (ch - font->firstchar + 1) * font->fontheight * font->stride;
 	u_int32_t        pattern;
 	int             i;
 	int             x = col * font->fontwidth;
@@ -620,18 +621,18 @@ grtwo_putchar(void *c, int row, int col, u_int ch, long attr)
 	grtwo_wait_gfifo(dc);
 	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DRAWCHAR, font->fontwidth);
 	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, font->fontheight);
-	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, 2);
+	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, 1); /* 16-bit rows */
 	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, 0); /* x offset */
 	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, 0); /* y offset */
 	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, 0);
 	bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, 0);
 
 	for (i = 0; i < font->fontheight; i++) {
-		/* It appears that writes have to be 16 bits.  An "I tell you
-		   two times" sort of thing?  Thanks, SGI */
-		pattern = *bitmap | (*bitmap << 8);
-		bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, pattern);
+		/* The command consumes the glyph from bottom to top. */
 		bitmap -= font->stride;
+		/* The leftmost pixel is bit 15 of each 16-bit row. */
+		pattern = (u_int32_t)*bitmap << 8;
+		bus_space_write_4(dc->iot, dc->ioh, GR2_FIFO_DATA, pattern);
 	}
 
 	/* pad up to 18 */
