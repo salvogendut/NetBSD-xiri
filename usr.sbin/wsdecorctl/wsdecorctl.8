@@ -1,0 +1,142 @@
+.\" $NetBSD$
+.Dd November 2, 2026
+.Dt WSDECORCTL 8
+.Os
+.Sh NAME
+.Nm wsdecorctl
+.Nd select a runtime wscons decoration theme
+.Sh SYNOPSIS
+.Nm
+.Op Fl q
+.Op Fl f Ar device
+.Op Ar theme.conf
+.Sh DESCRIPTION
+.Nm
+loads a console decoration without rebuilding or rebooting the kernel.
+With no theme file it prints the current display dimensions, decoration type,
+and text rectangle.
+The default device is
+.Pa /dev/ttyE0 .
+Setting a theme requires superuser privileges and a writable device.
+.Pp
+.Fl q
+silently skips a missing device or a driver without decoration support.
+It does not suppress errors in theme files or failed theme changes.
+This is useful during startup on systems with different console drivers.
+.Pp
+The first implementation supports Newport on sgimips with
+.Dv NEWPORT_DECOR
+and the vt100 terminal emulator.
+Themes apply to every virtual screen on that display.
+A change in rows or columns clears existing terminal contents and scrollback,
+resets the terminal emulator, updates tty sizes, and sends
+.Dv SIGWINCH
+so interactive programs can redraw.
+Changes that retain the same rows and columns preserve text.
+Themes cannot be changed while a screen is in graphics mode or a virtual
+screen switch is pending.
+.Sh THEME FILES
+Each line contains a directive and whitespace-separated arguments.
+Blank lines and comments beginning with
+.Sq #
+are ignored.
+Duplicate, unknown, missing, and conflicting directives are errors.
+File names cannot contain whitespace or
+.Sq # .
+.Pp
+A gradient theme requires:
+.Bd -literal -offset indent
+type gradient
+top 000000
+bottom 008060
+.Ed
+.Pp
+Colours are hexadecimal RGB values without a leading hash.
+A solid theme uses
+.Dq type solid
+and
+.Dq color RRGGBB .
+Both use the entire display unless a
+.Dq viewport x y width height
+directive is supplied.
+The gradient is anchored to the physical display.
+.Pp
+An image theme requires:
+.Bd -literal -offset indent
+type image
+image sgiconsole.wsd
+viewport 288 176 704 672
+.Ed
+.Pp
+Relative image paths are resolved against the theme file's directory.
+Images must match the display height and width; Newport also accepts up to
+two extra image columns at the right edge for its VC2 timing variants.
+No scaling is performed.
+The text rectangle must fit the display and cover a uniform image colour.
+Its dimensions are rounded down to whole font cells, with at least 20 columns
+and 10 rows.
+At an 8 by 16 font the supplied rectangle gives 88 columns and 42 rows.
+Black terminal backgrounds reveal the decoration; other terminal colours
+remain opaque.
+.Pp
+The image format is WSDIMG1: eight magic bytes
+.Dq WSDIMG1\en ,
+four unsigned big-endian 32-bit integers (width, height, palette count,
+run count), RGB palette triples, then runs consisting of a big-endian 32-bit
+length and one palette index byte.
+Runs cover the complete row-major image exactly.
+Images are limited to 2048 by 2048 pixels and 223 colours.
+The kernel receives only the decoded indices and palette.
+.Pp
+To convert a PNG on a machine with Python and Pillow:
+.Bd -literal -offset indent
+python3 /usr/share/wscons/themes/mkwsd.py artwork.png artwork.wsd
+.Ed
+.Pp
+The converter preserves colours exactly and rejects images with transparency
+or more than 223 colours; reduce the palette in an image editor first.
+.Sh STARTUP
+The
+.Pa /etc/rc.d/wsdecor
+script runs after critical filesystems are mounted and before wscons screen
+configuration and login.
+The defaults in
+.Pa /etc/defaults/rc.conf
+are:
+.Bd -literal -offset indent
+wsdecor=YES
+wsdecor_device="/dev/ttyE0"
+wsdecor_theme="/usr/share/wscons/themes/framed.conf"
+.Ed
+.Pp
+Override these in
+.Pa /etc/rc.conf .
+For example, set
+.Dq wsdecor_theme=/etc/my-console.conf
+and place a theme file there.
+Set
+.Dq wsdecor=NO
+to keep the built-in appearance.
+On generic sgimips kernels this is the black-to-green gradient.
+The framed startup theme requires a 1280 or 1282 by 1024 display;
+a failed load leaves the existing appearance intact.
+The optional
+.Dv NEWPORT_FRAME
+kernel configuration still starts with the compiled-in frame.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+wsdecorctl /usr/share/wscons/themes/initial.conf
+wsdecorctl /usr/share/wscons/themes/framed.conf
+/etc/rc.d/wsdecor restart
+.Ed
+.Sh SEE ALSO
+.Xr wscons 4 ,
+.Xr rc.conf 5 ,
+.Xr wsconscfg 8 ,
+.Xr wsconsctl 8
+.Sh LIMITATIONS
+The firmware and earliest console output retain their own appearance.
+The startup selection requires the userland program, configuration and image
+files to be installed alongside the updated kernel.
+This first viewport implementation does not support kernels using
+.Dv VCONS_DRAW_INTR .

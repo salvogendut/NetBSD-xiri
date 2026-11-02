@@ -15,6 +15,9 @@ drivers in those kernels receive white kernel text but no gradient.
 All source paths below are relative to the repository root.  The companion
 tests/dev/wscons/README.newport-decor documents the manual regression suite
 and the emulator revisions actually tested.
+The optional NEWPORT_FRAME variant adds a bounded text viewport and an
+embedded image; see tests/dev/wscons/README.newport-frame and the asset guide
+in sys/arch/sgimips/gio/newport-decor/README.
 
 Reference implementation
 ------------------------
@@ -59,6 +62,14 @@ driver should clip rectangles to its visible bounds, reject empty areas,
 use arithmetic wide enough for its dimensions, and handle small modes when
 choosing N.  Include rasops ri_xorigin/ri_yorigin when mapping text cells.
 Convert to the hardware coordinate system only at the drawing boundary.
+
+For a framed layout, configure the same text origin and dimensions during
+cnattach and later screen initialization.  Restrict row clears and copies
+to that viewport, including clears with a nonblack attribute.  Repainting
+the surrounding image on a full redraw is separate from filling the text
+rectangle.  NEWPORT_FRAME uses newport_configure_screen and
+newport_paint_frame for these roles.  Its uniform panel permits early
+hardware scrolling without moving any visible background pattern.
 
 For each glyph, decode the effective background attribute after reverse
 video handling.  If it is black, restore the gradient under the entire cell
@@ -241,3 +252,6 @@ Once a second driver works, consider extracting shared gradient geometry
 and policy into a wscons helper.  Keep pixel packing, palette ownership,
 hardware rendering, and cursor strategy in the drivers until their common
 requirements are demonstrated by working implementations.
+
+Runtime theme selection and the accelerated viewport helper are documented
+in README.runtime-themes.  The first driver using that interface is Newport.

@@ -96,6 +96,8 @@ struct wsscreen {
 
 	struct tty *scr_tty;
 	int	scr_hold_screen;		/* hold tty output */
+	/* Snapshot taken by wsdisplay_resize_allowed(), independent of stty. */
+	int scr_resize_rows, scr_resize_cols;
 
 	int scr_flags;
 #define SCR_OPEN 1		/* is it open? */
@@ -1307,6 +1309,67 @@ wsdisplay_param(device_t dv, u_long cmd, struct wsdisplay_param *dp)
 	return (*sc->sc_accessops->ioctl)(sc->sc_accesscookie,
 	    sc->sc_focus->scr_dconf->emulcookie,
 	    cmd, (void *)dp, 0, NULL);
+}
+
+/*
+ * A driver changing all screen geometries must check before committing, then
+ * update the emulators and tty sizes in the same spltty critical section.
+ */
+int
+wsdisplay_resize_allowed(device_t dev)
+{
+	struct wsdisplay_softc *sc;
+	struct wsscreen *scr;
+	int i;
+
+	if (dev == NULL)
+		return ENXIO;
+	sc = device_private(dev);
+	if (sc->sc_flags & (SC_SWITCHPENDING | SC_XATTACHED))
+		return EBUSY;
+	for (i = 0; i < WSDISPLAY_MAXSCREEN; i++) {
+		scr = sc->sc_scr[i];
+		if (scr == NULL)
+			continue;
+		if (scr->scr_flags & SCR_GRAPHICS)
+			return EBUSY;
+		if (!WSSCREEN_HAS_EMULATOR(scr) ||
+		    scr->scr_dconf->wsemul->resize == NULL)
+			return EOPNOTSUPP;
+		scr->scr_resize_rows = scr->scr_dconf->scrdata->nrows;
+		scr->scr_resize_cols = scr->scr_dconf->scrdata->ncols;
+	}
+	return 0;
+}
+
+void
+wsdisplay_resize(device_t dev)
+{
+	struct wsdisplay_softc *sc = device_private(dev);
+	struct wsscreen *scr;
+	const struct wsscreen_descr *type;
+	int i;
+	bool changed;
+
+	for (i = 0; i < WSDISPLAY_MAXSCREEN; i++) {
+		scr = sc->sc_scr[i];
+		if (scr == NULL)
+			continue;
+		type = scr->scr_dconf->scrdata;
+		changed = scr->scr_resize_rows != type->nrows ||
+		    scr->scr_resize_cols != type->ncols;
+		if (changed)
+			(*scr->scr_dconf->wsemul->resize)
+			    (scr->scr_dconf->wsemulcookie, type);
+		if (!changed && scr->scr_tty->t_winsize.ws_row == type->nrows &&
+		    scr->scr_tty->t_winsize.ws_col == type->ncols)
+			continue;
+		scr->scr_tty->t_winsize.ws_row = type->nrows;
+		scr->scr_tty->t_winsize.ws_col = type->ncols;
+		kpreempt_disable();
+		ttysig(scr->scr_tty, TTYSIG_PG1, SIGWINCH);
+		kpreempt_enable();
+	}
 }
 
 int

@@ -3609,6 +3609,7 @@
 ./usr/share/man/cat8/wpa_supplicant.0		man-netutil-catman	wlan,.cat
 ./usr/share/man/cat8/wsconscfg.0		man-sysutil-catman	.cat
 ./usr/share/man/cat8/wsconsctl.0		man-sysutil-catman	.cat
+./usr/share/man/cat8/wsdecorctl.0		man-sysutil-catman	.cat
 ./usr/share/man/cat8/wsfontload.0		man-sysutil-catman	.cat
 ./usr/share/man/cat8/wsmoused.0			man-sysutil-catman	.cat
 ./usr/share/man/cat8/wsmuxctl.0			man-sysutil-catman	.cat
@@ -7219,6 +7220,7 @@
 ./usr/share/man/man8/wpa_supplicant.8		man-netutil-man		wlan,.man
 ./usr/share/man/man8/wsconscfg.8		man-sysutil-man		.man
 ./usr/share/man/man8/wsconsctl.8		man-sysutil-man		.man
+./usr/share/man/man8/wsdecorctl.8		man-sysutil-man		.man
 ./usr/share/man/man8/wsfontload.8		man-sysutil-man		.man
 ./usr/share/man/man8/wsmoused.8			man-sysutil-man		.man
 ./usr/share/man/man8/wsmuxctl.8			man-sysutil-man		.man

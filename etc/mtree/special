@@ -306,6 +306,7 @@
 ./etc/rc.d/wdogctl		type=file mode=0555
 ./etc/rc.d/wpa_supplicant	type=file mode=0555
 ./etc/rc.d/wscons		type=file mode=0555
+./etc/rc.d/wsdecor		type=file mode=0555
 ./etc/rc.d/wsmoused		type=file mode=0555
 ./etc/rc.d/xdm			type=file mode=0555 optional
 ./etc/rc.d/xfs			type=file mode=0555 optional

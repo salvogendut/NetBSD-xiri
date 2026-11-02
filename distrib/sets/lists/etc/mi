@@ -329,6 +329,7 @@
 ./etc/rc.d/wdogctl				etc-sysutil-rc
 ./etc/rc.d/wpa_supplicant			etc-net-rc
 ./etc/rc.d/wscons				etc-sys-rc
+./etc/rc.d/wsdecor				etc-sys-rc
 ./etc/rc.d/wsmoused				etc-sys-rc
 ./etc/rc.d/xntpd				etc-obsolete		obsolete
 ./etc/rc.d/ypbind				etc-nis-rc		yp

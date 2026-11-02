@@ -1,0 +1,135 @@
+Runtime console themes (first Newport implementation)
+====================================================
+
+Branch: feature/wscons-runtime-themes, based on feature/newport-framed-console.
+
+GENERIC32_IP2x and its 64-bit variants retain NEWPORT_DECOR, so their built-in
+appearance is the black-to-#008060 gradient.  With the updated userland and
+rc files installed, /etc/rc.d/wsdecor selects the framed image after critical
+filesystems mount, before wscons screen configuration and LOGIN.  This also
+works when wscons=NO.  Unsupported console drivers are skipped quietly.
+The NEWPORT_FRAME configuration remains available for a compiled-in frame
+from early console attachment.
+
+To select a theme immediately:
+
+    wsdecorctl /usr/share/wscons/themes/framed.conf
+    wsdecorctl /usr/share/wscons/themes/initial.conf
+
+For a persistent custom selection, put a theme in /etc/my-console.conf and
+set wsdecor_theme="/etc/my-console.conf" in /etc/rc.conf.  Set wsdecor=NO to
+retain the initial appearance throughout startup.  See wsdecorctl(8) for the
+configuration format, solid colours, gradients, viewports and image conversion.
+The shipped framed theme requires a 1280/1282 by 1024 Newport display.  At
+other resolutions its load fails with a diagnostic, leaving the gradient.
+The image is not scaled automatically.
+
+Images are converted once using share/wscons/themes/mkwsd.py (Python/Pillow).
+The installed utility decodes a bounded palette/run format in userland.  The
+kernel accepts only validated raw indices and palette data.  The text panel
+must be uniform so the cursor has an exact complementary colour; there are
+at most 223 image colours, with terminal colours reserved separately.  The
+supplied 161-colour image is lossless.  Regenerate/check it with:
+
+    python3 share/wscons/themes/mkwsd.py \
+        sys/arch/sgimips/gio/newport-decor/sgiconsole.png \
+        share/wscons/themes/sgiconsole.wsd --check
+
+Viewport resizing resets terminal state, contents and scrollback when rows or
+columns change.  It updates every existing screen and tty, and sends SIGWINCH.
+A theme or origin change with unchanged rows/columns retains text.  The image
+is repainted when returning from graphics mode or switching virtual terminals.
+The theme cannot be changed during graphics mode or a pending VT switch.
+Only root with a writable descriptor can set it.  Failed validation leaves
+both theme and screen dimensions untouched.  VCONS_DRAW_INTR is not supported
+by this first viewport implementation.
+
+Kernel/driver implementation
+----------------------------
+
+WSDISPLAYIO_GDECOR returns versioned metadata, with physical framebuffer
+width/height and a zero user pointer.  WSDISPLAYIO_SDECOR accepts a complete
+theme.  A uint64_t image address and fixed-width fields keep the ABI layout
+identical for 32-bit and 64-bit callers.  All reserved fields are zero.
+The driver validates/copies the image before changing state.  With the kernel
+lock held at spltty, it checks wsdisplay_resize_allowed(), asks vcons to
+prepare every replacement buffer using non-sleeping allocations, commits the
+geometry and palette, calls wsdisplay_resize(), and redraws the active screen.
+There are no sleeping allocations in the commit section.  Early output and
+serial consoles do not depend on theme files being accessible.
+
+Other accelerated drivers can opt into VCONS_VIEWPORT only if their textops
+use ri_xorigin/ri_yorigin and never draw through ri_bits.  They must implement
+bounds and palette validation, full background repaint, cursor behaviour,
+and mode restoration.  The viewport helper deliberately does not change
+fonts or framebuffer mappings.  See README.decor-porting for the other
+rendering requirements.  Software rasterisers and deferred rendering need
+additional work before they can use this path.
+
+Regression procedure
+--------------------
+
+Build the gradient, NEWPORT_FRAME and option-disabled configurations.  Compile
+wsdecorctl and newport_theme.c against the updated wsconsio.h in a NetBSD
+guest.  In a disposable test guest create ttyE1 with wsconscfg 1 and run
+newport_theme as root with ttyE0 as the controlling terminal.  The test checks
+invalid versions, reserved fields, types, overflowing/small rectangles, RGB,
+image pointers, palette/pixel indices, nonuniform panels, read-only descriptors,
+unprivileged setters, graphics mode, resizing both ttys and SIGWINCH.  It
+finishes with the original full-screen green gradient.  Use the 8x16 font
+and 1280/1282x1024 mode for the hard-coded geometry expectations.
+
+For the userspace parser, build wsdecor_parser.c with the updated sys headers
+and run `python3 check_wsdecor_parser.py ./wsdecor_parser`.  It checks valid
+image/gradient/solid themes and 19 malformed configurations or image streams.
+
+Apply framed.conf and run newport_decor.c plus the pixel comparisons in
+README.newport-frame.  Create screens both before and after selecting a theme;
+verify their sizes and switch away/back.  Switch gradient -> frame -> gradient
+repeatedly, test a solid colour and a descending custom gradient, and check
+that changing colours without changing geometry preserves text.  Reject
+malformed theme files, truncated/overlong image runs, out-of-range palettes,
+missing files and wrong-resolution images.  GET before/after a failed request
+must be identical.  Also boot normally with the rc hook installed and capture
+the initial gradient and the later framed startup output.
+
+Use isolated Iris/Prismatic fixtures as described in README.newport-frame.
+That document also records a pre-existing composed-frame refresh issue on
+large idle solid clears; compare raw framebuffer indices as well.  Emulator
+validation does not replace a test on physical Newport hardware.
+
+Validation on 2026-11-02/03
+---------------------------
+
+The gradient, compiled-frame and decoration-disabled mipseb kernels built.
+The loader compiled inside NetBSD with -Wall -Wextra -Werror.  The version-1
+ioctl layout was compiled for MIPS o32 and n64 (736 bytes, palette at offset
+64).  All 23 userspace parser cases and 19 kernel checks passed.  The latter
+include reserved palette bytes and a tty size pre-set independently of the
+emulator geometry: resize still resets the emulator and sends SIGWINCH.
+
+The isolated emulator revisions are those recorded in README.newport-frame.
+Prismatic RGB captures and standalone Iris raw-index captures passed the
+scroll, erase, cursor, numbered-text and graphics-mode restoration checks
+after loading the frame at runtime.  Existing and newly created VTs reported
+42x88; switching back to the gradient restored 64x160.  Every RGB pixel outside
+the viewport matched the supplied PNG.  A solid #123456 theme filled the
+entire display exactly; a descending #ff8040-to-black gradient matched all
+112 palette bands.  The final kernel/API checks and normal startup test ran
+on Prismatic; Iris rendering checks preceded the final tty-size edge-case fix.
+The known idle colour-clear composition limitation remains as documented in
+README.newport-frame.
+
+A normal multiuser boot with the installed rc hook showed the green gradient
+during early boot, automatically selected the frame, then displayed startup
+messages and the login prompt inside the inset rectangle.  Restarting the rc
+service restored the configured default after manual theme changes.  Theme
+assets were also installed through their source-tree Makefile and the output
+was checked against the generated image.
+
+Test captures and the detailed JSON report for this run are under
+/tmp/wscons-decor/runtime-boot-initial.png,
+/tmp/wscons-decor/runtime-boot-framed.png and
+/tmp/wscons-decor/runtime-validation.json.  These are local test artifacts,
+not installed files.  No physical hardware or 64-bit kernel runtime test was
+performed.

@@ -3,6 +3,7 @@ Newport decorated console: manual emulator/hardware regression
 
 For implementation guidance and extending this to other framebuffer drivers,
 see README.decor-porting in this directory.
+For the experimental image and bounded text area, see README.newport-frame.
 
 Build the sgimips GENERIC32_IP2x kernel configuration (or include it in a
 local configuration).  Boot an Indy/IP24 or Indigo2/IP22 with Newport graphics
@@ -49,6 +50,12 @@ and red background.  Check legibility and opaque red/reverse backgrounds.
 Capture it, type m then c, and compare: restoring emulation mode after mapped
 mode must reproduce the same text and background.  The extra c hides the
 cursor that vcons enables on a full redraw.  Type b to clear, q to exit.
+
+Type a for a red full-screen clear.  In a framed console, only the text
+rectangle should become red.  Type n to scroll numbered, coloured lines up
+three rows; capture it and compare with N, which draws the expected result
+directly.  These additional checks exercise nonblank text movement and
+coloured clearing beyond the blank-background comparisons above.
 
 Also create/switch between wscons screens with wsconscfg, verify text and
 decoration are restored, and return to screen 0 before removing test screens.

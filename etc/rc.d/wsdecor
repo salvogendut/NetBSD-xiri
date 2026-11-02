@@ -1,0 +1,21 @@
+#!/bin/sh
+# $NetBSD$
+# PROVIDE: wsdecor
+# REQUIRE: mountcritremote
+# BEFORE: wscons LOGIN
+
+$_rc_subr_loaded . /etc/rc.subr
+
+name="wsdecor"
+rcvar=$name
+start_cmd="wsdecor_start"
+stop_cmd=":"
+
+wsdecor_start()
+{
+	# -q silently skips consoles whose driver has no decoration support.
+	/usr/sbin/wsdecorctl -q -f "$wsdecor_device" "$wsdecor_theme"
+}
+
+load_rc_config $name
+run_rc_command "$1"

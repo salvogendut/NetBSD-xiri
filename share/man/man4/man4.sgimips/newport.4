@@ -37,6 +37,7 @@
 .Cd "newport* at gio? slot ?"
 .Cd "wsdisplay* at newport? console ?"
 .Cd "options NEWPORT_DECOR"
+.Cd "options NEWPORT_FRAME"
 .Sh DESCRIPTION
 The
 .Nm
@@ -77,6 +78,23 @@ configuration inherits these defaults.
 To restore a solid background in a configuration that includes one of these
 files, add
 .Dq no options NEWPORT_DECOR .
+.Pp
+The experimental
+.Dv NEWPORT_FRAME
+option selects an embedded image with a bevelled frame and grey text panel.
+It implies
+.Dv NEWPORT_DECOR
+and is enabled by the
+.Pa NEWPORT_FRAME
+example configuration.
+At 1280x1024 or 1282x1024, kernel messages and subsequent console output
+occupy a 704x672 pixel rectangle inside the frame, starting at (288,176).
+With the normal 8x16 font this gives 88 columns and 42 rows.
+The same geometry applies to the early kernel console.
+Scrolling and coloured clears preserve the surrounding image and padding;
+virtual-screen and graphics-mode restoration repaint the frame.
+Other resolutions use the full-screen gradient.
+This option is not enabled in the generic kernels.
 .Sh SEE ALSO
 .Xr sgimips/gio 4 ,
 .Xr sgimips/grtwo 4 ,

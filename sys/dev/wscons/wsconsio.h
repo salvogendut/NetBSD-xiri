@@ -754,4 +754,28 @@ struct wsdisplay_getfont {
  */
 #define WSDISPLAYIO_SET_DEPTH	_IOW('W', 109, int)
 
+/*
+ * Runtime console decoration.  Version 1 uses an indexed, row-major image;
+ * no compressed data is interpreted in the kernel.  pixels is a user address
+ * encoded as uint64_t so the ioctl layout is identical for 32/64-bit callers.
+ * GET returns metadata only (pixels = 0).  All reserved fields must be zero.
+ */
+#define WSDISPLAY_DECOR_VERSION 1
+#define WSDISPLAY_DECOR_GRADIENT 1
+#define WSDISPLAY_DECOR_IMAGE 2
+#define WSDISPLAY_DECOR_MAXCOLORS 223
+#define WSDISPLAY_DECOR_MAXSIZE 2048
+struct wsdisplay_decor {
+	uint64_t pixels;
+	uint32_t version, type;
+	uint32_t width, height;	/* image dimensions; framebuffer size on GET */
+	uint32_t x, y, w, h;	/* text rectangle, in pixels */
+	uint32_t ncolors, panel;	/* uniform image colour inside text rectangle */
+	uint32_t top, bottom;	/* gradient endpoints, 0x00RRGGBB */
+	uint32_t reserved[2];
+	uint8_t palette[224][3];	/* last entry reserved; keeps ABI aligned */
+};
+#define WSDISPLAYIO_GDECOR _IOR('W', 110, struct wsdisplay_decor)
+#define WSDISPLAYIO_SDECOR _IOW('W', 111, struct wsdisplay_decor)
+
 #endif /* _DEV_WSCONS_WSCONSIO_H_ */
