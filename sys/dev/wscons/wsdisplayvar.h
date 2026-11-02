@@ -176,6 +176,9 @@ void	wsdisplay_preattach(const struct wsscreen_descr *, void *, int, int,
 void	wsdisplay_predetach(void);
 void	wsdisplay_cndetach(void);
 void	wsdisplay_multicons_suspend(bool);
+/* Accelerated drivers: call at spltty, with the kernel lock held. */
+int	wsdisplay_resize_allowed(device_t);
+void	wsdisplay_resize(device_t);
 
 int	wsdisplaydevprint(void *, const char *);
 int	wsemuldisplaydevprint(void *, const char *);

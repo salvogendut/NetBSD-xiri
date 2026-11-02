@@ -252,3 +252,6 @@ Once a second driver works, consider extracting shared gradient geometry
 and policy into a wscons helper.  Keep pixel packing, palette ownership,
 hardware rendering, and cursor strategy in the drivers until their common
 requirements are demonstrated by working implementations.
+
+Runtime theme selection and the accelerated viewport helper are documented
+in README.runtime-themes.  The first driver using that interface is Newport.

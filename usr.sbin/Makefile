@@ -29,7 +29,7 @@ SUBDIR=	ac accton acpitools altq apm apmd arp \
 	unlink user \
 	videomode vipw veriexecgen vnconfig \
 	wakeonlan wg-keygen wg-userspace wgconfig \
-	wsconscfg wsfontload wsmoused wsmuxctl \
+	wsconscfg wsdecorctl wsfontload wsmoused wsmuxctl \
 	zdump zic
 
 .if (${MKAUDIO} != "no")

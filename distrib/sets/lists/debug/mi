@@ -1403,6 +1403,7 @@
 ./usr/libdata/debug/usr/sbin/wpa_passphrase.debug	comp-sysutil-debug	wlan,debug
 ./usr/libdata/debug/usr/sbin/wpa_supplicant.debug	comp-sysutil-debug	wlan,debug
 ./usr/libdata/debug/usr/sbin/wsconscfg.debug	comp-sysutil-debug	debug
+./usr/libdata/debug/usr/sbin/wsdecorctl.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/usr/sbin/wsfontload.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/usr/sbin/wsmoused.debug	comp-sysutil-debug	debug
 ./usr/libdata/debug/usr/sbin/wsmuxctl.debug	comp-sysutil-debug	debug

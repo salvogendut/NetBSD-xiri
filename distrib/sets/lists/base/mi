@@ -1879,6 +1879,7 @@
 ./usr/sbin/wpa_passphrase			base-sysutil-bin	wlan
 ./usr/sbin/wpa_supplicant			base-sysutil-bin	wlan
 ./usr/sbin/wsconscfg				base-sysutil-bin
+./usr/sbin/wsdecorctl				base-sysutil-bin
 ./usr/sbin/wsfontload				base-sysutil-bin
 ./usr/sbin/wsmoused				base-sysutil-bin
 ./usr/sbin/wsmuxctl				base-sysutil-bin
@@ -5696,6 +5697,11 @@
 ./usr/share/wscons/keymaps/pckbd.sv.svascii	base-util-share		share
 ./usr/share/wscons/keymaps/ukbd.any.powerbook	base-util-share		share
 ./usr/share/wscons/keymaps/ukbd.be.azerty	base-util-share		share
+./usr/share/wscons/themes			base-util-share
+./usr/share/wscons/themes/framed.conf		base-util-share		share
+./usr/share/wscons/themes/initial.conf		base-util-share		share
+./usr/share/wscons/themes/mkwsd.py		base-util-share		share
+./usr/share/wscons/themes/sgiconsole.wsd	base-util-share		share
 ./usr/share/zoneinfo				base-sys-share
 ./usr/share/zoneinfo/Africa			base-sys-share
 ./usr/share/zoneinfo/Africa/Abidjan		base-sys-share		share

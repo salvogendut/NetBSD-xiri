@@ -78,6 +78,8 @@ struct vcons_screen {
 #define VCONS_FONT_BYTES_R2L	0x200	/* request right-to-left byteorder in
 					 * wsfont_find() */
 					 
+#define VCONS_VIEWPORT		0x400	/* accelerated, no ri_bits drawing */
+
 	/* status flags used by vcons */
 	uint32_t scr_status;
 #define VCONS_IS_VISIBLE	1	/* this screen is currently visible */
@@ -137,6 +139,8 @@ int	vcons_init_screen(struct vcons_data *, struct vcons_screen *, int,
 
 /* completely redraw the screen, clear it if RI_FULLCLEAR is set */
 void	vcons_redraw_screen(struct vcons_screen *);
+/* Atomic geometry/buffer update; caller holds kernel lock and spltty. */
+int	vcons_set_viewport(struct vcons_data *, int, int, int, int);
 
 void	vcons_update_screen(struct vcons_screen *);
 

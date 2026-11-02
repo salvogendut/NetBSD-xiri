@@ -454,6 +454,115 @@ vcons_init_screen(struct vcons_data *vd, struct vcons_screen *scr,
 	return 0;
 }
 
+/*
+ * For drivers with accelerated textops only: no font or framebuffer mapping
+ * changes.  Allocate every replacement before changing any screen.  Geometry
+ * changes intentionally clear text/scrollback, like the font resize path.
+ */
+int
+vcons_set_viewport(struct vcons_data *vd, int x, int y, int w, int h)
+{
+#ifdef VCONS_DRAW_INTR
+	/* Deferred drawing needs a separate cache/softint resize transaction. */
+	return EOPNOTSUPP;
+#else
+	struct vcons_data_private *vdp = vd->private;
+	struct vcons_screen *scr;
+	struct rasops_info *ri;
+	struct resize_buffer {
+		struct resize_buffer *next;
+		struct vcons_screen *scr;
+		long *attrs;
+		int rows, cols, count;
+	} *head = NULL, *b;
+	int rows, cols, count, i, error = 0;
+
+	if (vdp->wanted != NULL)
+		return EBUSY;
+	LIST_FOREACH(scr, &vdp->screens, next) {
+		ri = &scr->scr_ri;
+		if (SCREEN_IS_BUSY(scr)) {
+			error = EBUSY;
+			goto out;
+		}
+		if (!(scr->scr_flags & VCONS_VIEWPORT)) {
+			error = EOPNOTSUPP;
+			goto out;
+		}
+		cols = w / ri->ri_font->fontwidth;
+		rows = h / ri->ri_font->fontheight;
+		if (x < 0 || y < 0 || w > ri->ri_width - x ||
+		    h > ri->ri_height - y || cols < 20 || rows < 10 ||
+		    cols > 1024 || rows > 1024) {
+			error = EINVAL;
+			goto out;
+		}
+		if (cols == ri->ri_cols && rows == ri->ri_rows)
+			continue;
+		count = rows * cols;
+#ifdef WSDISPLAY_SCROLLSUPPORT
+		count += WSDISPLAY_SCROLLBACK_LINES * cols;
+#endif
+		b = malloc(sizeof(*b), M_DEVBUF, M_NOWAIT);
+		if (b == NULL) {
+			error = ENOMEM;
+			goto out;
+		}
+		b->next = head;
+		head = b;
+		b->scr = scr;
+		b->rows = rows;
+		b->cols = cols;
+		b->count = count;
+		b->attrs = malloc(count * (sizeof(long) + sizeof(uint32_t)),
+		    M_DEVBUF, M_NOWAIT);
+		if (b->attrs == NULL) {
+			error = ENOMEM;
+			goto out;
+		}
+	}
+	for (b = head; b != NULL; b = b->next) {
+		scr = b->scr;
+		ri = &scr->scr_ri;
+		free(scr->scr_attrs, M_DEVBUF);
+		scr->scr_attrs = b->attrs;
+		b->attrs = NULL;
+		scr->scr_chars = (uint32_t *)&scr->scr_attrs[b->count];
+		for (i = 0; i < b->count; i++) {
+			scr->scr_attrs[i] = scr->scr_defattr;
+			scr->scr_chars[i] = ' ';
+		}
+		ri->ri_rows = b->rows;
+		ri->ri_cols = b->cols;
+		ri->ri_crow = ri->ri_ccol = 0;
+#ifdef WSDISPLAY_SCROLLSUPPORT
+		scr->scr_current_line = scr->scr_line_wanted = 0;
+		scr->scr_offset_to_zero = b->cols * WSDISPLAY_SCROLLBACK_LINES;
+		scr->scr_current_offset = scr->scr_offset_to_zero;
+#endif
+	}
+	LIST_FOREACH(scr, &vdp->screens, next) {
+		ri = &scr->scr_ri;
+		ri->ri_flg &= ~RI_CURSOR;
+		ri->ri_xorigin = x;
+		ri->ri_yorigin = y;
+		ri->ri_emuwidth = ri->ri_cols * ri->ri_font->fontwidth;
+		ri->ri_emuheight = ri->ri_rows * ri->ri_font->fontheight;
+		ri->ri_emustride = ri->ri_emuwidth * ri->ri_depth / 8;
+		scr->scr_type->nrows = ri->ri_rows;
+		scr->scr_type->ncols = ri->ri_cols;
+	}
+out:
+	while ((b = head) != NULL) {
+		head = b->next;
+		if (b->attrs != NULL)
+			free(b->attrs, M_DEVBUF);
+		free(b, M_DEVBUF);
+	}
+	return error;
+#endif
+}
+
 static int
 vcons_load_font(void *v, void *cookie, struct wsdisplay_font *f)
 {

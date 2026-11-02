@@ -31,3 +31,13 @@ It must remain within a uniform panel: early hardware scrolling and the
 fast cell-background fill depend on that property.  A background with a
 pattern beneath the text would require restoring that pattern per cell and
 deferring decorated scrolling until vcons has saved characters to redraw.
+
+Runtime selection
+-----------------
+
+NEWPORT_DECOR also accepts themes loaded by wsdecorctl without rebuilding the
+kernel.  The startup theme is share/wscons/themes/framed.conf; its image is
+converted by share/wscons/themes/mkwsd.py.  The generated header above is only
+needed for the optional compiled-in NEWPORT_FRAME appearance.  Runtime theme
+configuration and testing are described in tests/dev/wscons/README.runtime-themes
+and wsdecorctl(8).

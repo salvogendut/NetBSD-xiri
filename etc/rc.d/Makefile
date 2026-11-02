@@ -40,7 +40,7 @@ CONFIGFILES=\
 		savecore screenblank securelevel smtoff sshd \
 		staticroute swap1 swap2 sysctl sysdb syslogd \
 		timed tpctl ttys \
-		veriexec virecover wdogctl wpa_supplicant wscons wsmoused
+		veriexec virecover wdogctl wpa_supplicant wscons wsdecor wsmoused
 FILESDIR=	/etc/rc.d
 FILESMODE=	${BINMODE}
 
