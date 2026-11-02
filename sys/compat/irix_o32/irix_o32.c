@@ -559,6 +559,12 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 	}
 	case 20: /* SGI_SETSID: native session ownership and authorization. */
 		return sys_setsid(l, NULL, rval);
+	case 65: { /* SGI_GETSID */
+		struct sys_getsid_args ua;
+
+		SCARG(&ua, pid) = (int32_t)SCARG(uap, arg1);
+		return sys_getsid(l, &ua, rval);
+	}
 	case 68: /* SGI_ELFMAP */
 		return irix_o32_elfmap(l, (int32_t)SCARG(uap, arg1),
 		    SCARG(uap, arg2), SCARG(uap, arg3), rval);
@@ -678,6 +684,40 @@ irix_mkdir(struct lwp *l, const void *args, register_t *rval)
 	if (error == 0)
 		*rval = 0;
 	return error;
+}
+
+/* IRIX 6.5.22 uses zero for getpgrp and any nonzero value for the
+ * System V setpgrp operation. Repeating it as a group leader is a no-op.
+ * Native session creation owns the controlling-terminal and group state. */
+struct irix_pgrpsys_args {
+	syscallarg(int32_t) set;
+};
+
+static int
+irix_pgrpsys(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_pgrpsys_args *uap = args;
+	int error;
+
+	error = sys_getpgrp(l, NULL, rval);
+	if (error != 0 || SCARG(uap, set) == 0 ||
+	    *rval == l->l_proc->p_pid)
+		return error;
+	return sys_setsid(l, NULL, rval);
+}
+
+struct irix_chdir_args {
+	syscallarg(uint32_t) path;
+};
+
+static int
+irix_chdir(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_chdir_args *uap = args;
+	struct sys_chdir_args native = { 0 };
+
+	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
+	return sys_chdir(l, &native, rval);
 }
 
 struct irix_chmod_args {
@@ -2878,6 +2918,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_close_args),
 		.sy_call = (sy_call_t *)sys_close,
 	},
+	[12] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_chdir_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_chdir,
+	},
 	[13] = { .sy_call = irix_time },
 	[17] = {
 		.sy_narg = 1,
@@ -2905,6 +2951,8 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_access,
 	},
+	[39] = { .sy_narg = 1, .sy_argsize = sizeof(struct irix_pgrpsys_args),
+	    .sy_call = irix_pgrpsys },
 	[40] = {
 		.sy_narg = 4,
 		.sy_argsize = sizeof(struct irix_o32_syssgi_args),
@@ -3120,7 +3168,8 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[208] = "ngetdents64",
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[37] = "kill", [88] = "sigreturn", [162] = "sigaction",
-	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
+	[5] = "open", [6] = "close", [12] = "chdir", [17] = "break", [24] = "getuid",
+	[39] = "pgrpsys", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
 	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [128] = "gettimeofday",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
@@ -3180,6 +3229,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1012: code = 12; break;
 	case 1013: code = 13; break;
 	case 1015: code = 15; break;
 	case 1016: code = 16; break;
@@ -3189,6 +3239,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1024: code = 24; break;
 	case 1033: code = 33; break;
 	case 1037: code = 37; break;
+	case 1039: code = 39; break;
 	case 1040: code = 40; break;
 	case 1041: code = 41; break;
 	case 1042: code = 42; break;
@@ -3401,15 +3452,24 @@ irix_o32_copyargs(struct lwp *l, struct exec_package *pack,
 
 /* Validate the bounded vendor layout before the native ELF mapper sees it.
  * This is a separate contract from the unchanged Xiri static-note probe. */
+enum irix_o32_image_kind {
+	IRIX_IMAGE_DYNAMIC,
+	IRIX_IMAGE_INTERPRETER,
+	IRIX_IMAGE_STATIC
+};
+
 static int
 irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
-    const Elf32_Ehdr *eh, bool interpreter, Elf32_Phdr loads[2])
+    const Elf32_Ehdr *eh, enum irix_o32_image_kind kind, Elf32_Phdr loads[2])
 {
 	Elf32_Phdr ph[16];
 	unsigned nload = 0, ninterp = 0, ndynamic = 0, nphdr = 0;
+	unsigned nreginfo = 0, noptions = 0;
+	const bool interpreter = kind == IRIX_IMAGE_INTERPRETER;
+	const bool standalone = kind == IRIX_IMAGE_STATIC;
 	const bool n32 = (eh->e_flags & EF_MIPS_ABI2) != 0;
-	const uint32_t flags = n32 ? (interpreter ? 0x22 : 0x24) :
-	    (interpreter ? 3 : 5);
+	const uint32_t flags = standalone ? EF_MIPS_ABI2 :
+	    n32 ? (interpreter ? 0x22 : 0x24) : (interpreter ? 3 : 5);
 	size_t phsize;
 	int error;
 
@@ -3431,6 +3491,11 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
 	    eh->e_phentsize != sizeof(ph[0]) ||
 	    eh->e_phnum == 0 || eh->e_phnum > __arraycount(ph))
+		return ENOEXEC;
+	/* The measured static n32 layout has RX/RW loads plus register and
+	 * option metadata. It has no interpreter, dynamic section or note;
+	 * marked static fixtures retain their separate admission path. */
+	if (standalone && (!n32 || eh->e_phnum != 4))
 		return ENOEXEC;
 	phsize = eh->e_phnum * sizeof(ph[0]);
 	if (filesize < 0 || sizeof(*eh) + phsize > (uint64_t)filesize)
@@ -3465,27 +3530,42 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			loads[nload++] = *p;
 			break;
 		case PT_INTERP:
-			if (interpreter || ++ninterp != 1)
+			if (standalone || interpreter || ++ninterp != 1)
 				return ENOEXEC;
 			break;
 		case PT_DYNAMIC:
-			if (++ndynamic != 1 || p->p_filesz == 0)
+			if (standalone || ++ndynamic != 1 || p->p_filesz == 0)
 				return ENOEXEC;
 			break;
 		case PT_PHDR:
-			if (++nphdr != 1 || p->p_offset != eh->e_phoff ||
+			if (standalone || ++nphdr != 1 || p->p_offset != eh->e_phoff ||
 			    p->p_filesz != phsize || p->p_memsz != phsize)
 				return ENOEXEC;
 			break;
 		case 0x70000000: /* PT_MIPS_REGINFO */
+			if (standalone && (++nreginfo != 1 || p->p_filesz != 24 ||
+			    p->p_memsz != 24 || p->p_flags != PF_R ||
+			    p->p_align != 4 || (p->p_offset & 3) != 0))
+				return ENOEXEC;
+			break;
 		case 0x70000001: /* PT_MIPS_RTPROC: may be outside mapped segments */
+			if (standalone)
+				return ENOEXEC;
+			break;
 		case 0x70000002: /* PT_MIPS_OPTIONS */
+			if (standalone && (++noptions != 1 || p->p_filesz == 0 ||
+			    p->p_filesz > 4096 || p->p_memsz != p->p_filesz ||
+			    p->p_flags != PF_R || p->p_align != 8 ||
+			    (p->p_offset & 7) != 0 || (p->p_filesz & 7) != 0))
+				return ENOEXEC;
 			break;
 		default:
 			return ENOEXEC;
 		}
 	}
-	if (nload != 2 || ndynamic != 1 || ninterp != (interpreter ? 0 : 1) ||
+	if (nload != 2 || ndynamic != (standalone ? 0 : 1) ||
+	    ninterp != (interpreter || standalone ? 0 : 1) ||
+	    (standalone && (nreginfo != 1 || noptions != 1)) ||
 	    loads[0].p_offset != 0 || loads[0].p_filesz < sizeof(*eh) + phsize ||
 	    loads[0].p_memsz != loads[0].p_filesz ||
 	    loads[1].p_vaddr < round_page(loads[0].p_vaddr + loads[0].p_memsz) ||
@@ -3501,7 +3581,8 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 		bool contained = false;
 
 		if (p->p_type != PT_PHDR && p->p_type != PT_INTERP &&
-		    p->p_type != PT_DYNAMIC)
+		    p->p_type != PT_DYNAMIC && !(standalone &&
+		    (p->p_type == 0x70000000 || p->p_type == 0x70000002)))
 			continue;
 		for (unsigned j = 0; j < 2; j++) {
 			if (p->p_offset >= loads[j].p_offset &&
@@ -3534,7 +3615,7 @@ irix_o32_runtime_probe(struct lwp *l, struct exec_package *epp,
 	     strcmp(interp, "/usr/lib/libc.so.1") != 0))
 		return ENOEXEC;
 	if ((error = irix_o32_runtime_image(l, epp->ep_vp,
-	    epp->ep_vap->va_size, eh, false, main_loads)) != 0)
+	    epp->ep_vap->va_size, eh, IRIX_IMAGE_DYNAMIC, main_loads)) != 0)
 		return error;
 	if ((error = emul_find_interp(l, epp, interp)) != 0)
 		return error;
@@ -3549,7 +3630,7 @@ irix_o32_runtime_probe(struct lwp *l, struct exec_package *epp,
 	    (error = VOP_GETATTR(vp, &va, l->l_cred)) == 0 &&
 	    (error = exec_read(l, vp, 0, &ieh, sizeof(ieh), IO_NODELOCKED)) == 0)
 		error = irix_o32_runtime_image(l, vp, va.va_size, &ieh,
-		    true, interp_loads);
+		    IRIX_IMAGE_INTERPRETER, interp_loads);
 	VOP_UNLOCK(vp);
 	if (error != 0)
 		return error;
@@ -3587,6 +3668,13 @@ irix_o32_probe_image(struct lwp *l, struct exec_package *epp, void *header,
 
 	if (interp != NULL)
 		return irix_o32_runtime_probe(l, epp, eh, interp, pos);
+
+	if (eh->e_flags == (EF_MIPS_ARCH_3 | EF_MIPS_ABI2)) {
+		Elf32_Phdr loads[2];
+
+		return irix_o32_runtime_image(l, epp->ep_vp,
+		    epp->ep_vap->va_size, eh, IRIX_IMAGE_STATIC, loads);
+	}
 
 	if (eh->e_ident[EI_CLASS] != ELFCLASS32 ||
 	    eh->e_ident[EI_DATA] != ELFDATA2MSB ||
