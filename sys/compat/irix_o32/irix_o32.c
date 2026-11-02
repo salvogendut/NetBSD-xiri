@@ -374,7 +374,10 @@ out:
 	return error;
 }
 
-/* Two-load ELF mapping. Unlike MAP_FIXED mmap, the exec helpers never replace
+/* Preferred library addresses may use the full 32-bit user address range;
+ * freeware libraries commonly request addresses around 0x60000000. The
+ * collision fallback above remains bounded below 0x40000000.
+ * Two-load ELF mapping. Unlike MAP_FIXED mmap, the exec helpers never replace
  * existing mappings. Journal only mappings we created, including a partial
  * data page before its file read can fail. */
 static int
@@ -422,7 +425,7 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		    h->p_filesz > h->p_memsz ||
 		    (i == 0 && h->p_filesz != h->p_memsz) ||
 		    h->p_vaddr < 0x00400000 ||
-		    h->p_vaddr > 0x40000000 - h->p_memsz ||
+		    h->p_vaddr > IRIX_MAXUSER_ADDRESS - h->p_memsz ||
 		    (h->p_vaddr & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
 		    (h->p_offset & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
 		    (h->p_vaddr & PAGE_MASK) != (h->p_offset & PAGE_MASK) ||

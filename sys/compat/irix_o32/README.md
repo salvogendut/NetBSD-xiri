@@ -210,7 +210,11 @@ the load descriptions, as in the original interface.
 
 The subset requires ordered PT_LOAD headers, RX text at file offset zero
 without BSS, then RW data with optional BSS. Each segment is at most 16 MiB;
-the total virtual span is at most 32 MiB within `0x00400000..0x40000000`.
+the total virtual span is at most 32 MiB. Preferred library addresses may
+use `0x00400000..0x80000000` (the 32-bit user range), with checked segment
+ends. This admits freeware libraries such as GTK 1.2 around `0x60000000`.
+Collision relocation still searches only `0x04000000..0x40000000`; existing
+mappings, including the native compat stack reservation, are preserved.
 Addresses/offsets are page-aligned; ELF alignment is a power of two from one
 page through 1 MiB with congruent address/offset. File/virtual ranges cannot
 overlap, wrap, or exceed the file or signed 32-bit file-offset range. Physical
