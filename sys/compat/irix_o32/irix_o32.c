@@ -238,6 +238,42 @@ irix_o32_write(struct lwp *l, const void *args, register_t *rval)
 	return sys_write(l, &native, rval);
 }
 
+/* Normalized seek arguments: n32 has one 64-bit offset register, while
+ * o32 sign-extends its 32-bit offset. Keep the kernel argument slots fixed. */
+struct irix_lseek_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) offset_hi;
+	syscallarg(uint32_t) offset_lo;
+	syscallarg(int32_t) whence;
+};
+
+static int
+irix_lseek(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_lseek_args *uap = args;
+	struct sys_lseek_args native;
+	off_t position = 0;
+	int error;
+
+	memset(&native, 0, sizeof(native));
+	SCARG(&native, fd) = SCARG(uap, fd);
+	SCARG(&native, offset) = (int64_t)(((uint64_t)
+	    SCARG(uap, offset_hi) << 32) | SCARG(uap, offset_lo));
+	SCARG(&native, whence) = SCARG(uap, whence);
+	/* IRIX 6.5.22 sends SIGSYS for an unsupported whence selector. */
+	if (SCARG(uap, whence) < SEEK_SET || SCARG(uap, whence) > SEEK_END)
+		return sys_nosys(l, args, rval);
+	error = sys_lseek(l, &native, (register_t *)&position);
+	/* The original o32 call reports overflow after advancing the open
+	 * description; n32 returns the full offset in v0. */
+	if (error == 0 && l->l_proc->p_md.md_abi != _MIPS_BSD_API_N32 &&
+	    position > INT32_MAX)
+		error = EOVERFLOW;
+	if (error == 0)
+		*rval = position;
+	return error;
+}
+
 struct irix_o32_break_args {
 	syscallarg(uint32_t) nsize;
 };
@@ -2791,6 +2827,8 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 }
 
 static struct sysent irix_o32_sysent[] = {
+	[19] = { .sy_narg = 4, .sy_argsize = sizeof(struct irix_lseek_args),
+	    .sy_call = irix_lseek },
 	[81] = { .sy_narg = 3, .sy_argsize = 3 * sizeof(register_t),
 	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_getdents },
 	[205] = { .sy_narg = 3, .sy_argsize = 3 * sizeof(register_t),
@@ -3081,7 +3119,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[37] = "kill", [88] = "sigreturn", [162] = "sigaction",
 	[5] = "open", [6] = "close", [17] = "break", [24] = "getuid", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
-	[13] = "time", [15] = "chmod", [16] = "chown", [128] = "gettimeofday",
+	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [128] = "gettimeofday",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
@@ -3143,6 +3181,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1015: code = 15; break;
 	case 1016: code = 16; break;
 	case 1017: code = 17; break;
+	case 1019: code = 19; break;
 	case 1020: code = 20; break;
 	case 1024: code = 24; break;
 	case 1033: code = 33; break;
@@ -3195,33 +3234,43 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	}
 	const size_t nargs = irix_o32_sysent[code].sy_narg;
 	KASSERT(nargs <= __arraycount(args));
-	for (size_t i = 0; i < MIN(nargs, nregs); i++)
-		args[i] = (int32_t)reg->r_regs[firstreg + i];
-	if (nargs > nregs) {
-		const uint32_t usp = reg->r_regs[_R_SP];
-		int32_t spill[3];
-		const size_t bytes = (nargs - nregs) * sizeof(spill[0]);
-		/* This allowlist has only 32-bit arguments, at most six slots.
-		 * n32 never spills; wider syscalls need separate marshalling. */
-		KASSERT(!n32 && bytes <= sizeof(spill));
-		/* Both forms spill after the four o32 argument home slots. */
-		if (usp > UINT32_MAX - 16 - (bytes - 1)) {
-			error = EFAULT;
-			goto done;
+	if (code == 19) {
+		const int64_t offset = n32 ? reg->r_regs[firstreg + 1] :
+		    (int32_t)reg->r_regs[firstreg + 1];
+		args[0] = (int32_t)reg->r_regs[firstreg];
+		args[1] = (uint32_t)((uint64_t)offset >> 32);
+		args[2] = (uint32_t)offset;
+		args[3] = (int32_t)reg->r_regs[firstreg + 2];
+	} else {
+		for (size_t i = 0; i < MIN(nargs, nregs); i++)
+			args[i] = (int32_t)reg->r_regs[firstreg + i];
+		if (nargs > nregs) {
+			const uint32_t usp = reg->r_regs[_R_SP];
+			int32_t spill[3];
+			const size_t bytes = (nargs - nregs) * sizeof(spill[0]);
+			/* The remaining entries use 32-bit arguments, at most six slots.
+			 * n32 never spills here; lseek was normalized separately. */
+			KASSERT(!n32 && bytes <= sizeof(spill));
+			/* Both forms spill after the four o32 argument home slots. */
+			if (usp > UINT32_MAX - 16 - (bytes - 1)) {
+				error = EFAULT;
+				goto done;
+			}
+			error = copyin(irix_pointer(usp + 16), spill, bytes);
+			if (error != 0)
+				goto done;
+			for (size_t i = nregs; i < nargs; i++)
+				args[i] = spill[i - nregs];
 		}
-		error = copyin(irix_pointer(usp + 16), spill, bytes);
-		if (error != 0)
-			goto done;
-		for (size_t i = nregs; i < nargs; i++)
-			args[i] = spill[i - nregs];
 	}
 	error = sy_invoke(&irix_o32_sysent[code], l, args,
 	    &reg->r_regs[_R_V0], code);
 done:
 	switch (error) {
 	case 0:
-		/* Every implemented foreign return is a 32-bit value. */
-		reg->r_regs[_R_V0] = (int32_t)reg->r_regs[_R_V0];
+		/* n32 lseek returns a 64-bit offset; other entries return words. */
+		if (!(code == 19 && n32))
+			reg->r_regs[_R_V0] = (int32_t)reg->r_regs[_R_V0];
 		reg->r_regs[_R_V1] = (int32_t)reg->r_regs[_R_V1];
 		reg->r_regs[_R_A3] = 0;
 		break;
