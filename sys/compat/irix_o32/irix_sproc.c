@@ -89,7 +89,7 @@ irix_share_single(struct proc *p)
 	if (g != NULL)
 		mutex_enter(&g->lock);
 	single = p->p_nlwps == 1 && p->p_vmspace->vm_refcnt ==
-	    (g == NULL ? 1U : 2U) && (g == NULL || g->count == 1);
+	    (g == NULL ? 1 : 2) && (g == NULL || g->count == 1);
 	if (g != NULL)
 		mutex_exit(&g->lock);
 	return single;
@@ -290,17 +290,17 @@ irix_share_prctl(struct lwp *l, uint32_t option, uint32_t pid, register_t *rval)
 	if (option != 2 && option != 6 && option != 13 && option != 14)
 		return ENOSYS;
 	if (g == NULL) {
-		if (option == 14 || (option == 2 && (pid == 0 || pid == l->l_proc->p_pid))) {
+		if (option == 14 || (option == 2 && (pid == 0 || pid == (uint32_t)l->l_proc->p_pid))) {
 			*rval = 0;
 			return 0;
 		}
 		return option == 13 ? EINVAL : ESRCH;
 	}
 	mutex_enter(&g->lock);
-	if (pid == 0 || pid == l->l_proc->p_pid)
+	if (pid == 0 || pid == (uint32_t)l->l_proc->p_pid)
 		target = ip;
 	for (unsigned i = 0; i < 2; i++)
-		if (g->member[i] && g->member[i]->proc->p_pid == pid)
+		if (g->member[i] && (uint32_t)g->member[i]->proc->p_pid == pid)
 			target = g->member[i];
 	if (option == 14)
 		*rval = g->count;

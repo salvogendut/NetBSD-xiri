@@ -5,6 +5,30 @@ big-endian o32 and LP64 MIPS kernels. It supports Xiri's synthetic static fixtur
 bounded dynamic interpreter experiment, not restored `COMPAT_IRIX` or general
 vendor-application compatibility.
 
+## Loadable module on an N64 kernel
+
+`sys/modules/compat_irix_o32` builds the same personality as a kernel module
+for `MACHINE_ARCH=mips64eb`. Its ELF32 interpreter supports both IRIX o32
+and n32 programs. Use `options MODULAR`, `EXEC_ELF32` and `COMPAT_NETBSD32`
+in the kernel and omit `COMPAT_IRIX_O32` when testing module delivery.
+The module depends on `exec_elf32` and `compat_netbsd32`; these may be built
+into the kernel. NetBSD's current MIPS module loader only supports N64, so
+the 32-bit kernel still requires the built-in personality.
+
+For direct SGI PROM boot, `makeoptions COPY_SYMTAB=1` supplies kernel symbols
+without relying on a NetBSD bootloader's symbol-table bootinfo record.
+Install the module beneath `sysctl -n kern.module.path`, in
+`compat_irix_o32/compat_irix_o32.kmod`, and enable the modules rc.d service
+with an entry in `/etc/modules.conf`. Interactive load/unload is denied at
+securelevel 1; lifecycle tests run in single-user mode at securelevel 0.
+The standard `exec_remove` scan refuses unload while a process uses this
+personality. The Xiri companion repository supplies a bounded native-parent
+busy-unload check and module build/guest probes in `lab/irix-module`.
+
+The module currently requires this fork's exported `selcommon_kern` helper
+and `emul.e_sigmask` callback. It is not a stock-NetBSD deployment yet.
+Newport and the native platform drivers remain separate kernel components.
+
 The static probe accepts ELF32/MSB MIPS III `ET_EXEC`, System V OSABI, ABI version zero,
 and flags `0x20000101` (o32), or `0x20000021` (n32 on LP64). It requires two or three program headers immediately
 after the ELF header, in this order: read/execute text, optional read/write

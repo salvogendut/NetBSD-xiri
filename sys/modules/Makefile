@@ -218,6 +218,10 @@ SUBDIR+=	xldscripts
 .endif
 
 # Machine dependent section
+.if ${MACHINE_ARCH} == "mips64eb"
+SUBDIR+=	compat_irix_o32
+.endif
+
 .if ${MACHINE_ARCH} == "i386" || \
     ${MACHINE_CPU} == "m68k"
 SUBDIR+=	exec_aout

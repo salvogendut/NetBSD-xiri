@@ -260,7 +260,7 @@ irix_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 			put32(frame, si + 4, ksi->ksi_code);
 			put32(frame, si + 12, ksi->ksi_pid);
 			put32(frame, si + 20, ksi->ksi_code == CLD_EXITED ?
-			    ksi->ksi_status : foreign_signal(ksi->ksi_status));
+			    (unsigned)ksi->ksi_status : foreign_signal(ksi->ksi_status));
 		} else if (ksi->ksi_code > 0 && ksi->ksi_code != SI_NOINFO) {
 			put32(frame, si + 4, ksi->ksi_code);
 			put32(frame, si + 12, (uintptr_t)ksi->ksi_addr);

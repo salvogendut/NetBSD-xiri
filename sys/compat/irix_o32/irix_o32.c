@@ -429,7 +429,7 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		    (h->p_vaddr & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
 		    (h->p_offset & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
 		    (h->p_vaddr & PAGE_MASK) != (h->p_offset & PAGE_MASK) ||
-		    h->p_align < (i == 0 ? PAGE_SIZE : 4096) ||
+		    h->p_align < (i == 0 ? (unsigned)PAGE_SIZE : 4096U) ||
 		    h->p_align > 1024 * 1024 ||
 		    !powerof2(h->p_align) ||
 		    h->p_vaddr % h->p_align != h->p_offset % h->p_align ||
@@ -1510,7 +1510,7 @@ irix_socketname(const void *args, register_t *rval, bool peer)
 	 * before it can become a native unsigned copy size. */
 	if (length < 0)
 		return EFAULT;
-	if (length > sizeof(foreign))
+	if ((size_t)length > sizeof(foreign))
 		length = sizeof(foreign);
 	foreign.family = 2;
 	foreign.port = native->sin_port;
@@ -3522,8 +3522,8 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			    p->p_offset > INT32_MAX - p->p_filesz ||
 			    (p->p_vaddr & PAGE_MASK) != 0 ||
 			    (p->p_offset & PAGE_MASK) != 0 ||
-			    p->p_align < (!interpreter && nload == 1 ? 4096 :
-			    PAGE_SIZE) || p->p_align > 1024 * 1024 ||
+			    p->p_align < (!interpreter && nload == 1 ? 4096U :
+			    (unsigned)PAGE_SIZE) || p->p_align > 1024 * 1024 ||
 			    !powerof2(p->p_align) ||
 			    p->p_vaddr % p->p_align != p->p_offset % p->p_align)
 				return ENOEXEC;
@@ -3705,7 +3705,7 @@ irix_o32_probe_image(struct lwp *l, struct exec_package *epp, void *header,
 	    load->p_filesz < sizeof(*eh) + phsize ||
 	    load->p_filesz != load->p_memsz || load->p_filesz > 1024 * 1024 ||
 	    load->p_filesz > epp->ep_vap->va_size ||
-	    load->p_align < PAGE_SIZE || load->p_align > 1024 * 1024 ||
+	    load->p_align < (unsigned)PAGE_SIZE || load->p_align > 1024 * 1024 ||
 	    !powerof2(load->p_align) || (load->p_vaddr % load->p_align) != 0 ||
 	    note->p_offset < sizeof(*eh) + phsize ||
 	    note->p_filesz != sizeof(marker) ||
@@ -3723,7 +3723,7 @@ irix_o32_probe_image(struct lwp *l, struct exec_package *epp, void *header,
 		if (data->p_type != PT_LOAD || data->p_flags != (PF_R | PF_W) ||
 		    data->p_memsz == 0 || data->p_memsz > 1024 * 1024 ||
 		    data->p_filesz > data->p_memsz ||
-		    data->p_align < PAGE_SIZE || data->p_align > 1024 * 1024 ||
+		    data->p_align < (unsigned)PAGE_SIZE || data->p_align > 1024 * 1024 ||
 		    !powerof2(data->p_align) ||
 		    (data->p_vaddr & PAGE_MASK) != 0 ||
 		    (data->p_offset & PAGE_MASK) != 0 ||
