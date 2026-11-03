@@ -17,7 +17,7 @@ tests/dev/wscons/README.newport-decor documents the manual regression suite
 and the emulator revisions actually tested.
 The optional NEWPORT_FRAME variant adds a bounded text viewport and an
 embedded image; see tests/dev/wscons/README.newport-frame and the asset guide
-in sys/arch/sgimips/gio/newport-decor/README.
+in xiri/graphics/README.
 
 Reference implementation
 ------------------------

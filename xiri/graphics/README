@@ -1,0 +1,70 @@
+Xiri console graphics
+======================
+
+These are the canonical sources for the SGI-style console decoration:
+
+    sgiconsole.xcf   Editable GIMP artwork supplied with the console image.
+    sgiconsole.png   Exported RGB image used by both conversion tools.
+    sgiconsole.wsd   Generated indexed image loaded by wsdecorctl.
+    initial.conf    Black-to-Octane-green gradient for the initial appearance.
+    framed.conf     Framed image and inset text rectangle for normal startup.
+    mkwsd.py        Convert an image to the runtime WSDIMG1 format.
+    mkframe.py      Generate the optional compiled-in Newport image header.
+
+sgiconsole.png is the canonical export for both console variants.  Preserve
+the editable XCF when exporting an updated PNG.
+
+The supplied image is 1282x1024; its final two columns are black.  The framed
+console uses it at 1282x1024 or clips those columns at 1280x1024.  Its text
+rectangle is (288,176) through (991,847), inclusive: 704x672 pixels, or 88
+columns by 42 rows with the normal 8x16 font.  It lies entirely inside the
+uniform grey panel, leaving padding between text and the bevel.
+
+Runtime image
+-------------
+
+From the repository root, regenerate or check the runtime image with:
+
+    python3 xiri/graphics/mkwsd.py \
+        xiri/graphics/sgiconsole.png xiri/graphics/sgiconsole.wsd
+    python3 xiri/graphics/mkwsd.py \
+        xiri/graphics/sgiconsole.png xiri/graphics/sgiconsole.wsd --check
+
+The normal share/wscons/themes build installs initial.conf, framed.conf,
+sgiconsole.wsd and mkwsd.py from this directory to /usr/share/wscons/themes.
+The XCF and PNG are editing sources and are not installed by that target.
+The default startup selection remains /usr/share/wscons/themes/framed.conf.
+Other display sizes retain the initial gradient if that image cannot load.
+See wsdecorctl(8) and tests/dev/wscons/README.runtime-themes for configuration
+and testing.
+
+Compiled-in image
+-----------------
+
+NEWPORT_FRAME optionally embeds the frame from early console attachment.
+Its generated header stays with the driver at
+sys/arch/sgimips/gio/newport_frame.h so kernel builds need no artwork tools.
+Regenerate or check it from the repository root with:
+
+    python3 xiri/graphics/mkframe.py
+    python3 xiri/graphics/mkframe.py --check
+
+The script locates its source and output relative to its own path and also
+works when invoked from another directory.  The header records the PNG's
+SHA256 and encodes disjoint filled rectangles.  The converter verifies that
+they reconstruct every source pixel exactly.  At other display sizes the
+compiled-in frame falls back to the gradient and full-screen text area.
+
+Editing requirements
+--------------------
+
+Pillow is needed for regeneration only.  Normal builds use the checked-in WSD
+image and C header.  All 161 colours in the supplied PNG are preserved.
+Newport reserves the RGB332 terminal colours and their cursor complements,
+plus the uniform panel's complement, leaving room for at most 223 image colours.
+
+Export an opaque RGB PNG from sgiconsole.xcf.  Keep the text panel uniform and
+check its rectangle in both framed.conf and mkframe.py when changing the layout.
+The fixed compiled-in layout currently requires a 1282x1024 export.  Regenerate
+both outputs and run the console checks described in
+tests/dev/wscons/README.newport-frame and tests/dev/wscons/README.runtime-themes.

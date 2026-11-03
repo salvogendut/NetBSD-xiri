@@ -13,7 +13,7 @@ the frame option falls back to the full-screen gradient.  Firmware output
 before the NetBSD console attaches remains controlled by the PROM.
 
 The asset and regeneration instructions are in
-sys/arch/sgimips/gio/newport-decor/README.  All 161 source colours are retained.
+xiri/graphics/README.  All 161 source colours are retained.
 The PNG is converted into constant palette/rectangle data ahead of kernel
 builds.  The panel is uniform, allowing hardware scrolling before vcons
 attaches while the outer image stays fixed.

@@ -24,16 +24,16 @@ The shipped framed theme requires a 1280/1282 by 1024 Newport display.  At
 other resolutions its load fails with a diagnostic, leaving the gradient.
 The image is not scaled automatically.
 
-Images are converted once using share/wscons/themes/mkwsd.py (Python/Pillow).
+Images are converted once using xiri/graphics/mkwsd.py (Python/Pillow).
 The installed utility decodes a bounded palette/run format in userland.  The
 kernel accepts only validated raw indices and palette data.  The text panel
 must be uniform so the cursor has an exact complementary colour; there are
 at most 223 image colours, with terminal colours reserved separately.  The
 supplied 161-colour image is lossless.  Regenerate/check it with:
 
-    python3 share/wscons/themes/mkwsd.py \
-        sys/arch/sgimips/gio/newport-decor/sgiconsole.png \
-        share/wscons/themes/sgiconsole.wsd --check
+    python3 xiri/graphics/mkwsd.py \
+        xiri/graphics/sgiconsole.png \
+        xiri/graphics/sgiconsole.wsd --check
 
 Viewport resizing resets terminal state, contents and scrollback when rows or
 columns change.  It updates every existing screen and tty, and sends SIGWINCH.

@@ -1,0 +1,15 @@
+Xiri-specific resources
+=======================
+
+This directory holds artwork, theme assets and supporting material specific
+to the Xiri fork that do not have a natural home in the NetBSD source layout.
+Kernel code, drivers, userland programs and their tests use the usual NetBSD
+directories.
+
+graphics/ contains the SGI console artwork, its editable GIMP source, the
+initial and framed console themes, and the tools used to generate their
+runtime and compiled-in images.  See graphics/README for editing, regeneration
+and validation instructions.
+
+The normal build installs the theme files through share/wscons/themes/Makefile
+at /usr/share/wscons/themes.  No separate build of this directory is needed.

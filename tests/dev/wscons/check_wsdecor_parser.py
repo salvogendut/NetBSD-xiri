@@ -65,7 +65,7 @@ def main():
     parser.add_argument("executable", type=Path)
     parser.add_argument(
         "--themes", type=Path,
-        default=Path(__file__).resolve().parents[3] / "share/wscons/themes",
+        default=Path(__file__).resolve().parents[3] / "xiri/graphics",
     )
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="wsdecor-parser-") as directory:
