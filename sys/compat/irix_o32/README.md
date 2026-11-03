@@ -1049,8 +1049,10 @@ the replacement native PCB valid after cpu_setmcontext. Sigaction output is
 bytewise to preserve original 4/28-byte fault prefixes on the o32 kernel.
 All fixture groups are absent and all guests halt cleanly.
 
-Signals 32..64, unsupported action-mask bits, SIGCHLD-specific high flags
-and multi-LWP disposition changes are outside this subset. Reserved output
+At this checkpoint, signals 32..64, unsupported action-mask bits,
+SIGCHLD-specific high flags and multi-LWP disposition changes were outside
+the subset. The later signal-mask extension below accepts full masks and
+SIGCHLD NOCLDSTOP while retaining the other stated limits. Reserved output
 is zeroed. Alternate-stack setup, nested delivery, restart, realtime signals,
 broad fault translation and general multi-child waits remain unqualified.
 Invalid return-context checks enforce user PC/SP bounds and known fields;
@@ -1117,3 +1119,35 @@ The guarded readlink probes exposed native FFS fast-symlink reads discarding
 uiomove errors. The adapter reads into a bounded kernel buffer and performs
 its own user copyout so invalid output pointers report EFAULT and preserve
 any already copied prefix.
+
+
+## GIMP full action masks (2026-11-03)
+
+Original GIMP 1.2.5 registers handlers with a sigfillset action mask. The
+adapter now projects the 128-bit input mask onto supported traditional
+signals 1..31, matching the existing sigprocmask subset. Queries expose that
+effective mask; they do not promise IRIX's wider mask retention or delivery
+of checkpoint/realtime signals. Handler registration for signals 32..64
+remains unsupported. SIGCHLD NOCLDSTOP (0x20000), added for winterm, is
+supported; NOCLDWAIT (0x10000) remains unsupported.
+
+IRIX retains a signal explicitly included in sa_mask even with NODEFER.
+Native NetBSD sigaction1 clears it whenever native SA_NODEFER is present.
+The adapter therefore omits the native flag when the explicit self-mask
+must be retained, while preserving the foreign flag in query metadata.
+Native signal machinery still owns delivery and unmaskable signals.
+
+The companion Xiri GIMP lab passes 80 paired original-IRIX/native records
+covering full/libc masks, o32/n32, direct/indirect calls, root/UID1234,
+legacy/siginfo/NODEFER delivery, SIGCHLD reaping and mask restoration. Another
+80 established signal regressions and four native controls pass. The module
+with this change uses the previously qualified N64 core kernel; no new core
+hook is required. Build/source pins and clean shutdown evidence are in
+Xiri docs/results/2026-11-03-irix-gimp-signals.json.
+
+With separately inventoried original resources and a native-visible freeware
+prefix, GIMP completes setup, paints, saves/reopens matching XCF and PNG,
+quits normally, and launches from its existing Icon Catalog entry. These
+bounded checks do not qualify every plug-in. Shared-memory tile transport
+uses its fallback; preference backup rename (1114) remains unimplemented.
+See Xiri docs/results/2026-11-03-irix-gimp.md for resource and UI evidence.
