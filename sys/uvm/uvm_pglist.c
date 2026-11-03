@@ -359,6 +359,15 @@ uvm_pglistalloc_contig_aggressive(int num, paddr_t low, paddr_t high,
 		}
 
 		/*
+		 * Rounding pa down to alignment may put spa below the first
+		 * usable page in this segment (or below low).  No aligned run
+		 * containing pa can satisfy the lower bound in that case.
+		 */
+		if (spa < rlo) {
+			continue;
+		}
+
+		/*
 		 * Look forward as far as the lowest of:
 		 *  - the last page of the physseg
 		 *  - the specified high address
