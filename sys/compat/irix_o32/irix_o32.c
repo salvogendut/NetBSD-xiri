@@ -2306,7 +2306,16 @@ irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
 		    (error == ERESTART || error == EINTR || error == EWOULDBLOCK))
 			error = 0;
 		if (error == 0) {
-			KASSERT(m_length(data) == total - receive.uio_resid);
+#ifdef DIAGNOSTIC
+			size_t received = 0;
+
+			/* A stream receive can return a trimmed packet header,
+			 * or no mbuf at EOF. m_length() trusts that header's
+			 * original packet length and does not accept NULL. */
+			for (m = data; m != NULL; m = m->m_next)
+				received += m->m_len;
+			KASSERT(received == total - receive.uio_resid);
+#endif
 			for (m = data; m != NULL && error == 0; m = m->m_next)
 				error = uiomove(mtod(m, void *), m->m_len, &copied);
 			*rval = total - copied.uio_resid;
