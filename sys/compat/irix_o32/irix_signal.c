@@ -119,11 +119,10 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 		return error;
 	if (sig <= 0 || sig > 64 || (change && (sig == 9 || sig == 23)))
 		return EINVAL;
-	/* Checkpoint/realtime signals and masks have no mapping in this subset. */
+	/* Checkpoint/realtime signal dispositions have no mapping in this subset. */
 	if (sig >= 32)
 		return EOPNOTSUPP;
-	if (change && ((in[2] & 0x80000000U) || in[3] || in[4] || in[5] ||
-	    (sig == 18 && (in[0] & 0x10000))))
+	if (change && sig == 18 && (in[0] & 0x10000))
 		return EOPNOTSUPP;
 	/* Per-process foreign metadata is serialized by the current one-LWP
 	 * restriction. Native sigaction1 owns the actual disposition and locks. */
@@ -158,11 +157,20 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 		if (in[0] & 2) native.sa_flags |= SA_RESETHAND;
 		if (in[0] & 4) native.sa_flags |= SA_RESTART;
 		if (in[0] & 8) native.sa_flags |= SA_SIGINFO;
-		if (in[0] & 16) native.sa_flags |= SA_NODEFER;
+		/* IRIX NODEFER suppresses only implicit self-blocking. NetBSD
+		 * sigaction1 also removes this signal from an explicit mask.
+		 * Omit the native flag when the caller explicitly blocks itself;
+		 * retain the foreign flag below for action queries. */
+		if ((in[0] & 16) && !(in[2] & (1U << (sig - 1))))
+			native.sa_flags |= SA_NODEFER;
 		/* IRIX signal(SIGCHLD, handler) requests NOCLDSTOP. Native
 		 * signal code retains exit notifications and waitable children. */
 		if (sig == 18 && (in[0] & 0x20000))
 			native.sa_flags |= SA_NOCLDSTOP;
+		/* Like sigprocmask, project the foreign set onto mapped signals.
+		 * sigfillset includes checkpoint/realtime bits; those must not
+		 * prevent registration of a traditional handler. Queries report
+		 * the effective mapped mask, not unsupported signal bits. */
 		sigemptyset(&native.sa_mask);
 		word_to_mask(in[2], &native.sa_mask);
 		/* Native validation requires a nonnull trampoline for version 2.
