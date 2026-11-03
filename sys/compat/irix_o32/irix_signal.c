@@ -123,7 +123,7 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 	if (sig >= 32)
 		return EOPNOTSUPP;
 	if (change && ((in[2] & 0x80000000U) || in[3] || in[4] || in[5] ||
-	    (sig == 18 && (in[0] & 0x30000))))
+	    (sig == 18 && (in[0] & 0x10000))))
 		return EOPNOTSUPP;
 	/* Per-process foreign metadata is serialized by the current one-LWP
 	 * restriction. Native sigaction1 owns the actual disposition and locks. */
@@ -159,6 +159,10 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 		if (in[0] & 4) native.sa_flags |= SA_RESTART;
 		if (in[0] & 8) native.sa_flags |= SA_SIGINFO;
 		if (in[0] & 16) native.sa_flags |= SA_NODEFER;
+		/* IRIX signal(SIGCHLD, handler) requests NOCLDSTOP. Native
+		 * signal code retains exit notifications and waitable children. */
+		if (sig == 18 && (in[0] & 0x20000))
+			native.sa_flags |= SA_NOCLDSTOP;
 		sigemptyset(&native.sa_mask);
 		word_to_mask(in[2], &native.sa_mask);
 		/* Native validation requires a nonnull trampoline for version 2.
@@ -168,7 +172,7 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 		    ptr32(1), 2);
 		if (error != 0)
 			return error;
-		ip->signal[sig].flags = in[0] & 0x1f;
+		ip->signal[sig].flags = in[0] & (sig == 18 ? 0x2001f : 0x1f);
 		ip->signal[sig].mask = in[2] & 0x7fbffeff;
 		ip->signal[sig].trampoline = SCARG(uap, trampoline);
 	}

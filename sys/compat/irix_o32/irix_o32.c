@@ -107,6 +107,7 @@
 #include <sys/stat.h>
 #include <compat/irix_o32/irix_stat.h>
 #include <sys/timevar.h>
+#include <sys/ttycom.h>
 #include <sys/syscallargs.h>
 #include <sys/syscallvar.h>
 #include <sys/sysctl.h>
@@ -1869,7 +1870,7 @@ irix_fileflags(int value, bool socket)
 	return converted;
 }
 
-/* Only the measured four-byte TCP bytes-readable selector is implemented. */
+/* Explicit measured selectors only; foreign ioctl bitfields are not native. */
 struct irix_ioctl_args {
 	syscallarg(int32_t) fd;
 	syscallarg(uint32_t) command;
@@ -1913,6 +1914,76 @@ out:
 	return error;
 }
 
+/* IRIX 6.5.22m uses four unsigned 16-bit fields for both ABIs. Limit
+ * this adapter to native PTY masters/slaves; the tty layer owns dimensions,
+ * locking and foreground-process-group SIGWINCH delivery. */
+static int
+irix_pty_winsize(struct lwp *l, const struct irix_ioctl_args *uap,
+    register_t *rval)
+{
+	extern const struct cdevsw ptc_cdevsw, pts_cdevsw;
+	const bool set = SCARG(uap, command) == 0x80087467U;
+	const uint32_t address = SCARG(uap, data);
+	struct winsize size = { 0 };
+	struct vm_map *map = &l->l_proc->p_vmspace->vm_map;
+	const struct cdevsw *device;
+	file_t *fp;
+	int error;
+	bool writable;
+
+	CTASSERT(sizeof(size) == 8);
+	CTASSERT(offsetof(struct winsize, ws_ypixel) == 6);
+	fp = fd_getfile(SCARG(uap, fd));
+	if (fp == NULL)
+		return EBADF;
+	if ((fp->f_flag & (FREAD | FWRITE)) == 0) {
+		error = EBADF;
+		goto out;
+	}
+	if (fp->f_type != DTYPE_VNODE || fp->f_vnode->v_type != VCHR) {
+		error = fp->f_type == DTYPE_VNODE &&
+		    (fp->f_vnode->v_type == VREG || fp->f_vnode->v_type == VDIR) ?
+		    ENOTTY : EINVAL;
+		goto out;
+	}
+	device = cdevsw_lookup(fp->f_vnode->v_rdev);
+	if (device != &ptc_cdevsw && device != &pts_cdevsw) {
+		error = EINVAL;
+		goto out;
+	}
+	if (address >= 0x80000000U || sizeof(size) > 0x80000000U - address) {
+		error = EFAULT;
+		goto out;
+	}
+	if (set) {
+		error = copyin(irix_pointer(address), &size, sizeof(size));
+		if (error != 0)
+			goto out;
+	} else {
+		/* The reference leaves the accessible prefix unchanged when the
+		 * eight-byte output crosses an inaccessible page. Preflight the
+		 * span; copyout still checks faults after a concurrent VM change. */
+		vm_map_lock_read(map);
+		writable = uvm_map_checkprot(map, address, address + sizeof(size),
+		    VM_PROT_WRITE);
+		vm_map_unlock_read(map);
+		if (!writable) {
+			error = EFAULT;
+			goto out;
+		}
+	}
+	error = (*fp->f_ops->fo_ioctl)(fp, set ? TIOCSWINSZ : TIOCGWINSZ, &size);
+	if (error == EPASSTHROUGH)
+		error = ENOTTY;
+	if (error == 0 && !set)
+		error = copyout(&size, irix_pointer(address), sizeof(size));
+out:
+	fd_putfile(SCARG(uap, fd));
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 static int
 irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 {
@@ -1925,6 +1996,9 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	CTASSERT(sizeof(available) == sizeof(foreign_count));
 	if (SCARG(uap, command) == 0x5308) /* IRIX_I_STR */
 		return irix_pty_unlock(uap, rval);
+	if (SCARG(uap, command) == 0x40087468U ||
+	    SCARG(uap, command) == 0x80087467U)
+		return irix_pty_winsize(l, uap, rval);
 	/* Preserve the unsupported-command policy, including TCGETA. Never
 	 * interpret foreign direction/length bits as a native ioctl command. */
 	if (SCARG(uap, command) != 0x4004730aU) /* IRIX_SIOCNREAD */
