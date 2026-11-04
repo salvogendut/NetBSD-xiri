@@ -5,6 +5,14 @@ big-endian o32 and LP64 MIPS kernels. It supports Xiri's synthetic static fixtur
 bounded dynamic interpreter experiment, not restored `COMPAT_IRIX` or general
 vendor-application compatibility.
 
+This document retains successive implementation checkpoints. Earlier
+unsupported-interface statements describe those checkpoints and can be
+superseded by later sections. In particular, the terminal-attribute and
+controlling-terminal section below supersedes the earlier TCGETA/TCGETS
+limits: the original IRIX shell now passes interactive prompt, foreground
+Ctrl-C/resize and normal-exit checks in GNOME Terminal. The companion Xiri
+repository records current application qualification and remaining limits.
+
 ## Loadable module on an N64 kernel
 
 `sys/modules/compat_irix_o32` builds the same personality as a kernel module
