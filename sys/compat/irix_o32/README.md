@@ -1190,3 +1190,32 @@ xiritest. The existing Freeware catalog entry launches it and signals the
 running state. Basic document checks do not qualify preference persistence:
 .gnome/gedit and Editor_Plugins writes still report Function not implemented.
 Help, imlib image loading and wider plug-ins remain application follow-ups.
+
+
+## IRIX terminal attributes and controlling terminals
+
+`irix_tty.c` translates the measured IRIX 6.5.22 old/new `termio` and
+`termios` interfaces for native PTY master/slave descriptors. Both foreign
+ABIs use 32-bit flags and 23 control bytes; modern forms add two explicit
+32-bit rates. Echo, canonical/raw input, input/output conversions, signal
+characters and supported flow-control flags are mapped explicitly. Native
+`TIOCSETA`, `TIOCSETAW` and `TIOCSETAF` perform setting, draining and flushing.
+Unrepresented foreign flags and reserved character functions return EINVAL.
+Undefined output padding is zero. Modern flags omit obsolete baud bits retained
+by IRIX after legacy setters; both explicit speed fields report the applied
+output rate, matching the reference's single-rate PTY behavior.
+
+A successful foreign open without O_NOCTTY tries to acquire a native PTY slave
+only when the caller is a session leader without a controlling terminal.
+Native TIOCSCTTY authorizes the operation. Other devices and existing terminal
+ownership are unaffected. IRIX's 0x7416 session query and encoded foreground
+process-group get/set requests use native TIOCGSID/TIOCGPGRP/TIOCSPGRP. A master
+is not a controlling terminal. An absent target group keeps NetBSD's EPERM;
+the measured IRIX driver returns EINVAL. Historical 0x7414/0x7415 selectors
+are rejected, as on the measured IRIX PTYs.
+
+This is PTY support, not general serial hardware, STREAMS modules or every
+IRIX line discipline. Unsupported tty modes remain explicit errors. The Xiri
+companion's termios fixtures compare attribute buffers, faults, non-root
+access, automatic acquisition, O_NOCTTY and foreground/session ownership
+against independent probes on the original installation.

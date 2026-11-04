@@ -154,6 +154,7 @@ irix_pointer(uint32_t value)
 
 #include <compat/irix_o32/irix_sproc.h>
 #include <compat/irix_o32/irix_signal.h>
+#include <compat/irix_o32/irix_tty.h>
 
 static void irix_prda_sigmask(struct lwp *);
 
@@ -633,7 +634,7 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	const uint32_t flags = SCARG(uap, flags);
 	const uint32_t supported = 3 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 |
 	    0x400 | 0x800;
-	int converted;
+	int converted, error;
 
 	if ((flags & ~supported) != 0 || (flags & 3) == 3)
 		return EINVAL;
@@ -655,7 +656,10 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, flags) = converted;
 	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
 	SCARG(&native, mode) = SCARG(uap, mode);
-	return sys_open(l, &native, rval);
+	error = sys_open(l, &native, rval);
+	if (error == 0)
+		irix_tty_open(l, *rval, converted);
+	return error;
 }
 
 /* Directory creation uses native lookup, effective credentials, umask and
@@ -2185,10 +2189,11 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	if (SCARG(uap, command) == 0x40087468U ||
 	    SCARG(uap, command) == 0x80087467U)
 		return irix_pty_winsize(l, uap, rval);
-	/* Preserve the unsupported-command policy, including TCGETA. Never
+	/* Keep all translations explicit. Never
 	 * interpret foreign direction/length bits as a native ioctl command. */
 	if (SCARG(uap, command) != 0x4004730aU) /* IRIX_SIOCNREAD */
-		return ENOSYS;
+		return irix_tty_ioctl(l, SCARG(uap, fd), SCARG(uap, command),
+		    SCARG(uap, data), rval);
 	fp = fd_getfile(SCARG(uap, fd));
 	if (fp == NULL)
 		return EBADF;
