@@ -1071,6 +1071,10 @@ struct netbsd32_iso_args {
 	netbsd32_charp fspec;
 	struct netbsd32_export_args30 _pad1;
 	int	flags;
+	uid_t	uid;
+	gid_t	gid;
+	mode_t	fmask;
+	mode_t	dmask;
 };
 
 /* from <ufs/ufs/ufs_mount.h> */

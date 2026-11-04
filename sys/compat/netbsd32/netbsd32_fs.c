@@ -810,6 +810,7 @@ netbsd32___mount50(struct lwp *l, const struct netbsd32___mount50_args *uap,
 	int flags = SCARG(uap, flags);
 	void *data, *udata;
 	size_t data_len = SCARG(uap, data_len);
+	size_t iso_args_len = 0, iso_args32_len = 0;
 	enum uio_seg data_seg;
 	size_t len;
 	int error;
@@ -882,11 +883,25 @@ netbsd32___mount50(struct lwp *l, const struct netbsd32___mount50_args *uap,
 		data = &fs_args.ufs_args;
 		data_len = sizeof(fs_args.ufs_args);
 	} else if (strcmp(mtype, MOUNT_CD9660) == 0) {
-		if (data_len != 0 && data_len < sizeof(fs_args32.iso_args))
+		/* Preserve the pre-uid/gid/mask ABI, including mount(2)'s
+		 * historical zero-length convention.  Pass its native size
+		 * through so cd9660 supplies defaults (or retains update masks).
+		 */
+		const size_t old_size32 =
+		    offsetof(struct netbsd32_iso_args, uid);
+		const size_t old_size = sizeof(struct {
+			const char *fspec;
+			struct export_args30 _pad1;
+			int flags;
+		});
+		const bool old = data_len == 0 || data_len == old_size32;
+
+		if (!old && data_len < sizeof(fs_args32.iso_args))
 			return EINVAL;
+		iso_args32_len = old ? old_size32 : sizeof(fs_args32.iso_args);
+		iso_args_len = old ? old_size : sizeof(fs_args.iso_args);
 		if ((flags & MNT_GETARGS) == 0) {
-			error = copyin(data, &fs_args32.iso_args, 
-			    sizeof(fs_args32.iso_args));
+			error = copyin(data, &fs_args32.iso_args, iso_args32_len);
 			if (error)
 				return error;
 			fs_args.iso_args.fspec =
@@ -894,10 +909,16 @@ netbsd32___mount50(struct lwp *l, const struct netbsd32___mount50_args *uap,
 			memset(&fs_args.iso_args._pad1, 0,
 			    sizeof(fs_args.iso_args._pad1));
 			fs_args.iso_args.flags = fs_args32.iso_args.flags;
+			if (!old) {
+				fs_args.iso_args.uid = fs_args32.iso_args.uid;
+				fs_args.iso_args.gid = fs_args32.iso_args.gid;
+				fs_args.iso_args.fmask = fs_args32.iso_args.fmask;
+				fs_args.iso_args.dmask = fs_args32.iso_args.dmask;
+			}
 		}
 		data_seg = UIO_SYSSPACE;
 		data = &fs_args.iso_args;
-		data_len = sizeof(fs_args.iso_args);
+		data_len = iso_args_len;
 	} else if (strcmp(mtype, MOUNT_MSDOS) == 0) {
 		if (data_len < sizeof(fs_args32.msdosfs_args))
 			return EINVAL;
@@ -1058,17 +1079,19 @@ netbsd32___mount50(struct lwp *l, const struct netbsd32___mount50_args *uap,
 			    sizeof(fs_args32.ufs_args));
 			*retval = sizeof(fs_args32.ufs_args);
 		} else if (strcmp(mtype, MOUNT_CD9660) == 0) {
-			if (data_len != 0 &&
-			    data_len != sizeof(fs_args.iso_args))
+			if (data_len != 0 && data_len != iso_args_len)
 				return EINVAL;
 			NETBSD32PTR32(fs_args32.iso_args.fspec,
 			    fs_args.iso_args.fspec);
 			memset(&fs_args32.iso_args._pad1, 0,
 			    sizeof(fs_args32.iso_args._pad1));
 			fs_args32.iso_args.flags = fs_args.iso_args.flags;
-			error = copyout(&fs_args32.iso_args, udata,
-				    sizeof(fs_args32.iso_args));
-			*retval = sizeof(fs_args32.iso_args);
+			fs_args32.iso_args.uid = fs_args.iso_args.uid;
+			fs_args32.iso_args.gid = fs_args.iso_args.gid;
+			fs_args32.iso_args.fmask = fs_args.iso_args.fmask;
+			fs_args32.iso_args.dmask = fs_args.iso_args.dmask;
+			error = copyout(&fs_args32.iso_args, udata, iso_args32_len);
+			*retval = iso_args32_len;
 		} else if (strcmp(mtype, MOUNT_UDF) == 0) {
 			if (data_len != 0 &&
 			    data_len != sizeof(fs_args.udf_args))
