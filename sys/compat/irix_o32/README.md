@@ -1151,3 +1151,42 @@ quits normally, and launches from its existing Icon Catalog entry. These
 bounded checks do not qualify every plug-in. Shared-memory tile transport
 uses its fallback; preference backup rename (1114) remains unimplemented.
 See Xiri docs/results/2026-11-03-irix-gimp.md for resource and UI evidence.
+
+
+## GNOME pathname stream sockets (2026-11-04)
+
+The catalog's busy gedit startup is an ORBit Unix-listener loop: repeated
+socket(1,2,0) returns IRIX EAFNOSUPPORT, followed by close(-1). Independent
+sampling locates iiop_connection_server_unix in the original libIIOP.so.1.
+The module now accepts AF_UNIX/SOCK_STREAM/protocol 0 and implements bind
+(1090), listen (1096), accept (1089), pathname connect and local/peer queries.
+The adapters convert the foreign 16-bit address family to native length/
+family fields; IRIX SOCK_STREAM=2 maps to native SOCK_STREAM=1. Native
+socket operations retain ownership of credentials and filesystem access.
+Legacy sendmsg/recvmsg also accept data-only Unix streams.
+
+This is a bounded addition, not the complete IRIX socket ABI. Datagram Unix
+sockets, socketpair and descriptor passing remain unsupported. Local recvmsg
+rejects name/rights outputs, and accept is currently limited to AF_LOCAL.
+Address inputs are bounded to 2..110 bytes. Empty paths fail; paths too long
+for native sun_path are rejected without truncation. This native field is
+four bytes smaller than IRIX's. Name outputs report their full length even
+when truncated; original IRIX's zero-length unnamed getsockname and 16-byte
+unnamed accept outputs are preserved. Additional accept output-fault cases,
+Unix SIOCNREAD and broader concurrency remain unqualified.
+
+Independent o32/n32 direct/indirect fixtures produce 136 NetBSD observations
+under root and UID/GID 1234, compared with 68 original IRIX 6.5.22m captures.
+There are 96 original-IRIX comparisons and 40 explicit subset-policy checks.
+The same module passes 368 existing IPv4 TCP/recvmsg regression executions
+with independent native peers. The core kernel is unchanged; module builds
+and the symbol/relocation audit pass. See the companion Xiri repository's
+lab/irix-gnome and docs/results/2026-11-04-irix-gnome.md for exact source,
+artifact, reference and shutdown records.
+
+With separately inventoried original GNOME VFS/gedit resources, gedit opens,
+edits, saves a new text document, reopens it and overwrites the file as
+xiritest. The existing Freeware catalog entry launches it and signals the
+running state. Basic document checks do not qualify preference persistence:
+.gnome/gedit and Editor_Plugins writes still report Function not implemented.
+Help, imlib image loading and wider plug-ins remain application follow-ups.

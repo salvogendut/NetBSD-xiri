@@ -112,6 +112,7 @@
 #include <sys/syscallvar.h>
 #include <sys/sysctl.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
 #include <sys/vfs_syscalls.h>
@@ -1375,8 +1376,8 @@ irix_o32_sysmp(struct lwp *l, const void *args, register_t *rval)
 	return 0;
 }
 
-/* Initial client TCP subset. Foreign constants must never reach a native
- * socket call unchecked: IRIX SOCK_STREAM is 2, native SOCK_STREAM is 1. */
+/* Stream TCP and pathname Unix sockets. Translate every foreign constant:
+ * IRIX SOCK_STREAM is 2, native SOCK_STREAM is 1. */
 struct irix_socket_args {
 	syscallarg(int32_t) domain;
 	syscallarg(int32_t) type;
@@ -1389,15 +1390,21 @@ irix_socket(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_socket_args *uap = args;
 	struct sys___socket30_args native = { 0 };
 
-	if (SCARG(uap, domain) != 2)
+	if (SCARG(uap, domain) != 1 && SCARG(uap, domain) != 2)
 		return EAFNOSUPPORT;
 	if (SCARG(uap, type) != 2)
 		return SCARG(uap, type) == 1 ? ESOCKTNOSUPPORT : EPROTONOSUPPORT;
-	if (SCARG(uap, protocol) != 0 && SCARG(uap, protocol) != 6)
-		return EPROTOTYPE;
-	SCARG(&native, domain) = AF_INET;
+	if (SCARG(uap, domain) == 1) {
+		if (SCARG(uap, protocol) != 0)
+			return EPROTONOSUPPORT;
+		SCARG(&native, domain) = AF_LOCAL;
+	} else {
+		if (SCARG(uap, protocol) != 0 && SCARG(uap, protocol) != 6)
+			return EPROTOTYPE;
+		SCARG(&native, domain) = AF_INET;
+		SCARG(&native, protocol) = IPPROTO_TCP;
+	}
 	SCARG(&native, type) = SOCK_STREAM;
-	SCARG(&native, protocol) = IPPROTO_TCP;
 	return sys___socket30(l, &native, rval);
 }
 
@@ -1407,36 +1414,132 @@ struct irix_connect_args {
 	syscallarg(int32_t) len;
 };
 
+/* The foreign sockaddr starts with a 16-bit family, without sa_len.
+ * Accept bounded pathname addresses; abstract sockets are not an IRIX ABI. */
+static int
+irix_sockaddr(uint32_t pointer, int32_t length, struct sockaddr_big *address)
+{
+	struct { uint16_t family; char path[108]; } foreign = { 0 };
+	struct sockaddr_un *un = (void *)address;
+	struct sockaddr_in *in = (void *)address;
+	size_t pathlen;
+	int error;
+
+	if (length < 2 || (size_t)length > sizeof(foreign))
+		return EINVAL;
+	error = copyin(irix_pointer(pointer), &foreign, length);
+	if (error != 0)
+		return error;
+	memset(address, 0, sizeof(*address));
+	if (foreign.family == 2) {
+		if (length != sizeof(*in))
+			return EINVAL;
+		memcpy(in, &foreign, sizeof(*in));
+		in->sin_len = sizeof(*in);
+		in->sin_family = AF_INET;
+		return 0;
+	}
+	if (foreign.family != 1)
+		return EAFNOSUPPORT;
+	pathlen = strnlen(foreign.path, (size_t)length - 2);
+	if (pathlen == 0)
+		return ENOENT;
+	/* NetBSD's pathname field is four bytes shorter. Never silently
+	 * truncate an IRIX pathname into a different native endpoint. */
+	if (pathlen >= sizeof(un->sun_path))
+		return ENAMETOOLONG;
+	un->sun_len = offsetof(struct sockaddr_un, sun_path) + pathlen + 1;
+	un->sun_family = AF_LOCAL;
+	memcpy(un->sun_path, foreign.path, pathlen);
+	return 0;
+}
+
 static int
 irix_connect(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_connect_args *uap = args;
-	struct {
-		uint16_t family, port;
-		uint32_t address;
-		uint8_t zero[8];
-	} foreign;
-	struct sockaddr_in native = { 0 };
+	struct sockaddr_big native;
+	struct socket *so;
 	int error;
 
-	CTASSERT(sizeof(foreign) == 16);
-	/* No allocation or native access using a foreign length. This subset
-	 * accepts only the complete, fixed-size IPv4 address. */
-	if (SCARG(uap, len) != sizeof(foreign))
-		return EINVAL;
-	error = copyin(irix_pointer(SCARG(uap, addr)), &foreign, sizeof(foreign));
-	if (error != 0)
-		return error;
-	if (foreign.family != 2)
-		return EAFNOSUPPORT;
-	native.sin_len = sizeof(native);
-	native.sin_family = AF_INET;
-	/* Port and address are already in network byte order. */
-	native.sin_port = foreign.port;
-	native.sin_addr.s_addr = foreign.address;
-	error = do_sys_connect(l, SCARG(uap, fd), (struct sockaddr *)&native);
+	error = irix_sockaddr(SCARG(uap, addr), SCARG(uap, len), &native);
+	if (error == 0) {
+		error = fd_getsock(SCARG(uap, fd), &so);
+		if (error == 0) {
+			if (so->so_proto->pr_domain->dom_family != native.sb_family)
+				error = EAFNOSUPPORT;
+			fd_putfile(SCARG(uap, fd));
+		}
+	}
+	if (error == 0)
+		error = do_sys_connect(l, SCARG(uap, fd), (void *)&native);
 	if (error == 0)
 		*rval = 0;
+	return error;
+}
+
+static int
+irix_bind(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_connect_args *uap = args;
+	struct sockaddr_big native;
+	int error;
+
+	error = irix_sockaddr(SCARG(uap, addr), SCARG(uap, len), &native);
+	if (error == 0)
+		error = do_sys_bind(l, SCARG(uap, fd), (void *)&native);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+struct irix_listen_args {
+	syscallarg(int32_t) fd;
+	syscallarg(int32_t) backlog;
+};
+
+static int
+irix_listen(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_listen_args *uap = args;
+	struct sys_listen_args native = { 0 };
+	int error;
+
+	SCARG(&native, s) = SCARG(uap, fd);
+	SCARG(&native, backlog) = SCARG(uap, backlog);
+	error = sys_listen(l, &native, rval);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+/* Copy the foreign family/path bytes and report full length even when the
+ * caller's output is truncated. IRIX reports an unnamed endpoint as zero
+ * bytes to getsockname, but a 16-byte empty sockaddr to accept. */
+static int
+irix_unix_name(const struct sockaddr_big *address, uint32_t pointer,
+    uint32_t lenptr, int32_t capacity, bool accept)
+{
+	const struct sockaddr_un *un = (const void *)address;
+	struct { uint16_t family; char path[108]; } foreign = { 1, { 0 } };
+	int32_t length;
+	int error;
+
+	if (capacity < 0)
+		return EFAULT;
+	if (un->sun_len < offsetof(struct sockaddr_un, sun_path) ||
+	    un->sun_len > sizeof(*un))
+		return EINVAL;
+	length = un->sun_len - offsetof(struct sockaddr_un, sun_path);
+	if (length != 0) {
+		memcpy(foreign.path, un->sun_path, length);
+		length += 2;
+	} else {
+		length = accept ? 16 : 0;
+	}
+	error = copyout(&foreign, irix_pointer(pointer), MIN(capacity, length));
+	if (error == 0)
+		error = copyout(&length, irix_pointer(lenptr), sizeof(length));
 	return error;
 }
 
@@ -1497,6 +1600,19 @@ irix_socketname(const void *args, register_t *rval, bool peer)
 	}
 	if (error != 0)
 		return error;
+	if (address.sb_family == AF_LOCAL) {
+		if (!peer) {
+			error = copyin(irix_pointer(SCARG(uap, len)), &length,
+			    sizeof(length));
+			if (error != 0)
+				return error;
+		}
+		error = irix_unix_name(&address, SCARG(uap, addr),
+		    SCARG(uap, len), length, false);
+		if (error == 0)
+			*rval = 0;
+		return error;
+	}
 	if (address.sb_family != AF_INET)
 		return EAFNOSUPPORT;
 	if (address.sb_len != sizeof(*native))
@@ -1540,6 +1656,43 @@ irix_getpeername(struct lwp *l, const void *args, register_t *rval)
 {
 
 	return irix_socketname(args, rval, true);
+}
+
+static int
+irix_accept(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_socketname_args *uap = args;
+	struct sockaddr_big address = { .sb_len = UCHAR_MAX };
+	struct socket *so;
+	int32_t length = 0;
+	int error;
+
+	error = fd_getsock(SCARG(uap, fd), &so);
+	if (error != 0)
+		return error;
+	if (so->so_proto->pr_domain->dom_family != AF_LOCAL)
+		error = EAFNOSUPPORT;
+	fd_putfile(SCARG(uap, fd));
+	if (error != 0)
+		return error;
+	if (SCARG(uap, addr) != 0) {
+		error = copyin(irix_pointer(SCARG(uap, len)), &length,
+		    sizeof(length));
+		if (error != 0)
+			return error;
+		if (length < 0)
+			return EFAULT;
+	}
+	error = do_sys_accept(l, SCARG(uap, fd), (void *)&address, rval,
+	    NULL, 0, 0);
+	if (error != 0 || SCARG(uap, addr) == 0)
+		return error;
+	error = address.sb_family == AF_LOCAL ?
+	    irix_unix_name(&address, SCARG(uap, addr), SCARG(uap, len),
+	    length, true) : EAFNOSUPPORT;
+	if (error != 0 && fd_getfile((int)*rval) != NULL)
+		(void)fd_close((int)*rval);
+	return error;
 }
 
 struct irix_setsockopt_args {
@@ -2335,9 +2488,17 @@ irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
 	error = fd_getsock(SCARG(uap, fd), &so);
 	if (error != 0)
 		return error;
-	if (so->so_proto->pr_domain->dom_family != AF_INET ||
-	    so->so_type != SOCK_STREAM || so->so_proto->pr_protocol != IPPROTO_TCP) {
+	if (so->so_type != SOCK_STREAM ||
+	    (so->so_proto->pr_domain->dom_family != AF_LOCAL &&
+	    (so->so_proto->pr_domain->dom_family != AF_INET ||
+	    so->so_proto->pr_protocol != IPPROTO_TCP))) {
 		error = EAFNOSUPPORT;
+		goto out;
+	}
+	if (so->so_proto->pr_domain->dom_family == AF_LOCAL &&
+	    (foreign.name != 0 || foreign.namelen != 0 ||
+	    foreign.rights != 0 || foreign.rightslen != 0)) {
+		error = EOPNOTSUPP;
 		goto out;
 	}
 	/* Only legacy stream receives and peeking are qualified. */
@@ -2453,8 +2614,10 @@ irix_sendmsg(struct lwp *l, const void *args, register_t *rval)
 	error = copyin(irix_pointer(SCARG(uap, msg)), &foreign, sizeof(foreign));
 	if (error != 0)
 		goto out;
-	if (so->so_proto->pr_domain->dom_family != AF_INET ||
-	    so->so_type != SOCK_STREAM || so->so_proto->pr_protocol != IPPROTO_TCP) {
+	if (so->so_type != SOCK_STREAM ||
+	    (so->so_proto->pr_domain->dom_family != AF_LOCAL &&
+	    (so->so_proto->pr_domain->dom_family != AF_INET ||
+	    so->so_proto->pr_protocol != IPPROTO_TCP))) {
 		error = EAFNOSUPPORT;
 		goto out;
 	}
@@ -3095,6 +3258,18 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_sginap_args),
 		.sy_call = irix_sginap,
 	},
+	[89] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_socketname_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_accept,
+	},
+	[90] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_connect_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_bind,
+	},
 	[91] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_connect_args),
@@ -3112,6 +3287,11 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_socketname_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getsockname,
+	},
+	[96] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_listen_args),
+		.sy_call = irix_listen,
 	},
 	[99] = {
 		.sy_narg = 3,
@@ -3259,6 +3439,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [82] = "sginap", [87] = "poll", [91] = "connect",
+	[89] = "accept", [90] = "bind", [96] = "listen",
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
 	[102] = "sendmsg", [105] = "setsockopt",
@@ -3341,9 +3522,12 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1208: code = 208; break;
 	case 1087: code = 87; break;
 	case 1088: code = 88; break;
+	case 1089: code = 89; break;
+	case 1090: code = 90; break;
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
 	case 1094: code = 94; break;
+	case 1096: code = 96; break;
 	case 1099: code = 99; break;
 	case 1100: code = 100; break;
 	case 1102: code = 102; break;
