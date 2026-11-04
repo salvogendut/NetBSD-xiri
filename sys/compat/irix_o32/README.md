@@ -1245,3 +1245,39 @@ These do not cover concurrent renames, power loss or cross-filesystem moves.
 GNOME Terminal now writes its preferences file without the prior rename warning;
 application preference dialogs and broader desktop qualification are tracked in
 the companion repository. The core kernel is unchanged.
+
+
+## Legacy Acrobat ELF layouts (2026-11-04)
+
+The runtime validator admits the measured original Acrobat 4 o32 MIPS-I
+CPIC executable format (exact e_flags 0x4), including 4 KiB load alignment
+and PT_PHDR with a zero p_memsz and the correct nonzero file extent. Virtual
+load boundaries remain aligned to native pages. Main/interpreter ABI,
+metadata containment, bounds, protections and nonoverlap checks still apply.
+Other unrecognized flags, invalid PHDR sizes and malformed layouts fail.
+
+SGI_ELFMAP additionally accepts 4 KiB-aligned library text at a native-page
+boundary, and RW data whose 4 KiB file offset falls halfway through an 8 KiB
+page while its virtual address is native-page aligned. Such RW data uses
+owned zero-filled anonymous pages plus a file read, rather than the vnode
+pager. The existing mapping journal handles failed reads, BSS and cleanup.
+RX/RW virtual pages remain disjoint; the backing file stays unchanged.
+Existing congruent subpage behavior and collision relocation are retained.
+
+The companion fixtures exercise 174 executable and 340 library-map cases on
+the N64 kernel, covering both user ABIs and root/UID 1234. This includes all
+retained 70 executable and 74 library layouts plus the measured legacy forms
+and negative controls. Forty-four new mapping observations also run on the
+original IRIX image; only the documented collision placement addresses differ.
+The symbol/relocation build audit passes. The core kernel is unchanged.
+
+The original Reader now reaches its UI with the complete original resources,
+a native-visible /usr/adobe prefix, and its supported ACRO_CONFIG=mipsirix
+launcher setting. Application operations and the cumulative manual image are
+qualified separately in the companion Xiri repository's Acrobat report.
+
+The rename follow-up also verifies GNOME Terminal scrollback, gedit tab width
+and GIMP default-image dimensions through save, normal exit and relaunch.
+GIMP's gimprc.old is byte-identical to the preceding preferences file.
+fchmod/unlink, shared-memory transport and broader application behavior remain
+separate work; these observed preference paths complete without those calls.

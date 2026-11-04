@@ -431,8 +431,10 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		    h->p_vaddr > IRIX_MAXUSER_ADDRESS - h->p_memsz ||
 		    (h->p_vaddr & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
 		    (h->p_offset & (i == 0 ? PAGE_MASK : 4095)) != 0 ||
-		    (h->p_vaddr & PAGE_MASK) != (h->p_offset & PAGE_MASK) ||
-		    h->p_align < (i == 0 ? (unsigned)PAGE_SIZE : 4096U) ||
+		    ((h->p_vaddr & PAGE_MASK) != (h->p_offset & PAGE_MASK) &&
+		     (i != 1 || h->p_align != 4096 ||
+		      (h->p_vaddr & PAGE_MASK) != 0)) ||
+		    h->p_align < 4096U ||
 		    h->p_align > 1024 * 1024 ||
 		    !powerof2(h->p_align) ||
 		    h->p_vaddr % h->p_align != h->p_offset % h->p_align ||
@@ -490,8 +492,11 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		const Elf32_Phdr *h = &ph[i];
 		const vm_prot_t prot = i == 0 ? VM_PROT_READ | VM_PROT_EXECUTE :
 		    VM_PROT_READ | VM_PROT_WRITE;
-		const vsize_t paged = i == 0 ? round_page(h->p_filesz) :
-		    trunc_page(h->p_filesz);
+		/* A 4 KiB file offset at an 8 KiB virtual boundary cannot use
+		 * the vnode pager. Copy that RW segment into owned anonymous
+		 * pages; the existing journal handles failed reads and BSS. */
+		const vsize_t paged = (h->p_offset & PAGE_MASK) != 0 ? 0 :
+		    i == 0 ? round_page(h->p_filesz) : trunc_page(h->p_filesz);
 		if ((uint64_t)h->p_offset + h->p_filesz > va.va_size) {
 			error = ENOEXEC;
 			goto out;
@@ -3890,6 +3895,9 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	const bool interpreter = kind == IRIX_IMAGE_INTERPRETER;
 	const bool standalone = kind == IRIX_IMAGE_STATIC;
 	const bool n32 = (eh->e_flags & EF_MIPS_ABI2) != 0;
+	/* Original Acrobat 4 uses MIPS-I CPIC and 4 KiB file alignment. */
+	const bool legacy_o32 = kind == IRIX_IMAGE_DYNAMIC &&
+	    eh->e_flags == EF_MIPS_CPIC;
 	const uint32_t flags = standalone ? EF_MIPS_ABI2 :
 	    n32 ? (interpreter ? 0x22 : 0x24) : (interpreter ? 3 : 5);
 	size_t phsize;
@@ -3907,7 +3915,7 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    eh->e_ident[EI_ABIVERSION] != 0 || eh->e_version != EV_CURRENT ||
 	    eh->e_machine != EM_MIPS ||
 	    eh->e_type != (interpreter ? ET_DYN : ET_EXEC) ||
-	    ((n32 || eh->e_flags != (EF_MIPS_ARCH_2 | flags)) &&
+	    (!legacy_o32 && (n32 || eh->e_flags != (EF_MIPS_ARCH_2 | flags)) &&
 	     eh->e_flags != (EF_MIPS_ARCH_3 | flags)) ||
 	    mips_options.mips_cpu_arch < CPU_ARCH_MIPS3 ||
 	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
@@ -3943,8 +3951,9 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			    p->p_vaddr > 0x40000000 - p->p_memsz ||
 			    p->p_offset > INT32_MAX - p->p_filesz ||
 			    (p->p_vaddr & PAGE_MASK) != 0 ||
-			    (p->p_offset & PAGE_MASK) != 0 ||
-			    p->p_align < (!interpreter && nload == 1 ? 4096U :
+			    (p->p_offset & (legacy_o32 && p->p_align == 4096 ?
+			    4095 : PAGE_MASK)) != 0 ||
+			    p->p_align < (legacy_o32 || (!interpreter && nload == 1) ? 4096U :
 			    (unsigned)PAGE_SIZE) || p->p_align > 1024 * 1024 ||
 			    !powerof2(p->p_align) ||
 			    p->p_vaddr % p->p_align != p->p_offset % p->p_align)
@@ -3961,7 +3970,8 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			break;
 		case PT_PHDR:
 			if (standalone || ++nphdr != 1 || p->p_offset != eh->e_phoff ||
-			    p->p_filesz != phsize || p->p_memsz != phsize)
+			    p->p_filesz != phsize ||
+			    (p->p_memsz != phsize && !(legacy_o32 && p->p_memsz == 0)))
 				return ENOEXEC;
 			break;
 		case 0x70000000: /* PT_MIPS_REGINFO */
@@ -3992,7 +4002,8 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    loads[0].p_memsz != loads[0].p_filesz ||
 	    loads[1].p_vaddr < round_page(loads[0].p_vaddr + loads[0].p_memsz) ||
 	    (loads[1].p_filesz != 0 &&
-	     loads[1].p_offset < round_page(loads[0].p_filesz)) ||
+	     loads[1].p_offset < (legacy_o32 ? loads[0].p_filesz :
+	     round_page(loads[0].p_filesz))) ||
 	    eh->e_entry < loads[0].p_vaddr ||
 	    eh->e_entry >= loads[0].p_vaddr + loads[0].p_filesz ||
 	    (eh->e_entry & 3) != 0)
