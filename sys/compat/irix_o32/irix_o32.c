@@ -1408,6 +1408,38 @@ irix_socket(struct lwp *l, const void *args, register_t *rval)
 	return sys___socket30(l, &native, rval);
 }
 
+/* IRIX returns two 32-bit descriptors through a user pointer, including
+ * n32. Let the native implementation unwind both allocations on copyout
+ * failure; never expose a partially installed descriptor pair. */
+struct irix_socketpair_args {
+	syscallarg(int32_t) domain;
+	syscallarg(int32_t) type;
+	syscallarg(int32_t) protocol;
+	syscallarg(uint32_t) pair;
+};
+
+static int
+irix_socketpair(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_socketpair_args *uap = args;
+	struct sys_socketpair_args native = { 0 };
+	int error;
+
+	if (SCARG(uap, domain) != 1)
+		return EAFNOSUPPORT;
+	if (SCARG(uap, type) != 2)
+		return SCARG(uap, type) == 1 ? ESOCKTNOSUPPORT : EPROTONOSUPPORT;
+	if (SCARG(uap, protocol) != 0)
+		return EPROTONOSUPPORT;
+	SCARG(&native, domain) = AF_LOCAL;
+	SCARG(&native, type) = SOCK_STREAM;
+	SCARG(&native, rsv) = irix_pointer(SCARG(uap, pair));
+	error = sys_socketpair(l, &native, rval);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 struct irix_connect_args {
 	syscallarg(int32_t) fd;
 	syscallarg(uint32_t) addr;
@@ -2030,7 +2062,7 @@ struct irix_ioctl_args {
 	syscallarg(uint32_t) data;
 };
 
-/* getpty's I_STR/UNLKPT request. NetBSD PTYs have no slave-lock state;
+/* getpty's I_STR/UNLKPT and ptsname's master-check requests. NetBSD PTYs have no slave-lock state;
  * native unlockpt is a no-op. Here we also validate the descriptor. This
  * operation neither grants ownership nor changes permissions. */
 static int
@@ -2056,7 +2088,8 @@ irix_pty_unlock(const struct irix_ioctl_args *uap, register_t *rval)
 	error = copyin(irix_pointer(SCARG(uap, data)), &request, sizeof(request));
 	if (error != 0)
 		goto out;
-	if (request.command != 0x5002 || request.timeout != 0 ||
+	if ((request.command != 0x5002 && request.command != 0x5064) ||
+	    request.timeout != 0 ||
 	    request.length != 0 || request.data != 0) {
 		error = ENOSYS;
 		goto out;
@@ -2468,7 +2501,8 @@ irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
 	struct { uint32_t base, len; } vector[16];
 	struct iovec iov[__arraycount(vector)];
 	struct msghdr native = { 0 };
-	struct mbuf *from = NULL, *data = NULL, *m;
+	struct mbuf *from = NULL, *data = NULL, *control = NULL, *m;
+	bool receive_right = false;
 	struct socket *so;
 	uint32_t total = 0, zero = 0;
 	int error, flags = 0;
@@ -2495,11 +2529,21 @@ irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
 		error = EAFNOSUPPORT;
 		goto out;
 	}
-	if (so->so_proto->pr_domain->dom_family == AF_LOCAL &&
-	    (foreign.name != 0 || foreign.namelen != 0 ||
-	    foreign.rights != 0 || foreign.rightslen != 0)) {
-		error = EOPNOTSUPP;
-		goto out;
+	if (so->so_proto->pr_domain->dom_family == AF_LOCAL) {
+		if (foreign.name != 0 || foreign.namelen != 0) {
+			error = EOPNOTSUPP;
+			goto out;
+		}
+		receive_right = foreign.rights != 0 || foreign.rightslen != 0;
+		/* The legacy GNOME protocol transfers one descriptor at a
+		 * time. Do not reproduce truncated integer handles, leaked
+		 * descriptors or MSG_PEEK's unexternalized IRIX rights. */
+		if (receive_right && (foreign.rights == 0 ||
+		    foreign.rightslen < 4 || foreign.rightslen > 64 ||
+		    SCARG(uap, flags) != 0)) {
+			error = EOPNOTSUPP;
+			goto out;
+		}
 	}
 	/* Only legacy stream receives and peeking are qualified. */
 	if ((uint32_t)SCARG(uap, flags) & ~2U) {
@@ -2536,7 +2580,8 @@ irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
 		 * Native user-uio receives retain a faulting stream mbuf instead.
 		 * Request native-owned mbufs, then scatter-copy and release them;
 		 * this needs no allocation proportional to the foreign length. */
-		error = (*so->so_receive)(so, &from, &receive, &data, NULL, &flags);
+		error = (*so->so_receive)(so, &from, &receive, &data,
+		    receive_right ? &control : NULL, &flags);
 		if (receive.uio_resid != total &&
 		    (error == ERESTART || error == EINTR || error == EWOULDBLOCK))
 			error = 0;
@@ -2568,9 +2613,32 @@ irix_recvmsg(struct lwp *l, const void *args, register_t *rval)
 	 * read-only headers whose receive buffers were successfully filled. */
 	if (foreign.name != 0)
 		(void)copyout(&zero, irix_pointer(SCARG(uap, msg) + 4U), sizeof(zero));
-	if (foreign.rights != 0)
+	if (receive_right && control != NULL) {
+		struct cmsghdr *cm = mtod(control, struct cmsghdr *);
+		const int32_t length = sizeof(int32_t);
+
+		/* Native socket code has externalized these descriptors. Any
+		 * failure below must close all of them, including a native
+		 * peer's larger or multiple control messages. */
+		if (control->m_next != NULL || control->m_len < (int)CMSG_LEN(length) ||
+		    cm->cmsg_level != SOL_SOCKET || cm->cmsg_type != SCM_RIGHTS ||
+		    cm->cmsg_len != CMSG_LEN(length)) {
+			error = EOPNOTSUPP;
+			goto out;
+		}
+		error = copyout(CMSG_DATA(cm), irix_pointer(foreign.rights), length);
+		if (error == 0)
+			error = copyout(&length, irix_pointer(SCARG(uap, msg) + 20U),
+			    sizeof(length));
+		if (error != 0)
+			goto out;
+		free_control_mbuf(l, control, NULL);
+		control = NULL;
+	} else if (foreign.rights != 0) {
 		(void)copyout(&zero, irix_pointer(SCARG(uap, msg) + 20U), sizeof(zero));
+	}
 out:
+	free_control_mbuf(l, control, control);
 	m_freem(from);
 	m_freem(data);
 	fd_putfile(SCARG(uap, fd));
@@ -2602,6 +2670,7 @@ irix_sendmsg(struct lwp *l, const void *args, register_t *rval)
 	struct msghdr native = { 0 };
 	struct socket *so;
 	file_t *fp;
+	bool send_right;
 	uint32_t total = 0;
 	int error;
 
@@ -2621,12 +2690,15 @@ irix_sendmsg(struct lwp *l, const void *args, register_t *rval)
 		error = EAFNOSUPPORT;
 		goto out;
 	}
-	/* Destination addresses, access rights, extended/XPG message layouts
-	 * and foreign flags need separate contracts. No foreign flags become
-	 * native MSG_* bits, including the kernel-only ownership flags. */
-	if (SCARG(uap, flags) != 0 || foreign.name != 0 ||
-	    foreign.namelen != 0 || foreign.rights != 0 || foreign.rightslen != 0) {
-		error = EOPNOTSUPP;
+	/* Destination addresses, extended/XPG message layouts and foreign
+	 * flags need separate contracts. No foreign flag can select native
+	 * kernel-only ownership behavior. */
+	send_right = foreign.rights != 0 || foreign.rightslen != 0;
+	if (SCARG(uap, flags) != 0 || foreign.name != 0 || foreign.namelen != 0 ||
+	    (send_right && (so->so_proto->pr_domain->dom_family != AF_LOCAL ||
+	    foreign.rights == 0 || foreign.rightslen != 4))) {
+		error = foreign.rights != 0 && foreign.rightslen == 0 &&
+		    so->so_proto->pr_domain->dom_family == AF_LOCAL ? EINVAL : EOPNOTSUPP;
 		goto out;
 	}
 	if (foreign.iovlen <= 0 || (unsigned)foreign.iovlen > __arraycount(vector)) {
@@ -2651,6 +2723,32 @@ irix_sendmsg(struct lwp *l, const void *args, register_t *rval)
 	}
 	native.msg_iov = iov;
 	native.msg_iovlen = foreign.iovlen;
+	if (send_right) {
+		struct mbuf *control;
+		struct cmsghdr *cm;
+		int32_t descriptor;
+
+		if (total == 0) {
+			error = EOPNOTSUPP;
+			goto out;
+		}
+		error = copyin(irix_pointer(foreign.rights), &descriptor,
+		    sizeof(descriptor));
+		if (error != 0)
+			goto out;
+		control = m_get(M_WAIT, MT_CONTROL);
+		control->m_len = CMSG_SPACE(sizeof(descriptor));
+		cm = mtod(control, struct cmsghdr *);
+		memset(cm, 0, control->m_len);
+		cm->cmsg_len = CMSG_LEN(sizeof(descriptor));
+		cm->cmsg_level = SOL_SOCKET;
+		cm->cmsg_type = SCM_RIGHTS;
+		memcpy(CMSG_DATA(cm), &descriptor, sizeof(descriptor));
+		native.msg_control = control;
+		native.msg_controllen = control->m_len;
+		/* do_sys_sendmsg_so owns the mbuf on every return path. */
+		native.msg_flags = MSG_CONTROLMBUF;
+	}
 	*rval = 0;
 	error = do_sys_sendmsg_so(l, SCARG(uap, fd), so, fp, &native, 0, rval);
 out:
@@ -3345,6 +3443,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getrlimit,
 	},
+	[155] = {
+		.sy_narg = 4,
+		.sy_argsize = sizeof(struct irix_socketpair_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_socketpair,
+	},
 	[158] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_xstat_args),
@@ -3545,6 +3649,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
 	case 1148: code = 148; break;
+	case 1155: code = 155; break;
 	case 1158: code = 158; break;
 	case 1159: code = 159; break;
 	case 1160: code = 160; break;
