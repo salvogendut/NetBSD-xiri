@@ -1227,3 +1227,21 @@ IRIX line discipline. Unsupported tty modes remain explicit errors. The Xiri
 companion's termios fixtures compare attribute buffers, faults, non-root
 access, automatic acquisition, O_NOCTTY and foreground/session ownership
 against independent probes on the original installation.
+
+
+## Measured pathname rename
+
+Trap 1114 now uses native POSIX rename with explicit 32-bit pathname pointers.
+Both strings are copied before lookup. Measured IRIX semantics remove trailing
+slashes even for ordinary files, retain both names when they identify the same
+inode, and report EEXIST when replacing a nonempty directory. Native lookup
+retains permissions, atomic vnode operations and emulation-root selection.
+
+The companion Xiri pathname observer compares 256 records against original
+IRIX 6.5.22m: 32 cases, o32/n32, direct/indirect traps, root and UID/GID 1234.
+Return values, contents, types, ownership and inode relationships agree after
+matching fixture parent groups. Sixteen native namespace controls also pass.
+These do not cover concurrent renames, power loss or cross-filesystem moves.
+GNOME Terminal now writes its preferences file without the prior rename warning;
+application preference dialogs and broader desktop qualification are tracked in
+the companion repository. The core kernel is unchanged.

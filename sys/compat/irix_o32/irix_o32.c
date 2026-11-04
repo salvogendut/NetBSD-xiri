@@ -662,6 +662,44 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* Rename uses explicit foreign pointers and native POSIX vnode semantics.
+ * Preserve both hard-link names when they already identify the same file;
+ * native lookup owns emulation-root selection, permissions and atomicity. */
+struct irix_rename_args {
+	syscallarg(uint32_t) from;
+	syscallarg(uint32_t) to;
+};
+
+static int
+irix_rename(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_rename_args *uap = args;
+	char from[MAXPATHLEN], to[MAXPATHLEN];
+	size_t fromlen, tolen;
+	int error;
+
+	/* Validate both original strings before lookup or modification. IRIX
+	 * ignores trailing slashes here, including on ordinary files. */
+	error = copyinstr(irix_pointer(SCARG(uap, from)), from,
+	    sizeof(from), &fromlen);
+	if (error != 0)
+		return error;
+	error = copyinstr(irix_pointer(SCARG(uap, to)), to,
+	    sizeof(to), &tolen);
+	if (error != 0)
+		return error;
+	while (fromlen > 2 && from[fromlen - 2] == '/')
+		from[--fromlen - 1] = '\0';
+	while (tolen > 2 && to[tolen - 2] == '/')
+		to[--tolen - 1] = '\0';
+	error = do_sys_rename(from, to, UIO_SYSSPACE, 1);
+	if (error == ENOTEMPTY)
+		error = EEXIST;
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 /* Directory creation uses native lookup, effective credentials, umask and
  * filesystem ownership policy. Native CREATE lookup selects the emulation
  * parent when present and falls back to the native namespace otherwise. */
@@ -3436,6 +3474,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_gethostname,
 	},
+	[114] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_rename_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_rename,
+	},
 	[116] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_readlink_args),
@@ -3552,7 +3596,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
 	[102] = "sendmsg", [105] = "setsockopt",
-	[106] = "shutdown", [107] = "socket", [108] = "gethostname", [116] = "readlink",
+	[106] = "shutdown", [107] = "socket", [108] = "gethostname", [114] = "rename", [116] = "readlink",
 };
 
 /* Symbolic native indices avoid importing the obsolete positional table. */
@@ -3644,6 +3688,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1106: code = 106; break;
 	case 1107: code = 107; break;
 	case 1108: code = 108; break;
+	case 1114: code = 114; break;
 	case 1116: code = 116; break;
 	case 1128: code = 128; break;
 	case 1129: code = 129; break;
