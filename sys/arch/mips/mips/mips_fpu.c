@@ -58,7 +58,12 @@ const pcu_ops_t mips_fpu_ops = {
 void
 fpu_discard(lwp_t *l)
 {
-	pcu_discard(&mips_fpu_ops, l, false);
+	/*
+	 * Callers replace pcb_fpregs after discarding the live register state.
+	 * Keep that replacement valid: otherwise the next COP1 trap zeros
+	 * it as a first-use context instead of restoring the supplied state.
+	 */
+	pcu_discard(&mips_fpu_ops, l, true);
 }
 
 void
