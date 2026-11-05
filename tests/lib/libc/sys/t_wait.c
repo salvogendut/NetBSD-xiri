@@ -297,6 +297,140 @@ ATF_TC_BODY(wait6_stopgo_loop, tc)
 	    (uintmax_t)si.si_utime);
 }
 
+
+/* Keep another live child at the head of the list: single-child waits do not
+ * exercise the scan shortcut or expose damaged stopped-child accounting. */
+static pid_t wait_children[3];
+
+static void
+wait_children_cleanup(void)
+{
+	unsigned i;
+	int st;
+
+	for (i = 0; i < __arraycount(wait_children); i++)
+		if (wait_children[i] > 0)
+			(void)kill(wait_children[i], SIGKILL);
+	for (i = 0; i < __arraycount(wait_children); i++) {
+		if (wait_children[i] <= 0)
+			continue;
+		while (waitpid(wait_children[i], &st, 0) == -1 && errno == EINTR)
+			continue;
+		wait_children[i] = 0;
+	}
+}
+
+static void
+wait_children_start(void)
+{
+	unsigned i;
+
+	ATF_REQUIRE(atexit(wait_children_cleanup) == 0);
+	for (i = 0; i < __arraycount(wait_children); i++) {
+		pid_t pid = fork();
+		ATF_REQUIRE(pid != -1);
+		if (pid == 0) {
+			alarm(20);
+			for (;;)
+				pause();
+		}
+		wait_children[i] = pid;
+	}
+}
+
+static void
+wait_child_event(pid_t pid, int options, int code)
+{
+	siginfo_t si;
+	int st;
+
+	ATF_REQUIRE(wait6(P_PID, pid, &st, options, NULL, &si) == pid);
+	ATF_REQUIRE_EQ(si.si_pid, pid);
+	ATF_REQUIRE_EQ(si.si_code, code);
+}
+
+static void
+wait_child_scan(pid_t pid, int options, int code)
+{
+	siginfo_t si;
+	int st;
+	idtype_t types[] = { P_ALL, P_PGID };
+	unsigned i;
+
+	for (i = 0; i < __arraycount(types); i++) {
+		pid_t found = wait6(types[i], types[i] == P_ALL ? 0 : getpgrp(),
+		    &st, options | WNOHANG | WNOWAIT, NULL, &si);
+		ATF_CHECK_EQ_MSG(found, pid, "selector %u options %#x", i, options);
+		if (found > 0) {
+			ATF_CHECK_EQ(si.si_pid, pid);
+			ATF_CHECK_EQ(si.si_code, code);
+		}
+	}
+}
+
+ATF_TC(wait6_continued_multiple);
+ATF_TC_HEAD(wait6_continued_multiple, tc)
+{
+	atf_tc_set_md_var(tc, "descr",
+	    "Find continued children behind live siblings, including WNOWAIT");
+	atf_tc_set_md_var(tc, "timeout", "15");
+}
+
+ATF_TC_BODY(wait6_continued_multiple, tc)
+{
+	unsigned i;
+	pid_t pid;
+
+	wait_children_start();
+	pid = wait_children[0];
+	for (i = 0; i < 4; i++) {
+		ATF_REQUIRE(kill(pid, SIGSTOP) == 0);
+		/* Both collected and uncollected stops must balance on resume. */
+		wait_child_event(pid, WSTOPPED | (i % 2 ? WNOWAIT : 0), CLD_STOPPED);
+		ATF_REQUIRE(kill(pid, SIGCONT) == 0);
+		wait_child_event(pid, WCONTINUED | WNOWAIT, CLD_CONTINUED);
+		wait_child_scan(pid, WCONTINUED, CLD_CONTINUED);
+		wait_child_scan(pid, WCONTINUED, CLD_CONTINUED);
+		wait_child_event(pid, WCONTINUED, CLD_CONTINUED);
+		wait_child_scan(0, WCONTINUED, 0);
+	}
+	wait_children_cleanup();
+}
+
+ATF_TC(wait6_stop_exit_after_continue);
+ATF_TC_HEAD(wait6_stop_exit_after_continue, tc)
+{
+	atf_tc_set_md_var(tc, "descr",
+	    "Consuming a continuation must not hide another child's stop or exit");
+	atf_tc_set_md_var(tc, "timeout", "15");
+}
+
+ATF_TC_BODY(wait6_stop_exit_after_continue, tc)
+{
+	pid_t first, second;
+
+	wait_children_start();
+	first = wait_children[0];
+	second = wait_children[1];
+	ATF_REQUIRE(kill(first, SIGSTOP) == 0);
+	wait_child_event(first, WSTOPPED, CLD_STOPPED);
+	ATF_REQUIRE(kill(first, SIGCONT) == 0);
+	wait_child_event(first, WCONTINUED, CLD_CONTINUED);
+
+	ATF_REQUIRE(kill(second, SIGSTOP) == 0);
+	wait_child_event(second, WSTOPPED | WNOWAIT, CLD_STOPPED);
+	wait_child_scan(second, WSTOPPED, CLD_STOPPED);
+	wait_child_event(second, WSTOPPED, CLD_STOPPED);
+	wait_child_scan(0, WSTOPPED, 0);
+
+	ATF_REQUIRE(kill(first, SIGKILL) == 0);
+	wait_child_event(first, WEXITED | WNOWAIT, CLD_KILLED);
+	wait_child_scan(first, WEXITED, CLD_KILLED);
+	wait_child_event(first, WEXITED, CLD_KILLED);
+	wait_children[0] = 0;
+	wait_children_cleanup();
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 
@@ -306,6 +440,8 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, wait6_coredumped);
 	ATF_TP_ADD_TC(tp, wait6_stop_and_go);
 	ATF_TP_ADD_TC(tp, wait6_stopgo_loop);
+	ATF_TP_ADD_TC(tp, wait6_continued_multiple);
+	ATF_TP_ADD_TC(tp, wait6_stop_exit_after_continue);
 
 	return atf_no_error();
 }

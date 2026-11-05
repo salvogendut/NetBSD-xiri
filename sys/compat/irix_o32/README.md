@@ -1326,3 +1326,21 @@ differences. Raw siginfo padding/accounting is not an oracle; unused candidate
 fields remain zero. Original-libc timing, native notification controls,
 existing signal/sproc/process checks and real terminal jobs are recorded
 separately in Xiri's 2026-11-05 job-control report.
+
+Native multi-child wait follow-up
+--------------------------------
+
+The terminal cycle also exposed a generic kern_exit.c defect, independently
+reproduced by native programs. Resuming a child already removes an uncollected
+stop from p_nstopchild; consuming WCONTINUED must not subtract again. The
+child-list shortcut must also keep scanning when WCONTINUED is requested,
+because continued events are not included in the stopped/zombie count.
+
+The shared fix changes neither signal policy nor module interfaces. New
+wait6_continued_multiple and wait6_stop_exit_after_continue cases in
+tests/lib/libc/sys/t_wait.c fail on the unfixed core under root and UID 1234,
+while the existing single-child stop/go tests pass. The identical native
+binary passes all eight runs on the fixed core, with owned descendants
+absent afterward. The companion Xiri native-wait lab retains the paired
+records and a separate core/build/image pin. This does not establish the
+cause of the historical catalog bootstrap or shutdown failures.

@@ -1084,11 +1084,11 @@ find_stopped_child(struct proc *parent, idtype_t idtype, id_t id, int options,
 			if ((options & WCONTINUED) != 0 &&
 			    child->p_xsig == SIGCONT &&
 			    (child->p_sflag & PS_CONTINUED)) {
-				if ((options & WNOWAIT) == 0) {
+				/* Resume already removed an uncollected stop from
+				 * p_nstopchild. A continuation is not a stopped or
+				 * zombie child and must not change that count. */
+				if ((options & WNOWAIT) == 0)
 					child->p_sflag &= ~PS_CONTINUED;
-					child->p_waited = 1;
-					parent->p_nstopchild--;
-				}
 				if (si) {
 					si->si_status = child->p_xsig;
 					si->si_code = CLD_CONTINUED;
@@ -1113,7 +1113,9 @@ find_stopped_child(struct proc *parent, idtype_t idtype, id_t id, int options,
 				}
 				break;
 			}
-			if (parent->p_nstopchild == 0 || rv == 2) {
+			/* Continued children are not included in p_nstopchild. */
+			if ((parent->p_nstopchild == 0 &&
+			    (options & WCONTINUED) == 0) || rv == 2) {
 				child = NULL;
 				break;
 			}
