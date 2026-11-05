@@ -1014,6 +1014,13 @@ child_psignal(struct proc *p, int mask)
 	mutex_exit(p->p_lock);
 	mutex_enter(q->p_lock);
 
+#ifndef __HAVE_MINIMAL_EMUL
+	/* Some personalities suppress both stop and continue notices. Apply
+	 * this before queueing: discarding at sendsig is too late to avoid
+	 * waking/interruption or replacing another pending child status. */
+	if (xsig == SIGCONT && (q->p_emul->e_flags & EMUL_NOCLDSTOP_CONT))
+		mask |= PS_NOCLDSTOP;
+#endif
 	if ((q->p_sflag & mask) == 0)
 		kpsignal2(q, &ksi);
 

@@ -567,6 +567,30 @@ irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 	}
 	case 20: /* SGI_SETSID: native session ownership and authorization. */
 		return sys_setsid(l, NULL, rval);
+	case 21: { /* SGI_SETPGID */
+		struct sys_setpgid_args ua;
+		const int32_t pid = (int32_t)SCARG(uap, arg1);
+		const int32_t pgid = (int32_t)SCARG(uap, arg2);
+
+		/* IRIX 6.5.22 accepts MAXPID here, but getpgid excludes it.
+		 * Validate the group before looking up the target process. */
+		if (pgid < 0 || pgid > 0x7ffffff0)
+			return EINVAL;
+		if (pid < 0)
+			return ESRCH;
+		SCARG(&ua, pid) = pid;
+		SCARG(&ua, pgid) = pgid;
+		return sys_setpgid(l, &ua, rval);
+	}
+	case 64: { /* SGI_GETPGID */
+		struct sys_getpgid_args ua;
+		const int32_t pid = (int32_t)SCARG(uap, arg1);
+
+		if (pid < 0 || pid >= 0x7ffffff0)
+			return EINVAL;
+		SCARG(&ua, pid) = pid;
+		return sys_getpgid(l, &ua, rval);
+	}
 	case 65: { /* SGI_GETSID */
 		struct sys_getsid_args ua;
 
@@ -1808,6 +1832,76 @@ irix_setsockopt(struct lwp *l, const void *args, register_t *rval)
 	error = sys_setsockopt(l, &native, rval);
 	if (error == 0)
 		*rval = 0;
+	return error;
+}
+
+struct irix_nanosleep_args {
+	syscallarg(uint32_t) request;
+	syscallarg(uint32_t) remaining;
+};
+
+static int
+irix_nanosleep(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_nanosleep_args *uap = args;
+	int32_t wire[2];
+	struct timespec duration, deadline, now, left;
+	int64_t ticks;
+	int error;
+
+	/* Both ABIs use two signed 32-bit words. IRIX validates nanoseconds,
+	 * treats negative seconds as an already elapsed interval, and caps
+	 * positive requests at INT32_MAX units of its 100 Hz clock. */
+	error = copyin(irix_pointer(SCARG(uap, request)), wire, sizeof(wire));
+	if (error != 0)
+		return error;
+	if (wire[1] < 0 || wire[1] >= 1000000000)
+		return EINVAL;
+	*rval = 0;
+	if (wire[0] < 0)
+		return 0;
+	ticks = MIN((int64_t)wire[0] * 100 +
+	    (wire[1] + 9999999) / 10000000, INT32_MAX);
+	if (ticks == 0)
+		return 0;
+	duration.tv_sec = ticks / 100;
+	duration.tv_nsec = (ticks % 100) * 10000000;
+	getnanouptime(&now);
+	timespecadd(&now, &duration, &deadline);
+	for (;;) {
+		timespecsub(&deadline, &now, &left);
+		if (left.tv_sec < 0 || !timespecisset(&left))
+			return 0;
+		/* Unlike native nanosleep, the foreign call honors SA_RESTART.
+		 * Preserve kpause's EINTR/ERESTART distinction for the dispatcher. */
+		error = kpause("irixnap", true, MAX(1, tstohz(&left)), NULL);
+		getnanouptime(&now);
+		if (error == EINTR || error == ERESTART)
+			break;
+		if (error != 0 && error != EWOULDBLOCK)
+			return error;
+	}
+	if (SCARG(uap, remaining) != 0) {
+		timespecsub(&deadline, &now, &left);
+		int64_t remaining = left.tv_sec < 0 ? 0 :
+		    (int64_t)left.tv_sec * 100 +
+		    (left.tv_nsec + 9999999) / 10000000;
+		remaining = MIN(remaining, ticks);
+		wire[0] = remaining / 100;
+		wire[1] = (remaining % 100) * 10000000;
+		/* Successful completion leaves rmtp untouched. Interrupted copyout
+		 * may write a mapped prefix, and its fault takes precedence over
+		 * interruption/restart. Keep the copied request independent of rmtp. */
+		for (size_t i = 0; i < sizeof(wire); i++) {
+			uint32_t address = SCARG(uap, remaining);
+			if (address >= 0x80000000U || i >= 0x80000000U - address)
+				return EFAULT;
+			int fault = copyout((const uint8_t *)wire + i,
+			    irix_pointer(address + i), 1);
+			if (fault != 0)
+				return fault;
+		}
+	}
 	return error;
 }
 
@@ -3195,15 +3289,21 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_waitsys_args *uap = args;
 	uint32_t info[32] = { 0 };
 	const uint32_t flags = SCARG(uap, options);
-	int pid = 0, status = 0, options = WEXITED, error;
+	int pid = 0, status = 0, options = 0, error;
+	siginfo_t native;
+	idtype_t type;
 
-	/* Positive-child waits plus the installer's P_ALL exit callback.
-	 * Native wait owns child selection/consumption. Reject unsupported
-	 * selectors and accounting before observing any child. */
-	const bool all = SCARG(uap, type) == 7 && SCARG(uap, pid) == 0;
-	if ((!all && (SCARG(uap, type) != 0 || SCARG(uap, pid) <= 0)) ||
-	    !(flags & 1) || (flags & ~(1U | 2U | 0x40U | 0x80U)))
+	/* Native wait owns selection, state transitions and consumption. */
+	if (!(flags & 0xf) || (flags & ~(0xfU | 0x40U | 0x80U)))
 		return EINVAL;
+	if (SCARG(uap, pid) < 0)
+		return EINVAL;
+	switch (SCARG(uap, type)) {
+	case 0: type = P_PID; break;
+	case 2: type = P_PGID; break;
+	case 7: type = P_ALL; break;
+	default: return EINVAL;
+	}
 	if (SCARG(uap, rusage) != 0)
 		return ENOSYS;
 	if (SCARG(uap, info) == 0)
@@ -3221,14 +3321,22 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 	vm_map_unlock_read(map);
 	if (!mapped)
 		return EFAULT;
+	if (type == P_PID && SCARG(uap, pid) == 0)
+		return ECHILD;
+	if (flags & 1)
+		options |= WEXITED;
+	if (flags & 4)
+		options |= WSTOPPED;
+	if (flags & 8)
+		options |= WCONTINUED;
 	if (flags & 0x40)
 		options |= WNOHANG;
 	if (flags & 0x80)
 		options |= WNOWAIT;
 	if (flags & 2)
 		options |= WTRAPPED;
-	error = do_sys_waitid(all ? P_ALL : P_PID, SCARG(uap, pid), &pid, &status,
-	    options, NULL, NULL);
+	error = do_sys_waitid(type, SCARG(uap, pid), &pid, &status,
+	    options, NULL, &native);
 	if (error != 0)
 		return error;
 	info[5] = UINT32_MAX; /* IRIX's no-event status. */
@@ -3239,10 +3347,13 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 			info[1] = 1; /* CLD_EXITED */
 			info[5] = WEXITSTATUS(status);
 		} else if (WIFSTOPPED(status)) {
-			info[1] = 4; /* CLD_TRAPPED; only traced stops are requested. */
+			info[1] = native.si_code == CLD_TRAPPED ? 4 : 5;
 			for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
 				if (irix_signal_map[i] == WSTOPSIG(status))
 					info[5] = i;
+		} else if (WIFCONTINUED(status)) {
+			info[1] = 6; /* CLD_CONTINUED */
+			info[5] = 25; /* IRIX SIGCONT */
 		} else {
 			info[1] = WCOREDUMP(status) ? 3 : 2;
 			for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
@@ -3255,13 +3366,16 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 	error = copyout(info, irix_pointer(SCARG(uap, info)), sizeof(info));
 	if (error == 0) {
 		*rval = 0;
-		if (pid != 0 && !(flags & 0x80))
+		if (pid != 0 && !(flags & 0x80) &&
+		    (WIFEXITED(status) || WIFSIGNALED(status)))
 			rval[1] = (int16_t)status;
 	}
 	return error;
 }
 
 static struct sysent irix_o32_sysent[] = {
+	[77] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_nanosleep_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_nanosleep },
 	[19] = { .sy_narg = 4, .sy_argsize = sizeof(struct irix_lseek_args),
 	    .sy_call = irix_lseek },
 	[81] = { .sy_narg = 3, .sy_argsize = 3 * sizeof(register_t),
@@ -3596,7 +3710,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
-	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [82] = "sginap", [87] = "poll", [91] = "connect",
+	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [77] = "nanosleep", [82] = "sginap", [87] = "poll", [91] = "connect",
 	[89] = "accept", [90] = "bind", [96] = "listen",
 	[93] = "getpeername", [94] = "getsockname",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
@@ -3672,6 +3786,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1062: code = 62; break;
 	case 1063: code = 63; break;
 	case 1075: code = 75; break;
+	case 1077: code = 77; break;
 	case 1080: code = 80; break;
 	case 1082: code = 82; break;
 	case 1081: code = 81; break;
@@ -3802,6 +3917,7 @@ irix_o32_setregs(struct lwp *l, struct exec_package *epp, vaddr_t stack)
 
 static struct emul emul_irix_o32 = {
 	.e_name = "irix_o32",
+	.e_flags = EMUL_NOCLDSTOP_CONT,
 	.e_path = "/emul/irix",
 	.e_nosys = 0,
 	.e_nsysent = __arraycount(irix_o32_sysent),

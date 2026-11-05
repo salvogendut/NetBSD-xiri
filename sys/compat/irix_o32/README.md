@@ -1281,3 +1281,48 @@ and GIMP default-image dimensions through save, normal exit and relaunch.
 GIMP's gimprc.old is byte-identical to the preceding preferences file.
 fchmod/unlink, shared-memory transport and broader application behavior remain
 separate work; these observed preference paths complete without those calls.
+
+
+## Sleep, child state and process groups (2026-11-05)
+
+Trap 1077 implements the measured o32/n32 nanosleep layout and interruption
+rules. Both ABIs use two signed 32-bit words. Nanoseconds are validated first;
+negative seconds complete immediately. Positive requests round up to 100 Hz
+ticks and cap at INT32_MAX ticks. Successful completion leaves remaining-time
+storage untouched. Interrupted output uses 10 ms units and preserves partial
+copyout/EFAULT precedence. kpause's EINTR/ERESTART distinction is retained so
+IRIX SA_RESTART can restart the request. Native timer granularity remains a
+limit for sub-10 ms requests.
+
+waitsys now supports P_PID/P_PGID/P_ALL and nonempty combinations of
+WEXITED/WTRAPPED/WSTOPPED/WCONTINUED with WNOHANG/WNOWAIT. NetBSD owns selection,
+state consumption and authorization. Ordinary stops use CLD_STOPPED, traced
+stops use CLD_TRAPPED, and continuations carry the IRIX SIGCONT number.
+Stop/continue preserve the secondary return register; consuming a death or
+exit updates it. Non-null rusage remains unsupported. Two differences are
+explicit: P_PGID/id=0 reaps exits rather than returning original IRIX's ECHILD,
+and an empty event selection retains native EINVAL rather than IRIX's
+successful no-event WNOHANG|WNOWAIT result.
+
+IRIX SA_NOCLDSTOP suppresses continuation as well as stop notices. The generic
+EMUL_NOCLDSTOP_CONT personality flag lets child_psignal apply that policy under
+the parent's lock before queueing SIGCHLD. Native NetBSD does not opt in.
+This requires a matching core and module; it is the third core interface
+alongside selcommon_kern and emul.e_sigmask needed for eventual stock-kernel
+module delivery.
+
+SGI_GETPGID (64) and SGI_SETPGID (21) delegate to native group operations with
+measured IRIX ID boundaries and error precedence. The getter excludes
+0x7ffffff0, while the setter permits that group value. Native ownership,
+after-exec and session checks remain in force. These interfaces let the
+original IRIX shell start with monitor mode enabled and give foreground jobs
+their own process groups.
+
+The companion Xiri lab retains independent original binaries/records for
+264 sleep cases, 256 child-state contracts, 888 process-group operations and
+360 nonempty wait-flag selections across both ABIs, dispatch forms and
+identities. It explicitly reports 32 P_PGID/0 exit and 24 empty-selection
+differences. Raw siginfo padding/accounting is not an oracle; unused candidate
+fields remain zero. Original-libc timing, native notification controls,
+existing signal/sproc/process checks and real terminal jobs are recorded
+separately in Xiri's 2026-11-05 job-control report.

@@ -210,6 +210,8 @@ struct emul {
  * Emulation miscellaneous flags
  */
 #define	EMUL_HAS_SYS___syscall	0x001	/* Has SYS___syscall */
+/* SA_NOCLDSTOP also suppresses continued-child notifications. */
+#define	EMUL_NOCLDSTOP_CONT	0x002
 
 /*
  * Description of a process.
