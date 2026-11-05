@@ -955,6 +955,7 @@ uvmpd_scan_queue(void)
 	struct swapcluster swc;
 #endif /* defined(VMSWAP) */
 	int dirtyreacts;
+	unsigned int lastyield;
 	krwlock_t *slock;
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pdhist);
 
@@ -969,6 +970,7 @@ uvmpd_scan_queue(void)
 #endif /* defined(VMSWAP) */
 
 	dirtyreacts = 0;
+	lastyield = getticks();
 	uvmpdpol_scaninit();
 
 	while (/* CONSTCOND */ 1) {
@@ -986,6 +988,25 @@ uvmpd_scan_queue(void)
 			UVMHIST_LOG(pdhist,"  met free target: "
 				    "exit loop", 0, 0, 0, 0);
 			break;
+		}
+
+		/*
+		 * Once free pages and pending pageouts meet the free target,
+		 * do not let speculative
+		 * reclamation monopolize the CPU.  In particular, software
+		 * swap encryption can make the larger batch take seconds on
+		 * a slow CPU.  The page daemon outranks user LWPs, so merely
+		 * yielding would immediately select it again.
+		 *
+		 * No page or queue locks are held here.  The scan marker stays
+		 * linked while we sleep, just as when swap I/O blocks.  Include
+		 * submitted pageouts: their completion may itself need the CPU.
+		 * Keep reclaiming without this delay while below that target.
+		 */
+		if (uvm_availmem(false) + uvmexp.paging >= uvmexp.freetarg &&
+		    (unsigned int)(getticks() - lastyield) >= MAX(1, hz / 10)) {
+			kpause("pdscan", false, 1, NULL);
+			lastyield = getticks();
 		}
 
 		/*

@@ -2267,7 +2267,7 @@ static int
 sysctl_kern_uvm_swap_encrypt(SYSCTLFN_ARGS)
 {
 	struct sysctlnode node;
-	int swap_encrypt = uvm_swap_encrypt;
+	bool swap_encrypt = atomic_load_relaxed(&uvm_swap_encrypt);
 	int error;
 
 	node = *rnode;
