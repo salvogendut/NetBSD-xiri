@@ -729,6 +729,271 @@ irix_rename(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* Removal keeps native vnode permissions, sticky-directory policy and
+ * emulation-root lookup. IRIX ignores final slashes, even on symlinks. */
+struct irix_remove_args {
+	syscallarg(uint32_t) path;
+};
+
+static int
+irix_remove_path(uint32_t address, char *path)
+{
+	size_t len;
+	int error;
+
+	error = copyinstr(irix_pointer(address), path, MAXPATHLEN, &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	return 0;
+}
+
+static void
+irix_remove_abort(struct nameidata *nd)
+{
+	VOP_ABORTOP(nd->ni_dvp, &nd->ni_cnd);
+	if (nd->ni_dvp == nd->ni_vp)
+		vrele(nd->ni_dvp);
+	else
+		vput(nd->ni_dvp);
+	vput(nd->ni_vp);
+}
+
+static int
+irix_unlink(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_remove_args *uap = args;
+	char path[MAXPATHLEN];
+	struct pathbuf *pb;
+	struct nameidata nd;
+	int error, lookup_error;
+
+	error = irix_remove_path(SCARG(uap, path), path);
+	if (error != 0)
+		return error;
+	/* Delegate removal itself, including native veriexec/fileassoc hooks. */
+	error = do_sys_unlink(path, UIO_SYSSPACE);
+	if (error == 0)
+		*rval = 0;
+	if (error != EPERM)
+		return error;
+	/* IRIX reports a denied sticky-directory lookup as EACCES, but an
+	 * attempt to unlink a directory as EPERM. Classify only the failed
+	 * operation: this second lookup never removes anything. If a racing
+	 * change makes it pass, preserve the original native error. */
+	pb = pathbuf_create(path);
+	if (pb == NULL)
+		return error;
+	NDINIT(&nd, DELETE, LOCKPARENT | LOCKLEAF | TRYEMULROOT, pb);
+	lookup_error = namei(&nd);
+	if (lookup_error == 0)
+		irix_remove_abort(&nd);
+	pathbuf_destroy(pb);
+	return lookup_error == EPERM ? EACCES : error;
+}
+
+static int
+irix_rmdir(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_remove_args *uap = args;
+	char path[MAXPATHLEN];
+	struct pathbuf *pb;
+	struct nameidata nd;
+	struct vnode *vp;
+	int error;
+
+	error = irix_remove_path(SCARG(uap, path), path);
+	if (error != 0)
+		return error;
+	/* sys_rmdir only accepts a user string. Use the same locked DELETE
+	 * lookup and VOP_RMDIR lifetime rules for our normalized kernel path;
+	 * never follow a final symlink or split lookup from removal. */
+	pb = pathbuf_create(path);
+	if (pb == NULL)
+		return ENOMEM;
+	NDINIT(&nd, DELETE, LOCKPARENT | LOCKLEAF | TRYEMULROOT, pb);
+	error = namei(&nd);
+	if (error != 0) {
+		if (error == EPERM)
+			error = EACCES;
+		goto out;
+	}
+	vp = nd.ni_vp;
+	if ((vp->v_vflag & VV_ROOT) != 0 ||
+	    (vp->v_type == VDIR && vp->v_mountedhere != NULL))
+		error = EBUSY;
+	else if (nd.ni_dvp == vp)
+		error = EINVAL;
+	else if (vp->v_type != VDIR)
+		error = ENOTDIR;
+	if (error != 0) {
+		irix_remove_abort(&nd);
+		goto out;
+	}
+	error = VOP_RMDIR(nd.ni_dvp, vp, &nd.ni_cnd);
+	vput(nd.ni_dvp);
+	if (error == 0)
+		*rval = 0;
+	else if (error == ENOTEMPTY)
+		error = EEXIST;
+out:
+	pathbuf_destroy(pb);
+	return error;
+}
+
+/* Filesystem statistics are obtained with native lookup and credentials.
+ * IRIX statvfs uses 32-bit counters on o32 and 64-bit counters on n32;
+ * statvfs64 explicitly selects the latter layout on either ABI. */
+struct irix_statvfs_tail {
+	uint32_t fsid;
+	char basetype[16];
+	uint32_t flag, namemax;
+	char fstr[32];
+	uint32_t filler[16];
+};
+struct irix_statvfs_small {
+	uint32_t bsize, frsize, blocks, bfree, bavail, files, ffree, favail;
+	struct irix_statvfs_tail tail;
+};
+struct irix_statvfs_wide {
+	uint32_t bsize, frsize;
+	uint64_t blocks, bfree, bavail, files, ffree, favail;
+	struct irix_statvfs_tail tail;
+};
+struct irix_statvfs_args {
+	syscallarg(uint32_t) path_or_fd;
+	syscallarg(uint32_t) buffer;
+};
+
+static int
+irix_pstatvfs(struct lwp *l, uint32_t address, struct statvfs *sb)
+{
+	char path[MAXPATHLEN];
+	struct vnode *vp;
+	size_t len;
+	int error;
+
+	/* As with xstat, IRIX accepts a regular file followed by slashes. */
+	error = copyinstr(irix_pointer(address), path, sizeof(path), &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	error = namei_simple_kernel(path, NSM_FOLLOW_TRYEMULROOT, &vp);
+	if (error != 0)
+		return error;
+	error = dostatvfs(vp->v_mount, sb, l, MNT_WAIT, 1);
+	vrele(vp);
+	return error;
+}
+
+static int
+irix_statvfs_common(struct lwp *l, const void *args, register_t *rval,
+    bool descriptor, bool wide)
+{
+	const struct irix_statvfs_args *uap = args;
+	union {
+		struct irix_statvfs_small small;
+		struct irix_statvfs_wide wide;
+	} out;
+	struct irix_statvfs_tail *tail;
+	struct statvfs *sb;
+	size_t len;
+	int error;
+
+	CTASSERT(sizeof(struct irix_statvfs_small) == 156);
+	CTASSERT(sizeof(struct irix_statvfs_wide) == 184);
+	CTASSERT(offsetof(struct irix_statvfs_small, tail) == 32);
+	CTASSERT(offsetof(struct irix_statvfs_wide, tail) == 56);
+
+	sb = STATVFSBUF_GET();
+	if (descriptor)
+		error = do_sys_fstatvfs(l, (int32_t)SCARG(uap, path_or_fd),
+		    MNT_WAIT, sb);
+	else
+		error = irix_pstatvfs(l, SCARG(uap, path_or_fd), sb);
+	if (error != 0)
+		goto done;
+	wide = wide || l->l_proc->p_md.md_abi == _MIPS_BSD_API_N32;
+	if (sb->f_bsize > UINT32_MAX || sb->f_frsize > UINT32_MAX ||
+	    sb->f_fsid > UINT32_MAX || sb->f_namemax > UINT32_MAX ||
+	    (!wide && (sb->f_blocks > UINT32_MAX || sb->f_bfree > UINT32_MAX ||
+	    sb->f_bavail > UINT32_MAX || sb->f_files > UINT32_MAX ||
+	    sb->f_ffree > UINT32_MAX || sb->f_favail > UINT32_MAX))) {
+		error = EOVERFLOW;
+		goto done;
+	}
+	/* Initialize all foreign padding and reserved bytes before copyout. */
+	memset(&out, 0, sizeof(out));
+	if (wide) {
+		out.wide.bsize = sb->f_bsize;
+		out.wide.frsize = sb->f_frsize;
+		out.wide.blocks = sb->f_blocks;
+		out.wide.bfree = sb->f_bfree;
+		out.wide.bavail = sb->f_bavail;
+		out.wide.files = sb->f_files;
+		out.wide.ffree = sb->f_ffree;
+		out.wide.favail = sb->f_favail;
+		tail = &out.wide.tail;
+		len = sizeof(out.wide);
+	} else {
+		out.small.bsize = sb->f_bsize;
+		out.small.frsize = sb->f_frsize;
+		out.small.blocks = sb->f_blocks;
+		out.small.bfree = sb->f_bfree;
+		out.small.bavail = sb->f_bavail;
+		out.small.files = sb->f_files;
+		out.small.ffree = sb->f_ffree;
+		out.small.favail = sb->f_favail;
+		tail = &out.small.tail;
+		len = sizeof(out.small);
+	}
+	tail->fsid = sb->f_fsid;
+	strlcpy(tail->basetype, sb->f_fstypename, sizeof(tail->basetype));
+	tail->namemax = sb->f_namemax;
+	/* NetBSD rejects overlong names instead of truncating them. */
+	tail->flag = 0x4;
+	if (sb->f_flag & MNT_RDONLY)
+		tail->flag |= 0x1;
+	if (sb->f_flag & MNT_NOSUID)
+		tail->flag |= 0x2;
+	if (sb->f_flag & MNT_NODEV)
+		tail->flag |= 0x20000000;
+	if (sb->f_flag & MNT_LOCAL)
+		tail->flag |= 0x80000000;
+	error = copyout(&out, irix_pointer(SCARG(uap, buffer)), len);
+	if (error == 0)
+		*rval = 0;
+done:
+	STATVFSBUF_PUT(sb);
+	return error;
+}
+
+static int
+irix_statvfs(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_statvfs_common(l, args, rval, false, false);
+}
+
+static int
+irix_fstatvfs(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_statvfs_common(l, args, rval, true, false);
+}
+
+static int
+irix_statvfs64(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_statvfs_common(l, args, rval, false, true);
+}
+
+static int
+irix_fstatvfs64(struct lwp *l, const void *args, register_t *rval)
+{
+	return irix_statvfs_common(l, args, rval, true, true);
+}
+
 /* Directory creation uses native lookup, effective credentials, umask and
  * filesystem ownership policy. Native CREATE lookup selects the emulation
  * parent when present and falls back to the native namespace otherwise. */
@@ -3424,6 +3689,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_close_args),
 		.sy_call = (sy_call_t *)sys_close,
 	},
+	[10] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_remove_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_unlink,
+	},
 	[12] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_chdir_args),
@@ -3506,6 +3777,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_getrlimit_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getrlimit64,
+	},
+	[79] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct irix_remove_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_rmdir,
 	},
 	[80] = {
 		.sy_narg = 2,
@@ -3641,6 +3918,30 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_sigprocmask,
 	},
+	[174] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_statvfs_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_statvfs,
+	},
+	[175] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_statvfs_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_fstatvfs,
+	},
+	[201] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_statvfs_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_statvfs64,
+	},
+	[202] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_statvfs_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_fstatvfs64,
+	},
 	[170] = {
 		.sy_narg = 5,
 		.sy_argsize = sizeof(struct irix_waitsys_args),
@@ -3701,6 +4002,9 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[205] = "getdents64",
 	[207] = "ngetdents",
 	[208] = "ngetdents64",
+	[10] = "unlink", [79] = "rmdir",
+	[174] = "statvfs", [175] = "fstatvfs",
+	[201] = "statvfs64", [202] = "fstatvfs64",
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
 	[37] = "kill", [88] = "sigreturn", [162] = "sigaction",
 	[5] = "open", [6] = "close", [12] = "chdir", [17] = "break", [24] = "getuid",
@@ -3765,6 +4069,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1010: code = 10; break;
 	case 1012: code = 12; break;
 	case 1013: code = 13; break;
 	case 1015: code = 15; break;
@@ -3787,6 +4092,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1063: code = 63; break;
 	case 1075: code = 75; break;
 	case 1077: code = 77; break;
+	case 1079: code = 79; break;
 	case 1080: code = 80; break;
 	case 1082: code = 82; break;
 	case 1081: code = 81; break;
@@ -3825,6 +4131,10 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1160: code = 160; break;
 	case 1162: code = 162; break;
 	case 1164: code = 164; break;
+	case 1174: code = 174; break;
+	case 1175: code = 175; break;
+	case 1201: code = 201; break;
+	case 1202: code = 202; break;
 	case 1170: code = 170; break;
 	default: code = 0; break;
 	}
