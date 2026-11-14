@@ -4415,6 +4415,11 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    eh->e_flags == EF_MIPS_CPIC;
 	const uint32_t flags = standalone ? EF_MIPS_ABI2 :
 	    n32 ? (interpreter ? 0x22 : 0x24) : (interpreter ? 3 : 5);
+	/* IRIX 6.5.30 n32 libc is a MIPS IV interpreter. Keep the older
+	 * exact flag combinations and reject it on MIPS III processors. */
+	const bool mips4_interp = interpreter && n32 &&
+	    eh->e_flags == (EF_MIPS_ARCH_4 | flags) &&
+	    (mips_options.mips_cpu_arch & CPU_ARCH_MIPS4) != 0;
 	size_t phsize;
 	int error;
 
@@ -4430,7 +4435,8 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    eh->e_ident[EI_ABIVERSION] != 0 || eh->e_version != EV_CURRENT ||
 	    eh->e_machine != EM_MIPS ||
 	    eh->e_type != (interpreter ? ET_DYN : ET_EXEC) ||
-	    (!legacy_o32 && (n32 || eh->e_flags != (EF_MIPS_ARCH_2 | flags)) &&
+	    (!legacy_o32 && !mips4_interp &&
+	     (n32 || eh->e_flags != (EF_MIPS_ARCH_2 | flags)) &&
 	     eh->e_flags != (EF_MIPS_ARCH_3 | flags)) ||
 	    mips_options.mips_cpu_arch < CPU_ARCH_MIPS3 ||
 	    eh->e_ehsize != sizeof(*eh) || eh->e_phoff != sizeof(*eh) ||
