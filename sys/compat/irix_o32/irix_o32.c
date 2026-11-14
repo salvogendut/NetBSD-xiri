@@ -729,6 +729,89 @@ irix_rename(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* Preserve the target bytes; only the new link's pathname is looked up. */
+struct irix_symlink_args {
+	syscallarg(uint32_t) target;
+	syscallarg(uint32_t) link;
+};
+
+static int
+irix_symlink(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_symlink_args *uap = args;
+	char target[MAXPATHLEN], link[MAXPATHLEN];
+	size_t len;
+	int error;
+
+	error = copyinstr(irix_pointer(SCARG(uap, target)), target,
+	    sizeof(target), NULL);
+	if (error != 0)
+		return error;
+	error = copyinstr(irix_pointer(SCARG(uap, link)), link,
+	    sizeof(link), &len);
+	if (error != 0)
+		return error;
+	/* IRIX ignores final slashes on the new link, not in its target. */
+	while (len > 2 && link[len - 2] == '/')
+		link[--len - 1] = '\0';
+	error = do_sys_symlink(target, link, UIO_SYSSPACE);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+/* utimets uses two 32-bit seconds/nanoseconds pairs on both supported ABIs. */
+struct irix_utimets_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) times;
+};
+
+static int
+irix_utimets(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_utimets_args *uap = args;
+	struct irix_stat_time input[2];
+	struct timespec times[2];
+	struct vnode *vp;
+	char path[MAXPATHLEN];
+	size_t len;
+	int error;
+
+	if (SCARG(uap, times) != 0) {
+		error = copyin(irix_pointer(SCARG(uap, times)), input,
+		    sizeof(input));
+		if (error != 0)
+			return error;
+		for (unsigned i = 0; i < __arraycount(input); i++) {
+			/* Do not interpret foreign negative values as native
+			 * UTIME_NOW/UTIME_OMIT. Noncanonical values are rejected. */
+			if (input[i].nsec < 0 || input[i].nsec >= 1000000000)
+				return EINVAL;
+			/* Native vattr reserves -1 seconds as VNOVAL. Do not
+			 * report success while silently leaving a time unchanged. */
+			if (input[i].sec == -1)
+				return EINVAL;
+			times[i].tv_sec = input[i].sec;
+			times[i].tv_nsec = input[i].nsec;
+		}
+	}
+	error = copyinstr(irix_pointer(SCARG(uap, path)), path,
+	    sizeof(path), &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	error = namei_simple_kernel(path, NSM_FOLLOW_TRYEMULROOT, &vp);
+	if (error != 0)
+		return error;
+	error = do_sys_utimens(l, vp, NULL, FOLLOW,
+	    SCARG(uap, times) != 0 ? times : NULL, UIO_SYSSPACE);
+	vrele(vp);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
 /* Removal keeps native vnode permissions, sticky-directory policy and
  * emulation-root lookup. IRIX ignores final slashes, even on symlinks. */
 struct irix_remove_args {
@@ -3639,6 +3722,10 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 }
 
 static struct sysent irix_o32_sysent[] = {
+	[115] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_symlink_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_symlink },
+	[235] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_utimets_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_utimets },
 	[77] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_nanosleep_args),
 	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_nanosleep },
 	[19] = { .sy_narg = 4, .sy_argsize = sizeof(struct irix_lseek_args),
@@ -4002,7 +4089,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[205] = "getdents64",
 	[207] = "ngetdents",
 	[208] = "ngetdents64",
-	[10] = "unlink", [79] = "rmdir",
+	[10] = "unlink", [79] = "rmdir", [115] = "symlink", [235] = "utimets",
 	[174] = "statvfs", [175] = "fstatvfs",
 	[201] = "statvfs64", [202] = "fstatvfs64",
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
@@ -4070,6 +4157,8 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
 	case 1010: code = 10; break;
+	case 1115: code = 115; break;
+	case 1235: code = 235; break;
 	case 1012: code = 12; break;
 	case 1013: code = 13; break;
 	case 1015: code = 15; break;

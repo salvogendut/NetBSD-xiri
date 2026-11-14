@@ -34,7 +34,8 @@ personality. The Xiri companion repository supplies a bounded native-parent
 busy-unload check and module build/guest probes in `lab/irix-module`.
 
 The module currently requires this fork's exported `selcommon_kern` helper
-and `emul.e_sigmask` callback. It is not a stock-NetBSD deployment yet.
+and `emul.e_sigmask` callback, plus the `EMUL_NOCLDSTOP_CONT` policy described
+below. It is not a stock-NetBSD deployment yet.
 Newport and the native platform drivers remain separate kernel components.
 
 The static probe accepts ELF32/MSB MIPS III `ET_EXEC`, System V OSABI, ABI version zero,
@@ -1344,3 +1345,30 @@ binary passes all eight runs on the fixed core, with owned descendants
 absent afterward. The companion Xiri native-wait lab retains the paired
 records and a separate core/build/image pin. This does not establish the
 cause of the historical catalog bootstrap or shutdown failures.
+
+
+## File Manager filesystem metadata (2026-11-14)
+
+The filesystem-statistics and unlink/rmdir adapters introduced in the preceding
+cycle use native ownership and filesystem state. The companion Xiri lab retains
+384 statvfs-family and 336 removal observations across both ABIs, dispatch forms
+and identities.
+
+Trap 1115 now creates symbolic links through the native VFS helper. It preserves
+the target bytes, including dangling, empty and trailing-slash targets; only
+trailing slashes on the new link pathname are removed to match measured IRIX.
+Native lookup, umask, ownership and access checks remain in force.
+
+Trap 1235 implements utimets, including the indirect form used by File Manager.
+Both supported ABIs pass two signed 32-bit seconds/nanoseconds pairs. The adapter
+follows the target, retains emulation-root lookup, and delegates setting times
+and permission checks to native VFS. A null pointer requests current time.
+Two limits are explicit: noncanonical nanoseconds and seconds equal to -1 return
+EINVAL without changing metadata. IRIX accepts them, but native timestamp/vattr
+sentinels could otherwise turn them into a different operation or a silent no-op.
+
+The companion filemeta observer contains 328 original-IRIX records and requires
+exact results except for those 24 bounded error-policy cases. Its GUI companion
+covers FFS-to-tmpfs moves, directory symlinks, timestamps, collisions, access
+failures, read-only destinations and native file notifications. No additional
+core-kernel hook is introduced by these adapters.
