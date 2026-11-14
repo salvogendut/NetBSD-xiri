@@ -4454,10 +4454,13 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 		if ((uint64_t)p->p_offset + p->p_filesz > (uint64_t)filesize)
 			return ENOEXEC;
 		switch (p->p_type) {
-		case PT_LOAD:
-			/* bgicons declares 4 KiB data alignment, although both
-			 * its address and offset satisfy the native page mask.
-			 * Keep that mask and all extent/protection checks. */
+		case PT_LOAD: {
+			/* Original n32 keyboard places RW data halfway through
+			 * an 8 KiB page. The native readvn mapper includes the
+			 * matching file prefix; RX/RW virtual pages stay separate.
+			 * Do not extend this admission to interpreters or o32. */
+			const bool subpage = n32 && !interpreter && !standalone &&
+			    nload == 1 && p->p_align == 4096;
 			if (nload == 2 ||
 			    p->p_flags != (nload == 0 ? PF_R | PF_X : PF_R | PF_W) ||
 			    p->p_memsz == 0 || p->p_memsz > 16 * 1024 * 1024 ||
@@ -4465,9 +4468,13 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 			    p->p_vaddr < 0x00400000 ||
 			    p->p_vaddr > 0x40000000 - p->p_memsz ||
 			    p->p_offset > INT32_MAX - p->p_filesz ||
-			    (p->p_vaddr & PAGE_MASK) != 0 ||
-			    (p->p_offset & (legacy_o32 && p->p_align == 4096 ?
-			    4095 : PAGE_MASK)) != 0 ||
+			    (p->p_vaddr & (subpage ? 4095 : PAGE_MASK)) != 0 ||
+			    (p->p_offset & (subpage ||
+			    (legacy_o32 && p->p_align == 4096) ? 4095 : PAGE_MASK)) != 0 ||
+			    (subpage && (p->p_vaddr & PAGE_MASK) !=
+			    (p->p_offset & PAGE_MASK)) ||
+			    (subpage && (p->p_vaddr & PAGE_MASK) != 0 &&
+			    p->p_filesz == 0) ||
 			    p->p_align < (legacy_o32 || (!interpreter && nload == 1) ? 4096U :
 			    (unsigned)PAGE_SIZE) || p->p_align > 1024 * 1024 ||
 			    !powerof2(p->p_align) ||
@@ -4475,6 +4482,7 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 				return ENOEXEC;
 			loads[nload++] = *p;
 			break;
+		}
 		case PT_INTERP:
 			if (standalone || interpreter || ++ninterp != 1)
 				return ENOEXEC;
@@ -4517,8 +4525,9 @@ irix_o32_runtime_image(struct lwp *l, struct vnode *vp, off_t filesize,
 	    loads[0].p_memsz != loads[0].p_filesz ||
 	    loads[1].p_vaddr < round_page(loads[0].p_vaddr + loads[0].p_memsz) ||
 	    (loads[1].p_filesz != 0 &&
-	     loads[1].p_offset < (legacy_o32 ? loads[0].p_filesz :
-	     round_page(loads[0].p_filesz))) ||
+	     loads[1].p_offset < (legacy_o32 || (n32 && !interpreter &&
+	     !standalone && loads[1].p_align == 4096) ?
+	     loads[0].p_filesz : round_page(loads[0].p_filesz))) ||
 	    eh->e_entry < loads[0].p_vaddr ||
 	    eh->e_entry >= loads[0].p_vaddr + loads[0].p_filesz ||
 	    (eh->e_entry & 3) != 0)

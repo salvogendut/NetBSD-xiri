@@ -1372,3 +1372,21 @@ exact results except for those 24 bounded error-policy cases. Its GUI companion
 covers FFS-to-tmpfs moves, directory symlinks, timestamps, collisions, access
 failures, read-only destinations and native file notifications. No additional
 core-kernel hook is introduced by these adapters.
+
+## n32 executable data on a 4 KiB boundary
+
+The original IRIX 6.5.22 Keyboard panel places initialized RW data at
+`0x10019000`, file offset `0x9000`, with 4096-byte alignment. Dynamic n32
+executables may now use this layout: the address and file offset must have
+matching offsets within the native 8 KiB page. NetBSD's existing
+`vmcmd_map_readvn` includes the preceding file bytes in a private anonymous
+page. No native ELF-loader change is needed.
+
+RX and RW virtual pages must remain separate, even when the corresponding
+file page is shared. Initialized data and zero-filled/writable BSS retain
+the existing bounds. Half-page pure-BSS segments remain rejected because
+the native zero-map path does not populate their initial partial page.
+Interpreter, o32, static-image, protection, metadata and address-limit rules
+are unchanged. The companion Xiri `build-irix-exec-subpage.py` fixtures retain
+the prior executable cases and exercise copied prefixes, a shared file-page
+alias, full-page data, BSS and malformed layouts under two identities.
