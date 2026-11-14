@@ -238,8 +238,11 @@ r10k_pdcache_wb_range(register_t va, vsize_t size)
 #undef round_line
 #undef trunc_line
 
-#define	round_line(x)	(((x) + mci->mci_sdcache_line_size - 1) & ~(mci->mci_sdcache_line_size - 1))
-#define	trunc_line(x)	((x) & ~(mci->mci_sdcache_line_size - 1))
+/* Widen before complementing: the cache line size is an unsigned int. */
+#define	round_line(x)	(((x) + mci->mci_sdcache_line_size - 1) & \
+	~((register_t)mci->mci_sdcache_line_size - 1))
+#define	trunc_line(x)	((x) & \
+	~((register_t)mci->mci_sdcache_line_size - 1))
 
 void
 r10k_sdcache_wbinv_all(void)
