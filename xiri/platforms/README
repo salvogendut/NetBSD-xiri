@@ -150,8 +150,16 @@ controller without a QLogic command interrupt.  DMA, disk
 discovery, root mount and the real device interrupt are stage 2.  Evidence
 is in ip30/2026-11-15-m3d1-qlogic-attach.json.
 
+M3d2 QLogic mailbox interrupt (2026-11-15): XIRI_IP30_M3D2 issues a
+NO-OP mailbox command on each ISP1040 while HEART vector 18/19 is masked,
+then leaves the controller event pending across `splx()`.  The real
+`isp_pci_intr` handler runs through the Bridge/HEART route, reads the
+mailbox completion, acknowledges it, and clears the heart and Bridge
+sources without repeating.  Both controllers complete.  Evidence is in
+ip30/2026-11-15-m3d2-qlogic-mailbox-irq.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2 checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

@@ -528,6 +528,31 @@ The plain Octane Bridge has no XBridge force-interrupt registers, so a
 synthetic Bridge pin transition is not possible.  Actual QLogic pin
 delivery, DMA transfers, disk discovery and root mount are stage 2.
 
+M3d2 QLogic mailbox interrupt checkpoint (2026-11-15)
+------------------------------------------------------
+
+XIRI_IP30_M3D2 includes XIRI_IP30_M3D1 and generates a real mailbox
+completion on each ISP1040.  The M3d2 post test keeps the controller
+and ISP state checks from M3d1, then for each ISP:
+
+* acquires the driver mailbox and sets the driver's expected command,
+  output mask and busy state for a NO-OP (no input mailboxes);
+* after masking at `splvm`, writes NO-OP to mailbox 0 and
+  HCCR SET_HOST_INT, allowing the controller to complete the command and
+  assert its INTA pin while the CPU-interrupt delivery is deferred;
+* verifies the HEART vector remains pending and the ISP wrapper has not
+  run;
+* unmasks without clearing the event, so the real `isp_pci_intr` handler
+  runs through Bridge pin 0/1, reads the completion and acknowledges it;
+* checks `isp_intmboxc` advanced, `mboxcmd_done` is set, mailbox 0 is
+  `MBOX_COMMAND_COMPLETE`, the HEART vector and Bridge pin both cleared,
+  no repeated interrupt after 10 ms, and no Bridge error bits;
+* releases the mailbox state.
+
+The M3d2 run reports both controllers (vector 18 and 19) completing.  It
+does not use request/response rings or DMA; disk discovery, reads, root
+mount and active tty remain later stages.
+
 Regression obligations
 ----------------------
 

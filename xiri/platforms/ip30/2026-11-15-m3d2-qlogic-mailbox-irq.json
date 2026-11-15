@@ -1,0 +1,178 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3d2",
+  "status": "passed-qlogic-mailbox-interrupts",
+  "scope": "XIRI_IP30_M3D2 generates a NO-OP mailbox completion on both ISP1040 controllers, defers the resulting Bridge pin 0/1 event with splvm, delivers it to the real ISP handler after unmask, and verifies completion status, acknowledgement, no repeat and no Bridge errors. DMA, rings, disk I/O, root mount and userland console I/O remain later stages.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "3c35bfb59765cf53bfc71ecbe4e33a796e07cabb",
+  "source_status": [
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/dev/bridge.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3D2",
+    "?? xiri/platforms/ip30/2026-11-15-m3d2-qlogic-mailbox-irq.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/conf/files.sgimips": "eff762a4cc48d08a8dc0ebdb9b002a4a5103d3931b88ddcda047ee452a8d2dba",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3D2": "cf711b9580564a436b70075365c918205d56e1a211654146e5e7934b5695b1b6",
+    "sys/arch/sgimips/dev/bridge.c": "1f11954920d1c9e38164f750ce5989a1abaefdc4c90ecdcd2c837ad25f6ccd32",
+    "xiri/platforms/probe.py": "e251d269f89137277ea448de463a71343ac9f5cc3fd54b65973dd796c15ff507",
+    "xiri/platforms/README": "16bcfc2a4130fb4ec08ef1d2c9d1205bd7d49abf4597d8f1cc7556c1ba6b9dec",
+    "xiri/platforms/ip30/DESIGN": "11e608e11c6c165e001561c1d0c5f222ee505a2d8e6b0f46da6a01ef5fbe5e05",
+    "xiri/platforms/ip30/HANDOVER": "a1c1981434de0d8e5e3ef12e844669bcf3693e35ba5957d0122c0a50abb2a2e8"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3D2",
+    "method": "issue NO-OP mailbox command directly on each ISP, with driver mailbox lock and expected completion state, while HEART vector 18/19 is masked at splvm",
+    "delivery": "leave the controller event pending across splx; the real isp_pci_intr handler runs through Bridge pin 0/1 and HEART vector 18/19",
+    "checks": [
+      "both controllers reach the mailbox command",
+      "HEART vector pending while masked",
+      "real ISP handler runs after unmask",
+      "isp_intmboxc advances",
+      "mboxcmd_done set",
+      "mailbox 0 is MBOX_COMMAND_COMPLETE",
+      "HEART and Bridge pin pending clear",
+      "no repeated interrupt after 10 ms",
+      "no Bridge error bits"
+    ],
+    "controllers": [
+      "isp0 pin 0 vector 18",
+      "isp1 pin 1 vector 19"
+    ],
+    "markers": [
+      "XIRI_IP30_M3D2_IRQ_OK isp0=18 isp1=19 mailbox=2 ack=1 storm=0 teardown=1 mapping=1",
+      "XIRI_IP30_M3D2_READY isp=2 scsibus=2"
+    ],
+    "failure_markers": [
+      "XIRI_IP30_M3D2_FAILED state 0",
+      "XIRI_IP30_M3D2_FAILED state 1",
+      "XIRI_IP30_M3D2_FAILED busy 0",
+      "XIRI_IP30_M3D2_FAILED busy 1",
+      "XIRI_IP30_M3D2_FAILED pending 0",
+      "XIRI_IP30_M3D2_FAILED pending 1",
+      "XIRI_IP30_M3D2_FAILED delivered 0",
+      "XIRI_IP30_M3D2_FAILED delivered 1",
+      "XIRI_IP30_M3D2_FAILED status 0",
+      "XIRI_IP30_M3D2_FAILED status 1",
+      "XIRI_IP30_M3D2_FAILED ack 0",
+      "XIRI_IP30_M3D2_FAILED ack 1",
+      "XIRI_IP30_M3D2_FAILED storm 0",
+      "XIRI_IP30_M3D2_FAILED storm 1"
+    ]
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3D2",
+    "netbsd_sha256": "32256f1130c37c29062be91e05630aef8e8c70556b969af4fdede4811378b1e8",
+    "netbsd_gdb_sha256": "7d60b50b0a31852d4b2cecf028222be435514e7e55379db32814c836443fecda",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M3D2-build.log",
+    "build_log_sha256": "1d6566c8ada2bfab2efeb2a9491064e9d4c57ed4b5496c64f68f80edb3831bdb"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3d2-isp-irq-20261115",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D2/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3D2_READY --timeout 120 --output ../xiri/.work/octane-m3d2-isp-irq-20261115",
+    "expected_marker": "XIRI_IP30_M3D2_READY",
+    "status": "passed",
+    "elapsed_seconds": 49.77,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "3ab72cb8951085e93907667947195c6acb111599ffbadbc8fb9167d171bec096",
+    "serial_sha256": "4c307287ce931d72fde5cba583eeceb40bc1ac180f28da68400d85513f10486d",
+    "observations": [
+      "isp0/isp1 attached and scsibus0/scsibus1 children present",
+      "NO-OP mailbox issued on both controllers",
+      "masked HEART event was pending before handler delivery",
+      "real isp_pci_intr handled both completions",
+      "mailbox 0 completed with MBOX_COMMAND_COMPLETE",
+      "HEART and Bridge pin pending cleared",
+      "no repeat after 10 ms and no Bridge errors",
+      "teardown and re-establishment plus A/B/C/D mapping checks passed"
+    ],
+    "inputs": {
+      "netbsd": "32256f1130c37c29062be91e05630aef8e8c70556b969af4fdede4811378b1e8",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30_M3A": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "aa50370a5c70549ba6459ae72a9d9eda43f436be53ad029afaa90fb414793b47",
+        "build_log_sha256": "3d3e49646ea48ee3c5239b3919eeb2a84cd9e54aaefaf92b4160b48f0a7afbe9"
+      },
+      "XIRI_IP30_M3B": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "fef3826f458beb18387a5f752c348625df24ce207cb84536ce454ae71ea2fdae",
+        "build_log_sha256": "7c0730fa5b9dadad921c0fc9d368860fe2d05ff8fba6bc03e23c557d9e89f480"
+      },
+      "XIRI_IP30_M3B2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "c56df46ea6fac59c55de4914fa5f36969c2dc5cf6dff4ee4569e292642d981d1",
+        "build_log_sha256": "20ca0d715c8dcbba257e56a1e85d25912a9d6957f9f2b52acb8a3734b27c8736"
+      },
+      "XIRI_IP30_M3B3": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "389654792782e06c76d37cacd9aafcfbc96fb5b10d2114543cbbed397770e650",
+        "build_log_sha256": "a6b968d3243fb8865555594b0cb799deeca79637966f300d691d642b901839ca"
+      },
+      "XIRI_IP30_M3C1": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "e695cffad41e37f6d991194761da340893a73d8cbea05ef9b837e824af9b7a0b",
+        "build_log_sha256": "e533f3d214c8c38dc85b582619e04f6e99e3be3c7ac368bdbc8e4be7be64444a"
+      },
+      "XIRI_IP30_M3D1": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "55b4065e144919ebdc3bc8c4bd6573d4b3fbf5863214746b25193cba64d3a6f2",
+        "build_log_sha256": "a47bbbc3786880d52be5794739e722210acc0c100c646b71fcaf6fac1152839a"
+      },
+      "XIRI_O2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "60001f2402ee0846bc24f0625c388c344836c7a7f8143c55ac237f27f7a54ee9",
+        "build_log_sha256": "4b08d51b81140c7dc8e62b1e5be21e835f680a6a574a4a73591a9d379ff49eb5"
+      },
+      "XIRI_INDY64": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "230dd9b7eb5170c3b061dd7c854909215747c3229176580bef74955dab87e6e5",
+        "build_log_sha256": "7afb62be08cef43d8dfb02d2122fad54121d768b7588bfe3eef8c9fb8163dbae"
+      }
+    },
+    "m3c1_guest": {
+      "output_directory": "../xiri/.work/octane-m3c1-regression-20261115c",
+      "status": "passed",
+      "elapsed_seconds": 39.66,
+      "expected_marker": "XIRI_IP30_M3C1_READY",
+      "result_sha256": "e9d90320a8808c1b0eaf93d39ade50e68da1982be356dd9127bb02cccbdf9b2b",
+      "serial_sha256": "a3a43cbaa216d8d4456ebc59bce579b6d3063e5fecef656f9f21ec115689c1d4"
+    },
+    "m3d1_guest": {
+      "output_directory": "../xiri/.work/octane-m3d1-regression-20261115c",
+      "status": "passed",
+      "elapsed_seconds": 49.8,
+      "expected_marker": "XIRI_IP30_M3D1_READY",
+      "result_sha256": "8b17ad62230134a7b594ecf2e93df60fdce3d39ee948203d5c8dcbb26faea16f",
+      "serial_sha256": "fb04681405cb35ea55921b24e3f264de246626727213f722beaec8ea6e993406"
+    },
+    "latest_guest_runs": "M1/O2/Indy64 latest native guest runs remain the M2b-fix baselines; earlier IP30 milestone runs remain in their manifests."
+  },
+  "not_proven": [
+    "ISP request/response ring DMA",
+    "Disk discovery and read",
+    "Root filesystem mount",
+    "Userland /dev/console open and active tty RX/TX",
+    "Physical Octane hardware"
+  ],
+  "next_milestone": "Initialize and validate ISP request/response rings and Bridge DMA against a disposable disk image."
+}

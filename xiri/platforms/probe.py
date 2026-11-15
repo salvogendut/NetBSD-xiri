@@ -161,7 +161,7 @@ cpus = 1
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             serial = lab.serial_text()[lab.offset:]
-            if re.search(r'panic:|PANIC:|Stopped in pid|Exception:|Unable to execute|Error loading|XIRI_IP30_M2B_HEART_FAILED|XIRI_IP30_M2B_CLOCK_FAILED|XIRI_IP30_M2B_INTR_FAILED|XIRI_IP30_M3B3_FAILED|XIRI_IP30_M3C1_FAILED|XIRI_IP30_M3D1_FAILED', serial):
+            if re.search(r'panic:|PANIC:|Stopped in pid|Exception:|Unable to execute|Error loading|XIRI_IP30_M2B_HEART_FAILED|XIRI_IP30_M2B_CLOCK_FAILED|XIRI_IP30_M2B_INTR_FAILED|XIRI_IP30_M3B3_FAILED|XIRI_IP30_M3C1_FAILED|XIRI_IP30_M3D1_FAILED|XIRI_IP30_M3D2_FAILED', serial):
                 result['status'] = 'boot-blocked'
                 break
             if args.expect in serial:

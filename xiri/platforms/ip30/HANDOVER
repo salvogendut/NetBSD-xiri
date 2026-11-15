@@ -814,3 +814,36 @@ are in ip30/2026-11-15-m3d1-qlogic-attach.json.
 
 Next: validate ISP mailbox/ring DMA, attach a disk, discover and read it,
 then mount root and exercise the native console tty.
+
+
+M3d2 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3D2 includes XIRI_IP30_M3D1 and generates a real mailbox
+interrupt on each ISP1040.  The M3d1 post test keeps the controller
+attachment, SCSI-child, mapping and route checks, but replaces the
+synthetic HEART event with a NO-OP mailbox command.
+
+For each ISP, the test acquires the driver mailbox, sets the NO-OP
+command/output mask/busy state, masks at splvm, writes NO-OP to mailbox 0
+and HCCR SET_HOST_INT, and waits for the HEART vector to become pending.
+It then unmasks without clearing the pending event.  The real
+`isp_pci_intr` handler runs through Bridge -> HEART, reads the completion
+and acknowledges it.  The test checks the ISP interrupt counter advanced,
+`mboxcmd_done` is set, mailbox 0 is MBOX_COMMAND_COMPLETE, HEART and
+Bridge pin pending are clear, no repeat occurs after 10 ms, and Bridge
+error bits remain zero.  The mailbox state is released after each
+controller.
+
+Observed:
+
+  XIRI_IP30_M3D2_IRQ_OK isp0=18 isp1=19 mailbox=2 ack=1 storm=0 teardown=1 mapping=1
+  XIRI_IP30_M3D2_READY isp=2 scsibus=2
+
+XIRI_IP30_M3C1 and XIRI_IP30_M3D1 guest regressions passed.  All earlier
+configurations and XIRI_O2/XIRI_INDY64 rebuilt.  No request/response ring,
+DMA, disk I/O, root mount or active tty is exercised yet.  Evidence and
+hashes are in ip30/2026-11-15-m3d2-qlogic-mailbox-irq.json.
+
+Next: initialize and validate the ISP request/response rings and DMA
+against a disposable disk image.

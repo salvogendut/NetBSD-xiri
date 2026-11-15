@@ -64,6 +64,9 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sgimips/dev/bridgereg.h>
 #include <sgimips/dev/bridgevar.h>
 #include <sgimips/dev/heartvar.h>
+#ifdef XIRI_IP30_M3D2
+#include <dev/ic/isp_netbsd.h>
+#endif
 
 struct xbridge_intrhand {
 	int (*ih_fun)(void *);
@@ -315,6 +318,93 @@ xbridge_intr_disestablish(void *cookie)
 	ih->ih_count = 0;
 }
 
+#ifdef XIRI_IP30_M3D2
+static int
+xbridge_isp_nop(struct bridge_softc *sc, device_t dev, int pin)
+{
+	struct ispsoftc *isp = device_private(dev);
+	struct xbridge_intrhand *ih = &sc->sc_intr[pin];
+	uint64_t intmboxc;
+	unsigned int base;
+	int i, s;
+
+	if (isp->isp_state != ISP_RUNSTATE) {
+		printf("XIRI_IP30_M3D2_FAILED state %d\n", pin);
+		return 1;
+	}
+	if (MBOX_ACQUIRE(isp) != 0) {
+		printf("XIRI_IP30_M3D2_FAILED busy %d\n", pin);
+		return 1;
+	}
+	intmboxc = isp->isp_intmboxc;
+	base = ih->ih_count;
+	ih->ih_test = 0;
+	s = splvm();
+	ISP_LOCK(isp);
+	isp->isp_mboxtmp[0] = 0;
+	isp->isp_lastmbxcmd = MBOX_NO_OP;
+	isp->isp_obits = 1;
+	isp->isp_mboxbsy = 1;
+	isp->isp_osinfo.mboxcmd_done = 0;
+	ISP_WRITE(isp, MBOX_OFF(0), MBOX_NO_OP);
+	ISP_WRITE(isp, HCCR, HCCR_CMD_SET_HOST_INT);
+	ISP_UNLOCK(isp);
+
+	for (i = 0; i < 100; i++) {
+		if (heart_intr_pending(ih->ih_vector))
+			break;
+		delay(1000);
+	}
+	if (!heart_intr_pending(ih->ih_vector) ||
+	    ih->ih_count != base) {
+		heart_intr_clear(ih->ih_vector);
+		splx(s);
+		printf("XIRI_IP30_M3D2_FAILED pending %d\n", pin);
+		goto fail;
+	}
+	splx(s);
+
+	for (i = 0; i < 100; i++) {
+		if (ih->ih_count == base + 1)
+			break;
+		delay(1000);
+	}
+	if (ih->ih_count != base + 1) {
+		printf("XIRI_IP30_M3D2_FAILED delivered %d\n", pin);
+		goto fail;
+	}
+	if (isp->isp_intmboxc != intmboxc + 1 ||
+	    isp->isp_osinfo.mboxcmd_done == 0 ||
+	    isp->isp_mboxtmp[0] != MBOX_COMMAND_COMPLETE) {
+		printf("XIRI_IP30_M3D2_FAILED status %d\n", pin);
+		goto fail;
+	}
+	if (heart_intr_pending(ih->ih_vector) ||
+	    (xbridge_intr_status() & (1U << pin)) != 0) {
+		printf("XIRI_IP30_M3D2_FAILED ack %d\n", pin);
+		goto fail;
+	}
+	delay(10000);
+	if (ih->ih_count != base + 1) {
+		printf("XIRI_IP30_M3D2_FAILED storm %d\n", pin);
+		goto fail;
+	}
+	ISP_LOCK(isp);
+	isp->isp_mboxbsy = 0;
+	MBOX_RELEASE(isp);
+	ISP_UNLOCK(isp);
+	return 0;
+
+fail:
+	heart_intr_clear(ih->ih_vector);
+	ISP_LOCK(isp);
+	isp->isp_mboxbsy = 0;
+	MBOX_RELEASE(isp);
+	ISP_UNLOCK(isp);
+	return 1;
+}
+#endif
+
 #ifdef XIRI_IP30_M3D1
 static int
 xbridge_scsibus_children(device_t parent)
@@ -344,8 +434,11 @@ xbridge_post_test(void *arg)
 	pci_intr_handle_t ihp;
 	int (*saved_fun)(void *);
 	void *saved_arg;
+	int dev, pin;
+#ifndef XIRI_IP30_M3D2
 	unsigned int base;
-	int dev, pin, s;
+	int s;
+#endif
 
 	for (dev = 0; dev < 2; dev++) {
 		for (pin = 1; pin <= 4; pin++) {
@@ -388,6 +481,14 @@ xbridge_post_test(void *arg)
 			printf("XIRI_IP30_M3D1_FAILED route %d\n", pin);
 			return;
 		}
+	}
+#ifdef XIRI_IP30_M3D2
+	if (xbridge_isp_nop(sc, isp0, 0) != 0 ||
+	    xbridge_isp_nop(sc, isp1, 1) != 0)
+		return;
+#else
+	for (pin = 0; pin < 2; pin++) {
+		ih = &sc->sc_intr[pin];
 		base = ih->ih_count;
 		ih->ih_test = 1;
 		s = splvm();
@@ -418,6 +519,7 @@ xbridge_post_test(void *arg)
 		}
 		ih->ih_test = 0;
 	}
+#endif
 
 	ih = &sc->sc_intr[0];
 	saved_fun = ih->ih_fun;
@@ -441,9 +543,15 @@ xbridge_post_test(void *arg)
 		printf("XIRI_IP30_M3D1_FAILED bridge\n");
 		return;
 	}
+#ifdef XIRI_IP30_M3D2
+	printf("XIRI_IP30_M3D2_IRQ_OK isp0=18 isp1=19 mailbox=2 ack=1 "
+	    "storm=0 teardown=1 mapping=1\n");
+	printf("XIRI_IP30_M3D2_READY isp=2 scsibus=2\n");
+#else
 	printf("XIRI_IP30_M3D1_IRQ_OK pin0=18 pin1=19 masked=deferred "
 	    "delivered=2 storm=0 teardown=1 mapping=1\n");
 	printf("XIRI_IP30_M3D1_READY isp=2 scsibus=2\n");
+#endif
 }
 
 static int
