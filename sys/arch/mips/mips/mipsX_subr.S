@@ -1596,9 +1596,9 @@ MIPSX(user_gen_exception_common2):
 /*
  * We have pending asynchronous traps; all the state is already saved.
  */
-	lui	ra, %hi(MIPSX(user_return))	# return directly to user return
+	PTR_LA	ra, MIPSX(user_return)		# return directly to user return
 	j	_C_LABEL(ast)
-	 PTR_ADDIU ra, %lo(MIPSX(user_return))	# return directly to user return
+	 nop
 	.set	at
 END(MIPSX(user_gen_exception))
 
@@ -1910,9 +1910,9 @@ NESTED_NOPROFILE(MIPSX(systemcall), CALLFRAME_SIZ, ra)
 /*
  * We have pending asynchronous traps; all the state is already saved.
  */
-	lui	ra, %hi(MIPSX(user_return))	# return directly to user return
+	PTR_LA	ra, MIPSX(user_return)		# return directly to user return
 	j	_C_LABEL(ast)
-	 PTR_ADDIU ra, %lo(MIPSX(user_return))	# return directly to user return
+	 nop
 END(MIPSX(systemcall))
 
 /*

@@ -64,8 +64,8 @@ def main():
     args = parser.parse_args()
     if not args.expect or args.timeout < 1 or (args.machine == 'octane' and args.flash is None):
         parser.error('nonempty marker, positive timeout and Octane flash image required')
-    if args.single_user and (args.machine != 'o2' or args.disk is None):
-        parser.error('--single-user requires O2 and --disk')
+    if args.single_user and args.disk is None:
+        parser.error('--single-user requires --disk')
     if args.kernel_entry and (args.machine != 'octane' or args.return_to_prom or args.single_user):
         parser.error('--kernel-entry requires Octane and excludes --return-to-prom/--single-user')
     out, image, emu, nvram = [getattr(args, n).resolve() for n in
@@ -160,7 +160,7 @@ cpus = 1
             lab.send(command)
             lab.wait(prompt, 30)
         print(args.machine + ': PROM ready; loading ' + image.name, flush=True)
-        command = 'boot -f bootp():' + image.name + (' --s' if is_o2 else '')
+        command = 'boot -f bootp():' + image.name + (' --s' if args.single_user else '')
         result['commands'].append(command)
         lab.send(command)
         deadline = time.monotonic() + args.timeout
@@ -243,12 +243,67 @@ cpus = 1
             lab.wait(r'Enter pathname of shell', 30)
             lab.send('')
             lab.wait(r'# ', 30)
-            lab.send("export PS1='xiri-indy# '")
-            lab.wait(r'xiri-indy# ', 30)
-            lab.logged_in = True
-            result['commands'].append('uname -a && /sbin/mount && /bin/echo XIRI_NATIVE_SHELL')
-            if lab.command(result['commands'][-1], 30) != 0:
-                raise RuntimeError('native shell commands failed')
+            if is_o2:
+                lab.send("export PS1='xiri-indy# '")
+                lab.wait(r'xiri-indy# ', 30)
+                lab.logged_in = True
+                result['commands'].append('uname -a && /sbin/mount && /bin/echo XIRI_NATIVE_SHELL')
+                if lab.command(result['commands'][-1], 30) != 0:
+                    raise RuntimeError('native shell commands failed')
+            else:
+                prompt = 'xiri-octane# '
+                lab.send("export PS1='" + prompt + "'")
+                lab.wait(re.escape(prompt), 30)
+                shell = []
+                console_check = ("if test -c /dev/console; then "
+                                 "printf 'XIRI_IP30_M4A_CONSOLE_%s\\n' CHAR_OK; "
+                                 "else printf 'XIRI_IP30_M4A_CONSOLE_%s\\n' "
+                                 "CHAR_FAILED; fi")
+                console_write = ("printf 'XIRI_IP30_M4A_CONSOLE_%s\\n' WRITE "
+                                 ">/dev/console")
+                for command in ('uname -a', '/sbin/mount',
+                                '/bin/echo XIRI_IP30_M4A_SHELL_OK',
+                                console_check, console_write, 'vmstat -i'):
+                    result['commands'].append(command)
+                    start = len(lab.serial_text())
+                    lab.offset = start
+                    lab.send(command)
+                    lab.wait(re.escape(prompt), 30)
+                    shell.append(lab.serial_text()[start:lab.offset])
+                output = ''.join(shell)
+                marker = re.search(r'(?m)^XIRI_IP30_M4A_SHELL_OK[ \t]*\r?$',
+                                   output)
+                if marker is None:
+                    raise RuntimeError('M4a shell marker missing')
+                if 'on / type ffs (read-only' not in output:
+                    raise RuntimeError('M4a root is not read-only ffs')
+                if re.search(r'(?m)^XIRI_IP30_M4A_CONSOLE_CHAR_FAILED[ \t]*\r?$',
+                             output):
+                    raise RuntimeError('M4a console is not a character device')
+                if re.search(r'(?m)^XIRI_IP30_M4A_CONSOLE_CHAR_OK[ \t]*\r?$',
+                             output) is None:
+                    raise RuntimeError('M4a console character-device check failed')
+                if re.search(r'(?m)^XIRI_IP30_M4A_CONSOLE_WRITE[ \t]*\r?$',
+                             output) is None:
+                    raise RuntimeError('M4a console write check failed')
+                rx = re.search(r'(?m)^com0[ \t]+rxintr[ \t]+(\d+)', output)
+                tx = re.search(r'(?m)^com0[ \t]+txintr[ \t]+(\d+)', output)
+                if rx is None or int(rx.group(1)) == 0:
+                    raise RuntimeError('M4a com0 RX interrupt activity missing')
+                if tx is None or int(tx.group(1)) == 0:
+                    raise RuntimeError('M4a com0 TX interrupt activity missing')
+                result['shell'] = {
+                    'marker': 'XIRI_IP30_M4A_SHELL_OK',
+                    'read_only_ffs': True,
+                    'console_char_device': True,
+                    'console_write': True,
+                    'rx_interrupts': int(rx.group(1)),
+                    'tx_interrupts': int(tx.group(1)),
+                }
+                lab.send('shutdown -h now')
+                lab.wait(r'unmounting done', 60)
+                lab.wait(r'Option\?', 15)
+                lab.clean_shutdown = True
         lab.monitor_command('stop')
         commands = ['regs', 'cop0', 'mem 0xffffffff80000000 48']
         commands += (['scsi regs', 'scsi1 regs'] if is_o2 else

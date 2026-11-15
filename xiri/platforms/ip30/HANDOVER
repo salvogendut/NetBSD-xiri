@@ -899,3 +899,40 @@ ip30/2026-11-15-m3d3-qlogic-dma-disk.json.
 
 Next: mount root read-only from the validated disk and exercise
 /dev/console and active tty RX/TX before login.
+
+M4a checkpoint update (2026-11-15)
+----------------------------------
+
+XIRI_IP30_M4A mounts sd0a read-only and reaches a native single-user shell
+on the IOC3 console.  The root image is the 8 GiB o32 NetBSD 11.99.9 Xiri
+Indy desktop image; /sbin/init is an ELF32 PIE with /libexec/ld.elf_so.
+The first boot mounted root but trapped in init at 0x2001a340.  That was
+the low half of mips3_user_return: the AST paths in mipsX_subr.S built the
+return address with lui/PTR_ADDIU and lost the XKPHYS upper bits.  Both
+paths now use PTR_LA ra, MIPSX(user_return).
+
+IOC3 TTY activity is counted in comintr() after its IIR read.  Optional
+com_softc.sc_rxintr/sc_txintr pointers feed com0 rxintr and txintr evcnt
+entries.  The final shell reports rxintr=8 and txintr=295, so input and
+output are interrupt-active rather than only polled.
+
+Observed:
+
+  root_device on / type ffs (read-only, local)
+  XIRI_IP30_M4A_SHELL_OK
+  XIRI_IP30_M4A_CONSOLE_CHAR_OK
+  XIRI_IP30_M4A_CONSOLE_WRITE
+  com0 rxintr      8    0
+  com0 txintr    295   15
+  unmounting done
+  Option?
+
+The probe checks the marker as a complete line, read-only ffs, a
+successful `test -c /dev/console`, a visible `/dev/console` write, and
+exact `com0 rxintr`/`com0 txintr` rows, then halts cleanly.  M3d3 and O2
+single-user regressions passed; Indy64 built.  Writable storage, login,
+multi-user startup and physical hardware are not proven.  Evidence and
+hashes are in ip30/2026-11-15-m4a-read-only-root.json.
+
+Next: exercise writable root or a separate writable data disk, then login
+and multi-user startup without weakening the read-only boot proof.

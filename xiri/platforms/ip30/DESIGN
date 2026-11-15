@@ -591,6 +591,50 @@ no DMA misses.  A temporary 4097-to-113 kernel substitution and a corrupted
 disk image both fail before M3D3_READY.  Root mount, writable storage and
 active tty are later.
 
+M4a read-only root and single-user shell (2026-11-15)
+-----------------------------------------------------
+
+XIRI_IP30_M4A includes XIRI_IP30_M3D3, suppresses the M3d3 disk-test
+thread, and uses `config netbsd root on sd0a type ffs`.  The root image is
+the NetBSD 11.99.9 o32 userland from the Xiri Indy desktop image; `/sbin/
+init` and `/libexec/ld.elf_so` are ELF32 PIE programs.  EXEC_ELF32 is
+already enabled by std.sgimips and COMPAT_NETBSD32 is enabled by
+std.sgimips64, so no ABI or page-size change was required.
+
+The first M4a boot mounted sd0a but trapped in init with
+`TLB miss ... epc=0x2001a340`.  That address is the low 32 bits of
+`mips3_user_return` at `0xa80000002001a340`.  The user-exception and
+system-call AST paths built the return address with `lui` plus `PTR_ADDIU`,
+which truncates XKPHYS; both paths now use `PTR_LA ra, MIPSX(user_return)`.
+This is a shared MIPS64 correction and applies to other XKPHYS kernels.
+
+M4a adds optional `com_softc.sc_rxintr` and `sc_txintr` pointers.  The
+generic `comintr()` increments them from the first IIR read, and
+`ioc3_com` attaches `rxintr`/`txintr` evcnt entries with
+`EVCNT_TYPE_INTR`.  Reading IIR outside `comintr()` was rejected because
+it clears the 16550 THRE interrupt and stalls console output at the FIFO
+boundary.  The retained shell reports `com0 rxintr 8` and
+`com0 txintr 295`.
+
+Observed:
+
+  Enter pathname of shell or RETURN for /bin/sh:
+  root_device on / type ffs (read-only, local)
+  XIRI_IP30_M4A_SHELL_OK
+  XIRI_IP30_M4A_CONSOLE_CHAR_OK
+  XIRI_IP30_M4A_CONSOLE_WRITE
+  com0 rxintr      8    0
+  com0 txintr    295   15
+  unmounting done
+  Option?
+
+The probe verifies the marker as a complete output line, the read-only
+mount, a successful `test -c /dev/console`, a visible write through
+`/dev/console`, and nonzero `com0 rxintr`/`com0 txintr` counters before
+requesting `shutdown -h now`.  M4a treats any `CHAR_FAILED` result or a
+non-`com0` interrupt row as a failure.  Writable storage, login, multi-user
+startup and physical hardware remain unproven.
+
 Regression obligations
 ----------------------
 

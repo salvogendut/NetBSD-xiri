@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M4a",
+  "status": "passed-read-only-root-single-user-shell",
+  "scope": "XIRI_IP30_M4A mounts the validated QLogic disk root as sd0a read-only, reaches a native single-user shell, proves /dev/console and IOC3 UART RX/TX interrupt activity, and halts cleanly. Writable storage, login, multi-user startup and physical hardware remain later stages.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "5d3176bf59f",
+  "source_status": [
+    "M sys/arch/mips/mips/mipsX_subr.S",
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/dev/bridge.c",
+    "M sys/arch/sgimips/dev/ioc3_com.c",
+    "M sys/dev/ic/com.c",
+    "M sys/dev/ic/comvar.h",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M4A",
+    "?? xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json"
+  ],
+  "source_files": {
+    "sys/arch/mips/mips/mipsX_subr.S": "34904c6fe23e8b58af2f5ddb798de98ce022efb6e40d225d22451670ae1dfa7d",
+    "sys/arch/sgimips/conf/files.sgimips": "491aae3cb19a9479e0a19914e84bc2ba42cfd4e083491354fb39ceea10c61240",
+    "sys/arch/sgimips/conf/XIRI_IP30_M4A": "33dea809222ee1e11c2841b7e68d4b3028b1f186be02b660d34623cb8dfbc465",
+    "sys/arch/sgimips/dev/bridge.c": "1b4b5806d794fa9c5c5dbcee1b4861ad639dc517cd13ed476a8c3388774f180d",
+    "sys/arch/sgimips/dev/ioc3_com.c": "6b9c5daec9e08158d96ce71211a497fc9a8981a41cde89a4cf5141747642e829",
+    "sys/dev/ic/com.c": "5086157107f05a4603ee2b900fc0ec0293a08ed88da515f2a695b211ec87994c",
+    "sys/dev/ic/comvar.h": "6350112f34dc00496c4ba3b39139dc81601f48d26a63b62f9a9c937fc7f98982",
+    "xiri/platforms/README": "b9c71708e28c299a9196908bf217f6f09c80f07c1a0ba91ea203744c0d52d32a",
+    "xiri/platforms/ip30/DESIGN": "0728c7f99faa6ca3e7c4356ba5fa855e32eed9a68768ba99c7feba569e7d2f9c",
+    "xiri/platforms/ip30/HANDOVER": "a34be5f7720b44dfa1d9614f8b4c1d4565608ba0c23b863e1f724db702a3871c",
+    "xiri/platforms/probe.py": "168061c645004708b567d86b4c1009f95fb9bacd74edccb7d986aa761bf894b3"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M4A",
+    "root": "config netbsd root on sd0a type ffs; sd0 is the validated QLogic disk; no writable root",
+    "m3d3_test_suppression": "XIRI_IP30_M4A keeps the M3d3 DMA setup but guards the M3d3 disk-test thread so init can mount root",
+    "xkphys_fix": "mipsX_subr.S user-exception and system-call AST paths use PTR_LA for mips3_user_return; the previous lui/PTR_ADDIU form truncated 0xa80000002001a340 to 0x2001a340",
+    "tty_counters": "com_softc.sc_rxintr/sc_txintr are incremented by comintr from its first IIR read; ioc3_com attaches rxintr and txintr EVCNT_TYPE_INTR entries named com0",
+    "test": "probe enters single-user, checks a complete shell marker line, read-only ffs on /, a successful test -c /dev/console, a visible /dev/console write, nonzero com0 rxintr/txintr rows, then shutdown -h now and requires unmounting done plus PROM Option?",
+    "root_userland": "NetBSD 11.99.9 o32 userland: /sbin/init and /libexec/ld.elf_so are ELF32 PIE; EXEC_ELF32 and COMPAT_NETBSD32 are enabled",
+    "markers": [
+      "Enter pathname of shell or RETURN for /bin/sh:",
+      "root_device on / type ffs (read-only, local)",
+      "XIRI_IP30_M4A_SHELL_OK",
+      "XIRI_IP30_M4A_CONSOLE_CHAR_OK",
+      "XIRI_IP30_M4A_CONSOLE_WRITE",
+      "com0 rxintr",
+      "com0 txintr",
+      "unmounting done",
+      "Option?"
+    ]
+  },
+  "root_image": {
+    "source": "../xiri/.work/images/xiri-netbsd-desktop-20261114-controls/netbsd-xiri.chd",
+    "source_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+    "copy": "../xiri/.work/m4a-root.chd",
+    "copy_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+    "logical_bytes": 8589934592,
+    "partition": "sd0a",
+    "root_partition_start_sector": 8256,
+    "root_partition_sectors": 16703488,
+    "filesystem": "ffs",
+    "abi": "o32 ELF32"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "HOST_CC=cc HOST_CFLAGS='-O2 -std=gnu17' ./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M4A",
+    "netbsd_sha256": "af898703b1a93568700b97bbff3104787d9a846da28522be01e82b86177244de",
+    "netbsd_gdb_sha256": "c17c45cf549fec69e0c40a86655e44e831427a96acbdfd00a69b9d0d66c98d02",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M4A-evcount2-build.log",
+    "build_log_sha256": "b2b57023d9b98052d1000714e7efe2fc6338f639b69af791c7f17f7ac25f08c0"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m4a-single-user-20261115-console-check2",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M4A/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --output ../xiri/.work/octane-m4a-single-user-20261115-console-check2 --machine octane --disk ../xiri/.work/m4a-root.chd --single-user --expect XIRI_IP30_M3D2_READY --timeout 120",
+    "expected_marker": "XIRI_IP30_M3D2_READY",
+    "status": "passed",
+    "elapsed_seconds": 80.0,
+    "clean_shutdown": true,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "aee0caafbe229d3fa7e5733604d36508cb31cbcfdd11123e49b39b12806b19be",
+    "serial_sha256": "dba4c285ff0b3e7980ea11bda87d5b23427df932dc53f713afb832257357ef1f",
+    "inputs": {
+      "netbsd": "af898703b1a93568700b97bbff3104787d9a846da28522be01e82b86177244de",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "m4a-root.chd": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "observations": [
+      "root on sd0a dumps on sd0b",
+      "single-user shell prompt reached",
+      "uname reports XIRI_IP30_M4A on sgimips",
+      "root_device on / type ffs (read-only, local)",
+      "XIRI_IP30_M4A_SHELL_OK printed as a complete output line",
+      "test -c /dev/console produced XIRI_IP30_M4A_CONSOLE_CHAR_OK",
+      "a direct /dev/console write produced XIRI_IP30_M4A_CONSOLE_WRITE",
+      "exact com0 rxintr 8 and com0 txintr 295 rows appear in vmstat -i",
+      "shutdown -h now reached unmounting done and returned to the PROM Option? menu"
+    ],
+    "shell": {
+      "marker": "XIRI_IP30_M4A_SHELL_OK",
+      "read_only_ffs": true,
+      "console_char_device": true,
+      "console_write": true,
+      "rx_interrupts": 8,
+      "tx_interrupts": 295
+    }
+  },
+  "pre_fix_failure": {
+    "output_directory": "../xiri/.work/octane-m4a-single-user-20261115",
+    "status": "probe-error",
+    "error": "timed out after 30s waiting for 'Enter pathname of shell'",
+    "root_mounted": true,
+    "trap": "pid 56(init): trap: cpu0, TLB miss (load or instr. fetch) in kernel mode",
+    "epc": "0x2001a340",
+    "result_sha256": "21008fc96687682f1b5c689ce5d65ddb62fc2a0c37a3621d796bdde69937b942",
+    "serial_sha256": "f10ebda6d4caf32c0dfc6df595d018baa9513d1b7b5974de10e3aa800888ebbc"
+  },
+  "regressions": {
+    "m3d3_guest": {
+      "output_directory": "../xiri/.work/octane-m3d3-regression-20261115-m4a",
+      "status": "passed",
+      "elapsed_seconds": 38.9,
+      "expected_marker": "XIRI_IP30_M3D3_READY",
+      "netbsd_sha256": "9e8815edde05d0f9dae053ec71649e58f5d5a76bfef0aa05d796798c331e5a10",
+      "build_log_sha256": "c72233cc10a4ea45604b9c0fa6d3d3e2cbcc5090a92055cfdd12e8928d5e105e",
+      "result_sha256": "3da1fa6b2eddd9acd1ca948ea94878334102713b3b3fabf26431b32626e11cbc",
+      "serial_sha256": "791a139bc8cca8fe724f0b30c9c4e70d7566dd91d8a3fa38255fdb6816aab31e"
+    },
+    "o2_single_user": {
+      "output_directory": "../xiri/.work/octane-o2-regression-20261115-m4a",
+      "status": "passed",
+      "elapsed_seconds": 84.61,
+      "clean_shutdown": true,
+      "netbsd_sha256": "194d0130e12956aa1701c4b4ad002be8b75e02a98797d8bd718558c8c77dc96f",
+      "build_log_sha256": "6c0d4a27cab503194efed7e1abee2cd78d18de04cfddf142936bf9574fd3f0c8",
+      "result_sha256": "84ff5224649cd2c6eb2db3806ba1c120c6334a72294a37402c018a84a05d2dc6",
+      "serial_sha256": "89eeff979a1eba8502c973ae4a5007b79e75fdacc2050df37f9c858918942d2b"
+    },
+    "indy64": {
+      "status": "passed-build-only; not booted",
+      "netbsd_sha256": "0375576fc3ec815c98cc9b58b7158740395deee616c62b34b3ec7613f43cb885",
+      "build_log_sha256": "00468093fefa2b68239086a651c608ce699f7b5f3c2f46d6043185cf9b52cd2c"
+    }
+  },
+  "not_proven": [
+    "Writable root filesystem and durability",
+    "Login and multi-user startup",
+    "Physical Octane hardware"
+  ],
+  "next_milestone": "Exercise writable root or a separate writable data disk, then login and multi-user startup while retaining the read-only boot proof."
+}

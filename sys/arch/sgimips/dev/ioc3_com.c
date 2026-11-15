@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/device.h>
+#include <sys/evcnt.h>
 #include <sys/systm.h>
 #include <sys/termios.h>
 #include <sys/tty.h>
@@ -74,6 +75,8 @@ struct ioc3_com_softc {
 	bus_space_tag_t sc_st;
 	bus_space_handle_t sc_sh;
 	void *sc_ih;
+	struct evcnt sc_rxintr;
+	struct evcnt sc_txintr;
 };
 
 static int	ioc3_com_match(device_t, cfdata_t, void *);
@@ -210,6 +213,12 @@ ioc3_com_attach(device_t parent, device_t self, void *aux)
 	    frequency, divisor_after, IOC3_UART_DEFAULT_RATE);
 	printf("XIRI_IP30_M3C1_TTY_OK major=%d unit=%d cn_dev=%#lx\n",
 	    (int)maj, device_unit(self), (unsigned long)cn_tab->cn_dev);
+	evcnt_attach_dynamic(&msc->sc_rxintr, EVCNT_TYPE_INTR, NULL,
+	    device_xname(self), "rxintr");
+	evcnt_attach_dynamic(&msc->sc_txintr, EVCNT_TYPE_INTR, NULL,
+	    device_xname(self), "txintr");
+	sc->sc_rxintr = &msc->sc_rxintr;
+	sc->sc_txintr = &msc->sc_txintr;
 	heart_set_post_test(ioc3_com_post_test, msc);
 }
 

@@ -168,8 +168,16 @@ A deterministic raw-image generator and retained monitor/SCSI evidence are
 included.  Root mount is the next checkpoint.  Evidence is in
 ip30/2026-11-15-m3d3-qlogic-dma-disk.json.
 
+M4a read-only root (2026-11-15): XIRI_IP30_M4A mounts the o32 NetBSD
+11.99.9 root image from the validated QLogic disk as `sd0a` read-only and
+reaches a single-user shell on the IOC3 console.  An XKPHYS AST-return bug
+was fixed by using PTR_LA for mips3_user_return.  The shell proves
+`/dev/console` with `test -c` and a visible write, reports exact
+`com0 rxintr`/`com0 txintr` counts, and halts cleanly.
+Evidence is in ip30/2026-11-15-m4a-read-only-root.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3/M4a checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

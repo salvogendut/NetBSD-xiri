@@ -115,7 +115,7 @@ static int	xbridge_intr_wrap(void *);
 static int	xbridge_setup_qlogic(struct bridge_softc *);
 static void	xbridge_post_test(void *);
 static int	xbridge_scsibus_children(device_t);
-#ifdef XIRI_IP30_M3D3
+#if defined(XIRI_IP30_M3D3) && !defined(XIRI_IP30_M4A)
 static void	xbridge_disk_test(void *);
 static int	xbridge_read_blocks(struct scsipi_periph *, uint32_t, uint8_t *, int);
 #endif
@@ -335,7 +335,7 @@ xbridge_intr_disestablish(void *cookie)
 	ih->ih_count = 0;
 }
 
-#ifdef XIRI_IP30_M3D3
+#if defined(XIRI_IP30_M3D3) && !defined(XIRI_IP30_M4A)
 static int
 xbridge_read_blocks(struct scsipi_periph *periph, uint32_t lba, uint8_t *data,
     int blocks)
@@ -953,7 +953,7 @@ bridge_attach(device_t parent, device_t self, void *aux)
 #ifdef XIRI_IP30_M3D1
 		heart_set_post_test(xbridge_post_test, sc);
 #endif
-#ifdef XIRI_IP30_M3D3
+#if defined(XIRI_IP30_M3D3) && !defined(XIRI_IP30_M4A)
 		if (kthread_create(PRI_BIO, 0, NULL, xbridge_disk_test, sc,
 		    NULL, "ip30disk") != 0)
 			printf("XIRI_IP30_M3D3_FAILED thread\n");
