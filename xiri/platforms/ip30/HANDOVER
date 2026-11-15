@@ -936,3 +936,39 @@ hashes are in ip30/2026-11-15-m4a-read-only-root.json.
 
 Next: exercise writable root or a separate writable data disk, then login
 and multi-user startup without weakening the read-only boot proof.
+
+M4b checkpoint update (2026-11-15)
+----------------------------------
+
+M4b copies the 8 GiB CHD once and boots XIRI_IP30_M4A twice against the
+same disk and persistent `disk.chd.diff.chd` overlay.  The first boot
+remounts root read-write, creates small, 64 KiB multi-page, renamed and
+truncated files under /m4b-persist, records SHA-256 and `ls -lnai`
+metadata, runs sync and halts cleanly.  The 64 KiB file uses a nonzero
+deterministic page/offset pattern, not zeros.  The second boot uses the
+same overlay, verifies `/sbin/fsck -fn /dev/sd0a` reports a clean
+filesystem, matches every hash and metadata record, and checks that the
+overlay and copied base are unchanged.  The image lacks
+`/usr/bin/truncate`, so truncation is exercised with a five-byte `dd`
+rewrite.  Input mutation now fails the run rather than only being
+recorded.
+
+Observed:
+
+  M4B_CREATE_OK
+  M4B_PAGES_OK
+  M4B_RENAME_OK
+  M4B_TRUNCATE_OK
+  M4B_SYNC_OK
+  ** File system is already clean
+  M4B_RENAME_OLD_ABSENT
+
+The base CHD is unchanged; both overlay hashes are identical after the
+second boot.  The negative suite covers zeroed, swapped and repeated
+pattern pages plus overlay, base and original-input mutations.  The M4a
+read-only baseline rerun passed with the original source disk.  Crash
+recovery and multi-user login remain separate.  Evidence and hashes are
+in ip30/2026-11-15-m4b-persistence.json.
+
+Next: define crash-recovery and multi-user login checkpoints without
+weakening the clean-persistence evidence.

@@ -176,8 +176,16 @@ was fixed by using PTR_LA for mips3_user_return.  The shell proves
 `com0 rxintr`/`com0 txintr` counts, and halts cleanly.
 Evidence is in ip30/2026-11-15-m4a-read-only-root.json.
 
+M4b clean-restart persistence (2026-11-15): a disposable CHD copy creates
+small, nonzero-pattern multi-page, renamed and truncated files, records
+hashes/metadata, syncs and halts.  A second boot with the same persistent
+overlay verifies clean fsck, identical hashes/metadata, unchanged overlay
+and base, and a clean halt.  Negative tests cover zeroed/swapped/repeated
+pages and integrity-target mutations.  The M4a read-only baseline still
+passes.  Evidence is in ip30/2026-11-15-m4b-persistence.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3/M4a checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3/M4a/M4b checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
