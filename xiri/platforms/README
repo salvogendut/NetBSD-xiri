@@ -158,8 +158,18 @@ mailbox completion, acknowledges it, and clears the heart and Bridge
 sources without repeating.  Both controllers complete.  Evidence is in
 ip30/2026-11-15-m3d2-qlogic-mailbox-irq.json.
 
+M3d3 QLogic DMA/disk reads (2026-11-15): XIRI_IP30_M3D3 programs the Bridge
+DMA direct map and PCI transaction window, attaches the disposable 16 MiB
+disk as `sd0`, and reads known blocks through the ISP request/response rings
+with real interrupts.  The test checks the identity (`SGI IRIS EMUL DISK
+1.0`), 32768x512 capacity, four single-block reads including the 113/4097 alias pair, a 64-block
+multi-page read, guard bytes, interrupt acknowledgement and Bridge errors.
+A deterministic raw-image generator and retained monitor/SCSI evidence are
+included.  Root mount is the next checkpoint.  Evidence is in
+ip30/2026-11-15-m3d3-qlogic-dma-disk.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3 checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

@@ -1,0 +1,13 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3D3: read a disposable SCSI disk through the QLogic rings and
+# Bridge DMA, and verify identity, capacity and exact block contents.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3D2"
+
+ident		"XIRI_IP30_M3D3"
+
+options		XIRI_IP30_M3D3
+
+sd*		at scsibus? target ? lun ?

@@ -2,7 +2,7 @@
 """Bounded O2/Octane boot test using the sibling Xiri lab harness.
 
 Every run copies mutable firmware state to a new directory and stops its
-own emulator. Runs are diskless unless --disk supplies a private CHD copy;
+own emulator. Runs are diskless unless --disk supplies a private disk copy;
 input hashes are checked after cleanup.
 """
 import argparse
@@ -52,7 +52,8 @@ def main():
     for name in ('xiri', 'emulator', 'image', 'nvram', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--machine', choices=('o2', 'octane'), required=True)
-    parser.add_argument('--disk', type=Path, help='copy a stopped CHD into the run directory')
+    parser.add_argument('--disk', type=Path, help='copy a stopped CHD or raw disk into the run directory')
+    parser.add_argument('--disk-target', type=int, default=1, help='SCSI target for --disk (default 1)')
     parser.add_argument('--single-user', action='store_true', help='O2 native shell/identity and clean-halt check')
     parser.add_argument('--kernel-entry', action='store_true', help='Octane kernel-entry checkpoint; no PROM return required')
     parser.add_argument('--flash', type=Path, help='Octane flash, copied before use')
@@ -72,11 +73,13 @@ def main():
     flash = args.flash.resolve() if args.flash else None
     if args.console_input and args.machine != 'octane':
         parser.error('--console-input requires Octane')
+    if not 0 <= args.disk_target <= 15:
+        parser.error('--disk-target must be 0..15')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', image.name):
         parser.error('image filename must use letters, digits, dot, dash or underscore')
     disk = args.disk.resolve() if args.disk else None
     if disk and not disk.is_file():
-        parser.error('--disk must be a regular, stopped CHD file')
+        parser.error('--disk must be a regular, stopped disk image')
     inputs = [image, nvram, emu/'iris', emu/'iris-ci'] + ([flash] if flash else []) + ([disk] if disk else [])
     hashes = {str(p): sha256(p) for p in inputs}
     expected_entry = None
@@ -94,8 +97,10 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(__file__, out/'probe-used.py')
     shutil.copyfile(nvram, out/'nvram.bin')
+    disk_copy = None
     if disk:
-        subprocess.run(['cp', '--reflink=auto', '--sparse=always', '--', str(disk), str(out/'disk.chd')], check=True)
+        disk_copy = out / ('disk' + (disk.suffix or '.img'))
+        subprocess.run(['cp', '--reflink=auto', '--sparse=always', '--', str(disk), str(disk_copy)], check=True)
     if flash:
         shutil.copyfile(flash, out/'flash.bin')
     is_o2 = args.machine == 'o2'
@@ -114,7 +119,7 @@ cpus = 1
     if not is_o2:
         config += '[octane]\nflash = "flash.bin"\n[graphics]\nboard = "none"\n'
     if disk:
-        config += '[scsi.1]\npath = ' + json.dumps(str(out/'disk.chd')) + '\ncdrom = false\noverlay = true\n'
+        config += f'[scsi.{args.disk_target}]\npath = ' + json.dumps(str(disk_copy)) + '\ncdrom = false\noverlay = true\n'
     config += '[network]\nmode = "nat"\ntftp_dir = ' + json.dumps(str(image.parent)) + '\n'
     lab = probe.Lab(SimpleNamespace(mode='ci', debugger=False, boot_timeout=args.timeout),
                     out, config_text=config, working_directory=out)
@@ -129,7 +134,7 @@ cpus = 1
 
     lab.launch = configured_launch
     result = dict(schema=1, machine=args.machine, status='incomplete',
-                  inputs=hashes, attached_disks=[str(out/'disk.chd')] if disk else [], commands=[],
+                  inputs=hashes, attached_disks=[str(disk_copy)] if disk else [], commands=[],
                   harness_sha256=sha256(Path(probe.__file__)),
                   expect=args.expect, return_to_prom=args.return_to_prom, single_user=args.single_user,
                   console_input=args.console_input, console_echo=None,
@@ -161,7 +166,7 @@ cpus = 1
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             serial = lab.serial_text()[lab.offset:]
-            if re.search(r'panic:|PANIC:|Stopped in pid|Exception:|Unable to execute|Error loading|XIRI_IP30_M2B_HEART_FAILED|XIRI_IP30_M2B_CLOCK_FAILED|XIRI_IP30_M2B_INTR_FAILED|XIRI_IP30_M3B3_FAILED|XIRI_IP30_M3C1_FAILED|XIRI_IP30_M3D1_FAILED|XIRI_IP30_M3D2_FAILED', serial):
+            if re.search(r'panic:|PANIC:|Stopped in pid|Exception:|Unable to execute|Error loading|XIRI_IP30_M2B_HEART_FAILED|XIRI_IP30_M2B_CLOCK_FAILED|XIRI_IP30_M2B_INTR_FAILED|XIRI_IP30_M3B3_FAILED|XIRI_IP30_M3C1_FAILED|XIRI_IP30_M3D1_FAILED|XIRI_IP30_M3D2_FAILED|XIRI_IP30_M3D3_FAILED', serial):
                 result['status'] = 'boot-blocked'
                 break
             if args.expect in serial:
@@ -247,7 +252,8 @@ cpus = 1
         lab.monitor_command('stop')
         commands = ['regs', 'cop0', 'mem 0xffffffff80000000 48']
         commands += (['scsi regs', 'scsi1 regs'] if is_o2 else
-                     ['ip30 memcfg', 'mem 0xffffffffa0001000 20 d'])
+                     ['scsi status', 'scsi1 status', 'scsi notes', 'scsi1 notes', 'ip30 memcfg',
+                      'mem 0xffffffffa0001000 20 d'])
         if args.kernel_entry and result['status'] == 'passed':
             commands.append('mem ' + result['kernel_entry_address'] + ' 32')
         result['monitor'] = {cmd: lab.monitor_command(cmd) for cmd in commands}

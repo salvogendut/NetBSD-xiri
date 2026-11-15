@@ -553,6 +553,44 @@ The M3d2 run reports both controllers (vector 18 and 19) completing.  It
 does not use request/response rings or DMA; disk discovery, reads, root
 mount and active tty remain later stages.
 
+M3d3 QLogic ring DMA and disk reads (2026-11-15)
+-------------------------------------------------
+
+XIRI_IP30_M3D3 adds `sd* at scsibus?` and uses a disposable 16 MiB raw
+image at SCSI target 1.  The Bridge setup for this checkpoint adds:
+
+* DIRECT_MAP targeting HEART widget 8, so physical RAM DMA addresses reach
+  the host memory;
+* PCI DMA window base 0x80000000 (`pci_bus_dma_tag._wbase`), making a
+  physical address such as 0x20d8c000 a PCI direct-window address
+  0xa0d8c000 for the Bridge; `_bus_dmamap_load_buffer` keeps the CPU
+  physical address for `_ds_vaddr` cache operations and applies `_wbase`
+  only to the device-visible `ds_addr`;
+* Device(0/1) windows with `DEV_SWAP_DIRECT` identity placement for the
+  little-endian ISP rings.
+
+The M3d3 kernel thread waits for `sd0`, checks the INQUIRY identity
+(`SGI`, `IRIS EMUL DISK  `, `1.0 `), capacity 32768 blocks of 512 bytes,
+then issues READ(10) commands through `scsipi_command`:
+
+* single-block reads at LBAs 2, 17, 113 and 4097;
+* a 64-block read at LBA 128 (32 KiB, crossing multiple memory pages);
+* exact comparison against a pattern with an explicit 4-byte LBA header,
+  its 4-byte complement, and a payload covering the remaining sector
+  bytes; every sector header is unique;
+* negative comparator checks: the same data must mismatch LBA+1 and
+  LBA+256, a single flipped byte must be detected, and sectors 113 and
+  4097 must reject each other;
+* untouched guard bytes before and after the 32 KiB buffer and untouched
+  bytes past each single-block transfer.
+
+The test also requires the ISP wrapper interrupt count to advance, then
+checks HEART and Bridge pending are clear, no repeat after 10 ms, and no
+Bridge error bits.  The retained run reports 23 controller commands with
+no DMA misses.  A temporary 4097-to-113 kernel substitution and a corrupted
+disk image both fail before M3D3_READY.  Root mount, writable storage and
+active tty are later.
+
 Regression obligations
 ----------------------
 
