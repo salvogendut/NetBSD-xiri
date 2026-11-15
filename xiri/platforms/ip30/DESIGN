@@ -188,6 +188,67 @@ emulator_stopped=true and originals_unchanged=true.  The image hash and ELF
 headers must identify the NetBSD kernel, not
 xiri/platforms/ip30/arcs64-probe.
 
+M2a memory and vector bootstrap (2026-11-15)
+--------------------------------------------
+
+XIRI_IP30_M2 includes the M1 entry proof, does not define
+XIRI_IP30_M1_STOP, continues through ARCS64 initialisation and stops at
+XIRI_IP30_M2_MEMORY_OK before main(), autoconfiguration or interrupts.
+
+Implemented:
+
+* Cached-alias reconciliation: mips_machdep_cache_config() sets
+  mips3_xkphys_cached and mips3_pg_cached to CCA 5 for XIRI_IP30, matching
+  the 0xa800... entry alias instead of the generic CCA 3 default.
+* ARCS64 helpers: ip30_arcs64_init() publishes the IP30 machine type,
+  identifiers, single CPU and console; GetEnvironmentVariable(30),
+  GetMemoryDescriptor(18), Read(25) and Write(27) are available.  Every
+  firmware call saves and restores MIPS_CURLWP (t8), which is a kernel
+  convention rather than an N64 ABI callee-saved register.
+* Vector address access: exception vectors run from the low SDRAM alias
+  and cannot reach XKPHYS text/data with compact lui/%lo or 26-bit j
+  sequences.  Two cells in the unused tail of the exception block are
+  initialized before mips_vector_init(): 0xff0 holds &cpu_info_store and
+  0xff8 holds mips3_slowfault.  CPUVAR accesses load the first pointer and
+  then use the CPUVAR field offset; the no-page-table path loads the second
+  pointer and uses jr.
+* The cache-error vector converts its full-width XKPHYS handler address to
+  an uncached XKPHYS alias, not a truncated KSEG1 address, so a handler at
+  physical 0x200191a0 remains reachable.
+* The tlb_update_addr stub uses PTR_LA rather than a truncated lui/%hi
+  address.  Critical sections that wrote Status=0 preserve KX on IP30.
+* Memory bootstrap: mips_kernel_vaddr_to_paddr() converts XKPHYS kernel
+  bounds, so mips_page_physload() reserves the kernel correctly.  The
+  memory descriptor path uses 64-bit ARCS64 descriptors; type values are
+  unchanged.  Descriptor end addresses are calculated from the original
+  base plus length, rounded inward, and empty ranges are skipped.  The
+  0x20000000..0x20003fff guard and low 16-KiB firmware alias stay outside
+  the free clusters.
+* Vector slots after the changes: UTLB 0x7c, XTLB 0x4c, cache 0x3c,
+  general exception 0x78 (0x7c in XIRI_IP30_M2_SLOWFAULT) and interrupt
+  0x28 bytes; all fit their 0x80 slots.  mips_vector_init() installs them
+  and clears BEV without panic.
+* mips_init_msgbuf(), pmap_bootstrap() and mips_init_lwp0_uarea() complete.
+  The checkpoint reports physmem=65534 8-KiB pages, arcsmem=129 pages and
+  four memory clusters:
+    0x20004000+0x0000c000
+    0x20010000+0x003c2000  (kernel LoadedProgram, skipped)
+    0x203d4000+0x00b2c000
+    0x21000000+0x1f000000
+
+Exception tests: XIRI_IP30_M2_TLB maps a no-cache page at
+VM_MIN_KERNEL_ADDRESS, invalidates its TLB entry and reads the magic value;
+the first access takes a TLB miss and the refill counter goes from 0 to 1.
+XIRI_IP30_M2_SLOWFAULT then calls a dedicated assembly loader for an
+unmapped high kernel VA.  A test-only hook in mips3_slowfault verifies the
+original EPC, BadVAddr and exception cause before the generic UVM path,
+prints XIRI_IP30_M2_SLOWFAULT_OK and halts.  It no longer enters UVM before
+uvm_init() or produces a generic boot-blocked panic.
+
+Remaining: cache-error fault injection, HEART interrupt
+mask/pending/acknowledge/priority routing, timer interrupts and
+timekeeping, autoconfiguration and native console handoff.
+
 Audit results and M2 blockers
 -----------------------------
 
@@ -203,12 +264,11 @@ Audit results and M2 blockers
 * sys/arch/mips/mips/mips_machdep.c: mips_page_physload assumes KSEG0;
   mips_init_msgbuf already has an LP64 XKPHYS path.  Exception vector setup
   and per-CPU uarea setup still need an address-model audit.
-* sys/arch/mips/mips/mipsX_subr.S: explicit lui %hi/%lo kernel references
-  truncate XKPHYS addresses in exception/TLB paths.
-* The kernel entry alias uses CCA 5 while the LP64 default cached XKPHYS
-  alias is CCA 3.  Establish one cached kernel CCA before enabling cache
-  maintenance or pmap ephemeral mappings, and test cache operations at the
-  chosen alias.
+* sys/arch/mips/mips/mipsX_subr.S: the vector CPUVAR loads, tlb_update_addr
+  stub and Status=0 critical sections were fixed for M2a.  Other explicit
+  lui/%hi kernel references still need a full audit before enabling
+  interrupts.  The kernel entry alias and cached XKPHYS/TLB aliases now both
+  use CCA 5.
 * sys/arch/sgimips/sgimips/mainbus.c: passes MIPS_PHYS_TO_KSEG1(addr) to
   children; that is acceptable only for low (<512 MiB) physical devices,
   not RAM or wide XIO windows.  Bridge/XIO mapping is M3 work.

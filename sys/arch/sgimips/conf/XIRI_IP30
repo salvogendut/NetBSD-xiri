@@ -15,6 +15,7 @@ ident		"XIRI_IP30"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 options 	XIRI_IP30		# Octane early entry and ARCS64 proof
+options 	XIRI_IP30_M1_STOP	# stop at the M1 entry checkpoint
 
 # The kernel lives in cached XKPHYS at physical 0x20010000.  Octane RAM is
 # outside the KSEG0/KSEG1 direct map, so -msym32 and the 32-bit SGI wrapper

@@ -41,8 +41,24 @@
 
 #define	XIRI_IP30_BOOTSTACK_SIZE	(16 * 1024)
 
+/*
+ * Exception vectors are copied to the low 16-KiB SDRAM alias and cannot
+ * reach XKPHYS kernel data with a compact lui/%lo address.  This cell, in
+ * the unused tail of the exception block, holds &cpu_info_store.  Vector
+ * code loads the full pointer from here before reading a CPUVAR field.
+ */
+#ifdef _LOCORE
+#define	XIRI_IP30_CPU_INFO_CELL		0x80000ff0
+#define	XIRI_IP30_SLOWFAULT_CELL	0x80000ff8
+#else
+#define	XIRI_IP30_CPU_INFO_CELL 	((volatile uint64_t *)(uintptr_t)0xffffffff80000ff0ULL)
+#define	XIRI_IP30_SLOWFAULT_CELL 	((volatile uint64_t *)(uintptr_t)0xffffffff80000ff8ULL)
+#endif
+
 #if defined(_KERNEL) && !defined(_LOCORE)
-void	xiri_ip30_early(void) __dead;
+void	xiri_ip30_early(void);
+void	xiri_ip30_halt(void) __dead;
+void	xiri_ip30_set_slowfault_cell(void);
 
 extern char xiri_ip30_bootstack[];
 #endif /* _KERNEL && !_LOCORE */

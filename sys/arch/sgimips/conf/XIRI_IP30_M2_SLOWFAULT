@@ -1,0 +1,12 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M2_SLOWFAULT: deliberately exercise the no-page-table
+# slow-fault path after a successful TLB refill.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M2"
+
+ident		"XIRI_IP30_M2_SLOWFAULT"
+
+options		XIRI_IP30_M2_TLB_TEST
+options		XIRI_IP30_M2_SLOWFAULT_TEST

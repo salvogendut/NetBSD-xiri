@@ -66,8 +66,23 @@ clean halt, and the rebuilt XIRI_INDY64 kernel still boots the Indy disk to
 login and clean halt.  The design is ip30/DESIGN and the retained evidence
 and hashes are ip30/2026-11-15-m1-entry.json.
 
+M2a memory/vector bootstrap (2026-11-15): XIRI_IP30_M2 continues past the
+M1 proof, reconciles the CCA 5 entry alias with NetBSD's cached XKPHYS/TLB
+aliases, installs the low exception vectors, initialises ARCS64 memory
+descriptors and reaches pmap_bootstrap() plus the lwp0 uarea.  It stops at
+XIRI_IP30_M2_MEMORY_OK before autoconfiguration and before enabling HEART
+interrupts or a timer.  The checkpoint reports 512 MB (65534 8-KiB pages)
+and four memory clusters with the kernel LoadedProgram region excluded.
+The low-memory cpu_info and slow-fault cells are initialized before vector
+installation.  XIRI_IP30_M2_TLB proves a successful TLB refill (counter
+0 -> 1); XIRI_IP30_M2_SLOWFAULT verifies the original EPC, BadVAddr and
+cause in mips3_slowfault before UVM handling, emits
+XIRI_IP30_M2_SLOWFAULT_OK, and halts.
+Evidence is in ip30/2026-11-15-m2a-memory.json; the M2 design notes are in
+ip30/DESIGN.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1 entry checkpoint to serial
+topic/sgimips-octane, progressing from the M1/M2a checkpoints to serial
 multi-user login.  It includes the source audit, retained evidence,
 build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
@@ -124,6 +139,32 @@ It fails the run unless the printed entry equals the image ELF e_entry, the
 stack pointer lies inside the reserved boot stack, and the BSS witness is
 zero.  The deliberate halt is a nop/branch spin loop; a monitor-induced
 Debug Break at that stop is expected and is not a kernel fault.
+
+Build and run the M2a memory/vector checkpoint with the M2 configuration:
+
+    ./build.sh -m sgimips -a mips64eb -U -u -j 2 \
+      -O "$octane_build/obj" -T "$octane_build/tools" \
+      -D "$octane_build/dest" -V MKX11=no \
+      -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' \
+      kernel.gdb="$PWD/sys/arch/sgimips/conf/XIRI_IP30_M2"
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine octane \
+      --image "$octane_build/obj/sys/arch/sgimips/compile/XIRI_IP30_M2/netbsd" \
+      --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin \
+      --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin \
+      --expect XIRI_IP30_M2_MEMORY_OK --kernel-entry \
+      --output ../xiri/.work/octane-m2a-YYYYMMDD
+
+The M2a kernel deliberately halts after printing the memory accounting.
+Its timestamps read [1.0000000] because no clock or timer is attached yet.
+XIRI_IP30_M2_TLB exercises a successful TLB refill and stops on
+XIRI_IP30_M2_TLB_REFILL_OK.  XIRI_IP30_M2_SLOWFAULT prints
+XIRI_IP30_M2_SLOWFAULT_BEGIN, verifies the original EPC/BadVAddr/cause in
+mips3_slowfault and stops on XIRI_IP30_M2_SLOWFAULT_OK; it does not enter
+the generic UVM path.
 
 For O2 use --machine o2, omit --flash and --return-to-prom, and select the
 ELF32 PROM wrapper (the underlying kernel is N64), for example

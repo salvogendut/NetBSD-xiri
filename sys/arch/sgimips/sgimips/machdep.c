@@ -78,7 +78,10 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 #include <machine/sysconf.h>
 #include <machine/bootinfo.h>
 #ifdef XIRI_IP30
+#include <machine/ip30_arcs64.h>
 #include <machine/xiri_ip30.h>
+#include <mips/mips3_pte.h>
+#define	arcbios_GetEnvironmentVariable	ip30_arcs64_getenv
 #endif
 
 #include <mips/cache.h>
@@ -181,6 +184,10 @@ extern void	ip22_sdcache_enable(void);
 extern void mips3_clock_intr(vaddr_t, uint32_t, uint32_t);
 #endif
 
+#ifdef XIRI_IP30_M2_TLB_TEST
+static void	ip30_tlb_refill_test(void);
+#endif
+
 void	mach_init(int, int32_t *, uintptr_t, int32_t);
 
 void	sgimips_count_cpus(struct arcbios_component *,
@@ -226,7 +233,9 @@ extern u_int32_t ssir;
 extern char kernel_text[], edata[], end[];
 
 uint8_t *bootinfo;			/* pointer to bootinfo structure */
+#ifndef XIRI_IP30
 static uint8_t bi_buf[BOOTINFO_SIZE];	/* buffer to store bootinfo data */
+#endif
 static const char *bootinfo_msg = NULL;
 
 #define ARCS_VECTOR MIPS_PHYS_TO_KSEG0(0x00001000)
@@ -240,8 +249,15 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 {
 	paddr_t first, last;
 	vsize_t size;
+	uint32_t mem_type;
+	uint64_t mem_base, mem_pages;
+#ifndef XIRI_IP30
 	void *bip = (void *)(intptr_t)bip32;
 	struct arcbios_mem *mem;
+#else
+	const struct arcs64_mem *mem64;
+	const uint64_t *argv64;
+#endif
 	const char *cpufreq, *osload;
 	char *bootpath = NULL;
 	vaddr_t kernend;
@@ -263,13 +279,16 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	/*
 	 * The Octane firmware uses ARCS64, not the 32-bit interface below.
 	 * Prove entry and firmware access before the legacy argv conversion
-	 * or argument-count check.  This deliberately stops at an entry
-	 * checkpoint.
+	 * or argument-count check.
 	 */
 	xiri_ip30_early();
-#endif
 
-#ifdef _LP64
+	if (argc >= __arraycount(argv))
+		panic("too many args");
+	argv64 = (const uint64_t *)(uintptr_t)argv32;
+	for (i = 0; i < argc; i++)
+		argv[i] = (void *)(uintptr_t)argv64[i];
+#elif defined(_LP64)
 	if (argc >= __arraycount(argv))
 		panic("too many args");
 
@@ -288,6 +307,10 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	 * The third argument (magic) is the environment variable array if
 	 * there's no bootinfo.
 	 */
+#ifdef XIRI_IP30
+	ip30_arcs64_init();
+	printf("XIRI_M2_ARCS64_INIT\n");
+#else
 	if (arcbios_init(ARCS_VECTOR) == 1) {
 #ifdef _LP64
 		panic("no ARCS firmware");
@@ -298,8 +321,20 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 			arcemu_init((const char **)magic);
 #endif
 	}
+#endif
 
 	cpu_setmodel("%s", arcbios_system_identifier);
+
+#ifdef XIRI_IP30
+	/*
+	 * Vector code runs from the low SDRAM alias and cannot address
+	 * cpu_info_store or mips3_slowfault in XKPHYS with a compact
+	 * lui/%lo or 26-bit j sequence.  Publish both addresses in the
+	 * reserved tail of the exception block before installing vectors.
+	 */
+	*XIRI_IP30_CPU_INFO_CELL = (uintptr_t)&cpu_info_store;
+	xiri_ip30_set_slowfault_cell();
+#endif
 
 	/*
 	 * Copy exception-dispatch code down to exception vector.
@@ -307,10 +342,16 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	 * Clear out the I and D caches.
 	 */
 	mips_vector_init(NULL, false);
+#ifdef XIRI_IP30
+	printf("XIRI_M2_VECTOR_DONE\n");
+#endif
 
 	uvm_md_init();
 
 	/* set up bootinfo structures */
+#ifdef XIRI_IP30
+	bootinfo_msg = "no bootinfo. (ARCS64 direct boot)\n";
+#else
 	if (magic == BOOTINFO_MAGIC && bip != NULL) {
 		struct btinfo_magic *bi_magic;
 		struct btinfo_bootpath *bi_path;
@@ -328,6 +369,7 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 			    "invalid magic number in bootinfo structure.\n";
 	} else
 		bootinfo_msg = "no bootinfo found. (old bootblocks?)\n";
+#endif
 
 #if NKSYMS || defined(DDB) || defined(MODULAR)
 	bi_syms = lookup_bootinfo(BTINFO_SYMTAB);
@@ -617,9 +659,13 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 
 	physmem = arcsmem = 0;
 	mem_cluster_cnt = 0;
+#ifdef XIRI_IP30
+	mem64 = NULL;
+#else
 	mem = NULL;
+#endif
 
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(XIRI_IP30)
 	i = 0;
 	mem = NULL;
 
@@ -637,18 +683,36 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	 * XXX This code assumes that ARCS provides the memory
 	 * XXX sorted in ascending order.
 	 */
+#ifdef XIRI_IP30
+	mem64 = NULL;
+#else
 	mem = NULL;
+#endif
 	for (i = 0; mem_cluster_cnt < VM_PHYSSEG_MAX; i++) {
+#ifdef XIRI_IP30
+		mem64 = ip30_arcs64_getmem(mem64);
+		if (mem64 == NULL)
+			break;
+		mem_type = mem64->type;
+		mem_base = mem64->base_page;
+		mem_pages = mem64->page_count;
+#else
 		mem = arcbios_GetMemoryDescriptor(mem);
 
 		if (mem == NULL)
 			break;
+		mem_type = mem->Type;
+		mem_base = mem->BasePage;
+		mem_pages = mem->PageCount;
+#endif
 
-		first = round_page(mem->BasePage * ARCBIOS_PAGESIZE);
-		last = trunc_page(first + mem->PageCount * ARCBIOS_PAGESIZE);
+		first = round_page(mem_base * ARCBIOS_PAGESIZE);
+		last = trunc_page((mem_base + mem_pages) * ARCBIOS_PAGESIZE);
+		if (first >= last)
+			continue;
 		size = last - first;
 
-		switch (mem->Type) {
+		switch (mem_type) {
 		case ARCBIOS_MEM_FreeContiguous:
 		case ARCBIOS_MEM_FreeMemory:
 		case ARCBIOS_MEM_LoadedProgram:
@@ -669,13 +733,17 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 
 		default:
 			panic("unknown memory descriptor %d type %d",
-				i, mem->Type);
+				i, mem_type);
 		}
 
 		physmem += btoc(size);
 
 	}
 
+#ifdef XIRI_IP30
+	printf("XIRI_M2_MEMORY_SCAN_DONE clusters=%d physmem=%lu\n",
+	    mem_cluster_cnt, (unsigned long)physmem);
+#endif
 	if (mem_cluster_cnt == 0)
 		panic("no free memory descriptors found");
 
@@ -695,9 +763,12 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 
 	/*
 	 * Walk the component tree and count the number of CPUs
-	 * present in the system.
+	 * present in the system.  ARCS64 tree walking is not implemented
+	 * yet; ip30_arcs64_init() sets the known single CPU.
 	 */
+#ifndef XIRI_IP30
 	arcbios_tree_walk(sgimips_count_cpus, NULL);
+#endif
 
 	/*
 	 * Initialize error message buffer (at end of core).
@@ -705,12 +776,84 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	mips_init_msgbuf();
 
 	pmap_bootstrap();
+#ifdef XIRI_IP30
+	printf("XIRI_M2_PMAP_DONE\n");
+#endif
 
 	/*
 	 * Allocate uarea for lwp0 and set it.
 	 */
 	mips_init_lwp0_uarea();
+#ifdef XIRI_IP30
+	printf("XIRI_M2_UAREA_DONE\n");
+#endif
+
+#ifdef XIRI_IP30_M2_TLB_TEST
+	ip30_tlb_refill_test();
+#endif
+
+#ifdef XIRI_IP30_M2
+	printf("XIRI_IP30_M2_MEMORY_BEGIN\n");
+	printf("machine=IP%d ncpus=%d physmem=%lu arcsmem=%d clusters=%d\n",
+	    mach_type, ncpus, (unsigned long)physmem, arcsmem, mem_cluster_cnt);
+	printf("kernel_text=%p kernend=%p\n", kernel_text, (void *)kernend);
+	printf("xkphys_cached=%#lx pg_cached=%#x tlbmisses=%lu\n",
+	    (unsigned long)mips_options.mips3_xkphys_cached,
+	    (unsigned int)mips_options.mips3_pg_cached,
+	    (unsigned long)curcpu()->ci_ev_tlbmisses.ev_count);
+	printf("cpu_info_cell=%#lx slowfault_cell=%#lx\n",
+	    (unsigned long)*XIRI_IP30_CPU_INFO_CELL,
+	    (unsigned long)*XIRI_IP30_SLOWFAULT_CELL);
+	for (i = 0; i < mem_cluster_cnt; i++) {
+		printf("cluster[%u]=%#"PRIxPADDR"+%#"PRIxVSIZE"\n", i,
+		    mem_clusters[i].start, mem_clusters[i].size);
+	}
+	printf("XIRI_IP30_M2_MEMORY_OK\n");
+	xiri_ip30_halt();
+#endif
 }
+
+#ifdef XIRI_IP30_M2_TLB_TEST
+#ifdef XIRI_IP30_M2_SLOWFAULT_TEST
+extern uint64_t xiri_ip30_slowfault_load(vaddr_t);
+#endif
+
+static void
+ip30_tlb_refill_test(void)
+{
+	const vaddr_t va = VM_MIN_KERNEL_ADDRESS;
+	const paddr_t pa = 0x30000000;
+	const uint64_t magic = 0x5849524933305442ULL;
+	uint64_t before, after, value;
+
+	*(volatile uint64_t *)MIPS_PHYS_TO_XKPHYS_UNCACHED(pa) = magic;
+	pmap_kenter_pa(va, pa, VM_PROT_READ | VM_PROT_WRITE, PMAP_NOCACHE);
+	pmap_update(pmap_kernel());
+	tlb_invalidate_addr(va, KERNEL_PID);
+
+	before = curcpu()->ci_ev_tlbmisses.ev_count;
+	printf("XIRI_IP30_M2_TLB_REFILL_BEGIN va=%p pa=%#lx\n",
+	    (void *)va, (unsigned long)pa);
+	value = *(volatile uint64_t *)va;
+	after = curcpu()->ci_ev_tlbmisses.ev_count;
+	printf("XIRI_IP30_M2_TLB_REFILL value=%#lx before=%lu after=%lu\n",
+	    (unsigned long)value, (unsigned long)before,
+	    (unsigned long)after);
+	if (value == magic && after > before)
+		printf("XIRI_IP30_M2_TLB_REFILL_OK\n");
+	else
+		printf("XIRI_IP30_M2_TLB_REFILL_FAILED\n");
+	pmap_kremove(va, PAGE_SIZE);
+	pmap_update(pmap_kernel());
+
+#ifdef XIRI_IP30_M2_SLOWFAULT_TEST
+	printf("XIRI_IP30_M2_SLOWFAULT_BEGIN va=%p\n",
+	    (void *)(VM_MAX_KERNEL_ADDRESS - PAGE_SIZE));
+	(void)xiri_ip30_slowfault_load(VM_MAX_KERNEL_ADDRESS - PAGE_SIZE);
+	printf("XIRI_IP30_M2_SLOWFAULT_UNEXPECTED\n");
+#endif
+}
+#endif
 
 void
 sgimips_count_cpus(struct arcbios_component *node,
@@ -820,7 +963,11 @@ haltsys:
 			mcclock_poweroff();
 		} else
 #endif
+#ifdef XIRI_IP30
+			ip30_arcs64_powerdown();
+#else
 			arcbios_PowerDown();
+#endif
 		printf("WARNING: powerdown failed\n");
 		/*
 		 * RB_POWERDOWN implies RB_HALT... fall into it...
@@ -829,7 +976,11 @@ haltsys:
 
 	if (howto & RB_HALT) {
 		printf("halting...\n\n");
+#ifdef XIRI_IP30
+		ip30_arcs64_enter();
+#else
 		arcbios_EnterInteractiveMode();
+#endif
 	}
 
 	printf("rebooting...\n\n");
@@ -838,7 +989,11 @@ haltsys:
 		crime_reboot();
 	} else
 #endif
+#ifdef XIRI_IP30
+		ip30_arcs64_reboot();
+#else
 		arcbios_Reboot();
+#endif
 
 	for (;;);
 }
@@ -959,7 +1114,19 @@ void ddb_trap_hook(int where)
 void mips_machdep_cache_config(void)
 {
 
+#ifndef XIRI_IP30
 	arcbios_tree_walk(mips_machdep_find_l2cache, NULL);
+#else
+	/*
+	 * The Octane PROM loads and enters the kernel at 0xa800... (CCA 5).
+	 * Align NetBSD's cached XKPHYS and TLB aliases with that entry alias
+	 * so cache and pmap code never mixes CCA 5 and CCA 3 for the same
+	 * physical page.  The ARCS64 component tree is not parsed yet, so L2
+	 * discovery is deferred.
+	 */
+	mips_options.mips3_xkphys_cached = MIPS_PHYS_TO_XKPHYS(5, 0);
+	mips_options.mips3_pg_cached = MIPS3_CCA_TO_PG(5);
+#endif
 
 	switch (MIPS_PRID_IMPL(mips_options.mips_cpu_id)) {
 #if defined(INDY_R4600_CACHE)

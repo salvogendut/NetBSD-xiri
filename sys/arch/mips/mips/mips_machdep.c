@@ -2163,13 +2163,28 @@ int mips_poolpage_vmfreelist = VM_FREELIST_DEFAULT;
 #define	HALFGIG		((paddr_t)512 * 1024 * 1024)
 #define	FOURGIG		((paddr_t)4 * 1024 * 1024 * 1024)
 
+/*
+ * Convert a direct-mapped kernel address to its physical address.  LP64
+ * kernels may run from XKPHYS rather than KSEG0; do not mask the XKPHYS
+ * segment bits away.
+ */
+static paddr_t
+mips_kernel_vaddr_to_paddr(vaddr_t va)
+{
+#ifdef _LP64
+	if (MIPS_XKPHYS_P(va))
+		return MIPS_XKPHYS_TO_PHYS(va);
+#endif
+	return MIPS_KSEG0_TO_PHYS(va);
+}
+
 void
 mips_page_physload(vaddr_t vkernstart, vaddr_t vkernend,
 	const phys_ram_seg_t *segs, size_t nseg,
 	const struct mips_vmfreelist *flp, size_t nfl)
 {
-	const paddr_t kernstart = MIPS_KSEG0_TO_PHYS(trunc_page(vkernstart));
-	const paddr_t kernend = MIPS_KSEG0_TO_PHYS(round_page(vkernend));
+	const paddr_t kernstart = mips_kernel_vaddr_to_paddr(trunc_page(vkernstart));
+	const paddr_t kernend = mips_kernel_vaddr_to_paddr(round_page(vkernend));
 #if defined(VM_FREELIST_FIRST4G) || defined(VM_FREELIST_FIRST512M)
 #ifdef VM_FREELIST_FIRST512M
 	bool need512m = false;

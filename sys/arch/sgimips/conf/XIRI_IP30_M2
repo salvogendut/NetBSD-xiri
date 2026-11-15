@@ -1,0 +1,13 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M2: Octane memory and vector bootstrap development config.
+# Includes the M1 entry proof but continues into ARCS64 memory setup and
+# stops deliberately before autoconfiguration and HEART interrupts.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30"
+
+ident		"XIRI_IP30_M2"
+
+no options	XIRI_IP30_M1_STOP
+options		XIRI_IP30_M2

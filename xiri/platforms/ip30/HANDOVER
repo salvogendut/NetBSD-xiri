@@ -435,3 +435,69 @@ memory bootstrap, low-alias exception vectors, HEART interrupt/timekeeping,
 cached-CCA reconciliation (the entry alias is CCA 5 while the LP64 default
 cached XKPHYS alias is CCA 3) and removal of the remaining KSEG0-only
 conversions before autoconfiguration.
+
+M2a checkpoint update (2026-11-15)
+----------------------------------
+
+M2a is the first M2 checkpoint: cache-alias reconciliation, ARCS64 memory
+setup and vector bootstrap, stopping before HEART interrupts or a timer.
+
+What now exists:
+
+* sys/arch/sgimips/conf/XIRI_IP30_M2: includes XIRI_IP30, removes
+  XIRI_IP30_M1_STOP and continues through ARCS64 and pmap bootstrap.  The
+  M1 config remains reproducible with an explicit stop.
+* sys/arch/sgimips/include/ip30_arcs64.h and sgimips/ip30_early.c:
+  ARCS64 environment, memory and console helpers.  Every firmware call
+  saves and restores MIPS_CURLWP (t8); this is not an N64 ABI callee-saved
+  register and firmware clobbers it.
+* ip30_arcs64_init() sets mach_type=IP30, ncpus=1, the identifiers and an
+  ARCS64 console before the generic mach_init paths use them.
+* mips_machdep_cache_config() sets both mips3_xkphys_cached and
+  mips3_pg_cached to CCA 5 for XIRI_IP30, matching the 0xa800... entry
+  alias rather than the generic CCA 3 default.
+* Exception vector CPUVAR accesses load &cpu_info_store from a cell at
+  physical 0xff0 (the unused tail of the exception block) because vector
+  code runs from the low SDRAM alias and cannot reach XKPHYS data with
+  compact lui/%lo addresses.  A second cell at 0xff8 holds
+  mips3_slowfault, reached with jr instead of a truncated 26-bit j; both
+  cells are initialized before vector installation.  The cache-error
+  vector uses an uncached XKPHYS alias rather than a truncated KSEG1
+  address.  tlb_update_addr now uses PTR_LA, and critical sections that
+  wrote Status=0 preserve KX on IP30.
+* mips_kernel_vaddr_to_paddr() makes mips_page_physload() handle XKPHYS
+  kernel bounds.  ARCS64 memory descriptors feed the existing cluster
+  logic; end addresses are computed from the original base plus length and
+  rounded inward, empty ranges are skipped, and the
+  0x20000000..0x20003fff guard and low firmware alias are not free memory.
+* Vector slots are now UTLB 0x7c, XTLB 0x4c, cache 0x3c, general exception
+  0x78 (0x7c in XIRI_IP30_M2_SLOWFAULT) and interrupt 0x28 bytes; all fit
+  their 0x80 slots.  Vector installation clears BEV without panic.
+
+Observed M2a result (final run in .work/octane-m2a-20261115-final3):
+
+* XIRI_M2_ARCS64_INIT, XIRI_M2_VECTOR_DONE, XIRI_M2_MEMORY_SCAN_DONE,
+  XIRI_M2_PMAP_DONE and XIRI_M2_UAREA_DONE appear in order.
+* xkphys_cached=0xa800000000000000 (CCA 5), pg_cached=0x28.
+* cpu_info_cell and slowfault_cell contain the expected kernel addresses.
+* physmem=65534 8-KiB pages, arcsmem=129 pages, four clusters:
+  0x20004000+0xc000, 0x20010000+0x3c2000 (kernel, skipped),
+  0x203d4000+0xb2c000 and 0x21000000+0x1f000000.
+* XIRI_IP30_M2_MEMORY_OK prints and the kernel halts deliberately in
+  xiri_ip30_halt().
+* XIRI_IP30_M2_TLB proves a successful TLB refill: the first access after
+  invalidating the mapping increments the refill counter from 0 to 1 and
+  returns the expected magic value.
+* XIRI_IP30_M2_SLOWFAULT deliberately accesses an unmapped kernel address
+  through a dedicated loader.  A test-only mips3_slowfault hook verifies the
+  original EPC, BadVAddr and cause before UVM handling, prints
+  XIRI_IP30_M2_SLOWFAULT_OK and halts.  It does not enter UVM before
+  uvm_init() or end in a generic boot-blocked panic.
+
+Regressions with the same source changes: M1 entry checkpoint passed again;
+rebuilt XIRI_O2 reached native single-user and clean halt; rebuilt
+XIRI_INDY64 booted the Indy disk to login, ran uname/mount and halted
+cleanly.
+
+Next: add HEART mask/pending/acknowledge and the clock/timecounter, then
+proceed to autoconfiguration and XIO/Bridge.

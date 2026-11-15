@@ -1,0 +1,10 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M2_TLB: exercise a successful kernel TLB refill.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M2"
+
+ident		"XIRI_IP30_M2_TLB"
+
+options		XIRI_IP30_M2_TLB_TEST
