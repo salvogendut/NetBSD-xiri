@@ -54,9 +54,21 @@ firmware described the diagnostic's page as LoadedProgram, enumerated
 0x20000 4-KB pages, printed XIRI_IP30_ARCS64_OK and returned to the PROM.
 Physical hardware has not been tested.
 
+M1 kernel entry (2026-11-15): a dedicated XIRI_IP30 kernel now reaches its
+real entry at cached XKPHYS 0xa800000020010000, clears BSS, switches to a
+kernel-owned stack, validates the ARCS64 SPB, prints entry/CP0/firmware and
+memory-descriptor evidence, prints XIRI_IP30_KERNEL_ENTRY_OK and stops
+deliberately.  The kernel is built without -msym32 and without an ELF32
+wrapper; Octane RAM is outside the KSEG0/KSEG1 direct map.  This is an entry
+checkpoint, not a bootstrap: exceptions, pmap, interrupts and devices are
+M2/M3 work.  The rebuilt O2 kernel still reaches native single-user and
+clean halt, and the rebuilt XIRI_INDY64 kernel still boots the Indy disk to
+login and clean halt.  The design is ip30/DESIGN and the retained evidence
+and hashes are ip30/2026-11-15-m1-entry.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, starting with native kernel entry and progressing to
-serial multi-user login.  It includes the source audit, retained evidence,
+topic/sgimips-octane, progressing from the M1 entry checkpoint to serial
+multi-user login.  It includes the source audit, retained evidence,
 build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
 
@@ -83,6 +95,35 @@ state and attaches no disks unless --disk is supplied.  That option makes
 a private reflink/copy of a stopped CHD and enables an overlay beside it;
 never supply an actively running disk.  Firmware SCSI diagnostic warnings are
 expected for this diskless fixture.  Local control sockets must be allowed.
+
+Build and boot the M1 checkpoint from the NetBSD checkout.  Prepare isolated
+tools first; the Toolbox is needed if the host has no C++ compiler:
+
+    octane_build="$PWD/../xiri/.work/netbsd-octane-build"
+    ./build.sh -m sgimips -a mips64eb -U -u -j 2 \
+      -O "$octane_build/obj" -T "$octane_build/tools" \
+      -D "$octane_build/dest" -V MKX11=no \
+      -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' \
+      kernel.gdb="$PWD/sys/arch/sgimips/conf/XIRI_IP30"
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine octane \
+      --image "$octane_build/obj/sys/arch/sgimips/compile/XIRI_IP30/netbsd" \
+      --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin \
+      --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin \
+      --expect XIRI_IP30_KERNEL_ENTRY_OK --kernel-entry \
+      --output ../xiri/.work/octane-entry-YYYYMMDD
+
+The kernel ELF entry and its single PT_LOAD segment are both
+0xa800000020010000 (physical 0x20010000).  There must be no netbsd.elf32 for
+this configuration.  The runner stops the emulator after the marker and
+records registers, CP0, the SPB page and the first 128 bytes of kernel text.
+It fails the run unless the printed entry equals the image ELF e_entry, the
+stack pointer lies inside the reserved boot stack, and the BSS witness is
+zero.  The deliberate halt is a nop/branch spin loop; a monitor-induced
+Debug Break at that stop is expected and is not a kernel fault.
 
 For O2 use --machine o2, omit --flash and --return-to-prom, and select the
 ELF32 PROM wrapper (the underlying kernel is N64), for example

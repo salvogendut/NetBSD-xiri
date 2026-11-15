@@ -295,8 +295,10 @@ interface facts and suitably licensed implementations; keep provenance clear.
 Build and test discipline
 -------------------------
 
-There is no working XIRI_IP30 kernel config/build yet.  After M1 adds it,
-adapt the proven O2 build command using NEW output directories, for example:
+At handover time there was no working XIRI_IP30 kernel config/build.  M1 has
+since added it; see the checkpoint update at the end of this file.  The
+planned command below is retained as the handover-era record.  Adapt the
+proven O2 build command using NEW output directories, for example:
 
     octane_build="$PWD/../xiri/.work/netbsd-octane-build"
     ./build.sh -m sgimips -a mips64eb -U -u -j 2 \
@@ -370,3 +372,66 @@ artifacts.  Stop at a reproducible kernel-entry checkpoint for the first
 review; provide the patch, exact build/boot commands, logs, test results,
 remaining blocker and next milestone.  Do not report Octane as booted to
 userland until the corresponding native acceptance checks actually pass.
+
+M1 checkpoint update (2026-11-15)
+---------------------------------
+
+The first implementation checkpoint is complete for review.  It is an
+entry proof, not a completed bootstrap.
+
+What now exists:
+
+* sys/arch/sgimips/conf/XIRI_IP30: serial-only IP30 kernel, linked at
+  cached XKPHYS 0xa800000020010000 (physical 0x20010000).  It builds
+  without -msym32 and emits no ELF32 wrapper.
+* sys/arch/sgimips/include/xiri_ip30.h and sgimips/ip30_early.c: guarded
+  IP30 entry helpers, ARCS64 SPB validation, 64-bit Write access, memory
+  descriptor summary, explicit BSS/stack/CP0 evidence and deliberate halt.
+* sys/arch/mips/mips/locore.S: IP30 preserves KX/UX while initialising
+  CP0, clears BSS, uses the reserved kernel stack, and skips the PROM-stack
+  heuristic.  Other MIPS ports are unchanged.
+* sys/arch/mips/conf/Makefile.mips: new MIPS_SYM32 and
+  MIPS_ELF32_WRAPPER make options, defaulting to the old behaviour.
+* sys/arch/sgimips/sgimips/machdep.c: mach_init calls the IP30 early path
+  before the legacy argv conversion, argument-count check or any 32-bit
+  ARCS structure is parsed.
+* xiri/platforms/ip30/DESIGN: firmware/address/memory design and the M2
+  source-audit blockers.
+* xiri/platforms/ip30/2026-11-15-m1-entry.json: exact commands, source and
+  artifact hashes, emulator/firmware/disk hashes and retained results.
+* xiri/platforms/probe.py: --kernel-entry stops after an Octane entry
+  marker, captures entry registers/CP0/SPB/kernel text without requiring a
+  return to the PROM, and rejects the run unless kernel.entry equals the
+  image ELF e_entry, kernel.sp lies inside the reserved boot stack and the
+  BSS witness is zero.
+
+Observed M1 result:
+
+* The Octane PROM loaded the NetBSD ELF64 and entered it at
+  0xa800000020010000.
+* The kernel reported sp=0xa8000000203bad70 inside its reserved stack
+  [0xa8000000203b6de0, 0xa8000000203bade0), CP0 Status=0xa0 (KX+UX),
+  PRID=0x927, a zero BSS witness, ARCS64 version 0x40 revision 0, vector
+  0xa800000000001800 and 0x20000 total pages.
+* It printed XIRI_IP30_KERNEL_ENTRY_OK and stopped in a nop/branch spin
+  loop.  Monitor stop found PC=0xa800000020014594, inside that loop.  The
+  early halt does not use the wait instruction.
+* result status passed, emulator_stopped=true, originals_unchanged=true.
+
+Regressions with the same source changes:
+
+* Rebuilt XIRI_O2: both AIC-7880 controllers, sd0, read-only FFS root,
+  native uname/mount, clean halt (passed).
+* Rebuilt XIRI_INDY64: cold boot to login, root shell, uname/mount,
+  shutdown and clean halt to PROM (passed).
+* GENERIC64_IP2x still fails to compile haud.c because the driver asserts
+  4 KiB pages; the lab's XIRI_INDY64 configuration already excludes haud.
+  This is pre-existing and not caused by these changes.
+
+Still not proven: physical hardware, JIT, native exception/TLB takeover,
+pmap, HEART interrupts/timer, IOC3 serial, XIO/Bridge/PCI, storage,
+networking and multi-user login.  The next milestone is M2: XKPHYS-aware
+memory bootstrap, low-alias exception vectors, HEART interrupt/timekeeping,
+cached-CCA reconciliation (the entry alias is CCA 5 while the LP64 default
+cached XKPHYS alias is CCA 3) and removal of the remaining KSEG0-only
+conversions before autoconfiguration.

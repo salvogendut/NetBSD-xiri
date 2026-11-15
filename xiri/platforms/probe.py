@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import time
@@ -23,6 +24,29 @@ def sha256(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def elf_entry(path):
+    """Return e_entry from an ELF32/ELF64 image in either byte order."""
+    with Path(path).open('rb') as stream:
+        ident = stream.read(16)
+        if len(ident) != 16 or ident[:4] != b'\x7fELF':
+            raise ValueError('not an ELF image')
+        endian = {1: '<', 2: '>'}.get(ident[5])
+        if endian is None:
+            raise ValueError('unknown ELF byte order')
+        stream.seek(24)
+        if ident[4] == 2:
+            raw = stream.read(8)
+            if len(raw) != 8:
+                raise ValueError('truncated ELF64 header')
+            return struct.unpack(endian + 'Q', raw)[0]
+        if ident[4] == 1:
+            raw = stream.read(4)
+            if len(raw) != 4:
+                raise ValueError('truncated ELF32 header')
+            return struct.unpack(endian + 'I', raw)[0]
+        raise ValueError('unknown ELF class')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('xiri', 'emulator', 'image', 'nvram', 'output'):
@@ -30,6 +54,7 @@ def main():
     parser.add_argument('--machine', choices=('o2', 'octane'), required=True)
     parser.add_argument('--disk', type=Path, help='copy a stopped CHD into the run directory')
     parser.add_argument('--single-user', action='store_true', help='O2 native shell/identity and clean-halt check')
+    parser.add_argument('--kernel-entry', action='store_true', help='Octane kernel-entry checkpoint; no PROM return required')
     parser.add_argument('--flash', type=Path, help='Octane flash, copied before use')
     parser.add_argument('--expect', required=True, help='literal serial success marker')
     parser.add_argument('--return-to-prom', action='store_true')
@@ -39,6 +64,8 @@ def main():
         parser.error('nonempty marker, positive timeout and Octane flash image required')
     if args.single_user and (args.machine != 'o2' or args.disk is None):
         parser.error('--single-user requires O2 and --disk')
+    if args.kernel_entry and (args.machine != 'octane' or args.return_to_prom or args.single_user):
+        parser.error('--kernel-entry requires Octane and excludes --return-to-prom/--single-user')
     out, image, emu, nvram = [getattr(args, n).resolve() for n in
                               ('output', 'image', 'emulator', 'nvram')]
     flash = args.flash.resolve() if args.flash else None
@@ -49,6 +76,12 @@ def main():
         parser.error('--disk must be a regular, stopped CHD file')
     inputs = [image, nvram, emu/'iris', emu/'iris-ci'] + ([flash] if flash else []) + ([disk] if disk else [])
     hashes = {str(p): sha256(p) for p in inputs}
+    expected_entry = None
+    if args.kernel_entry:
+        try:
+            expected_entry = elf_entry(image)
+        except (OSError, ValueError) as error:
+            parser.error('--kernel-entry needs a readable ELF image: ' + str(error))
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(args.xiri.resolve()/'scripts'))
     from xiri_lab import load_probe
@@ -95,7 +128,9 @@ cpus = 1
     result = dict(schema=1, machine=args.machine, status='incomplete',
                   inputs=hashes, attached_disks=[str(out/'disk.chd')] if disk else [], commands=[],
                   harness_sha256=sha256(Path(probe.__file__)),
-                  expect=args.expect, return_to_prom=args.return_to_prom, single_user=args.single_user)
+                  expect=args.expect, return_to_prom=args.return_to_prom, single_user=args.single_user,
+                  kernel_entry=args.kernel_entry,
+                  expected_entry=None if expected_entry is None else hex(expected_entry))
     prompt = r'(?:^|\n)> ' if is_o2 else r'(?:^|\n)>> '
 
     def interrupted(signum, frame):
@@ -136,6 +171,55 @@ cpus = 1
             time.sleep(0.1)
         else:
             result['status'] = 'timeout'
+        if args.kernel_entry and result['status'] == 'passed':
+            serial = lab.serial_text()
+
+            def checkpoint_field(name):
+                match = re.search(r'(?m)^' + re.escape(name) +
+                                  r'=(0x[0-9a-fA-F]+)', serial)
+                return int(match.group(1), 16) if match is not None else None
+
+            entry = checkpoint_field('kernel.entry')
+            sp = checkpoint_field('kernel.sp')
+            bss_start = checkpoint_field('kernel.bss')
+            bss_end = checkpoint_field('kernel.bss.end')
+            witness = checkpoint_field('kernel.bss.witness')
+            stack_base = checkpoint_field('kernel.stack.base')
+            stack_top = checkpoint_field('kernel.stack.top')
+            errors = []
+            if entry is None:
+                errors.append('missing kernel.entry')
+            elif entry != expected_entry:
+                errors.append('kernel.entry %#x != ELF e_entry %#x' %
+                              (entry, expected_entry))
+            if sp is None:
+                errors.append('missing kernel.sp')
+            elif (stack_base is None or stack_top is None or
+                  not stack_base < stack_top):
+                errors.append('missing or invalid kernel stack range')
+            elif not stack_base <= sp < stack_top:
+                errors.append('kernel.sp %#x outside [%#x, %#x)' %
+                              (sp, stack_base, stack_top))
+            if bss_start is None or bss_end is None or not bss_start < bss_end:
+                errors.append('missing or invalid kernel BSS range')
+            if witness is None:
+                errors.append('missing kernel.bss.witness')
+            elif witness != 0:
+                errors.append('kernel.bss.witness %#x is not zero' % witness)
+            result['checkpoint'] = {
+                'entry': None if entry is None else hex(entry),
+                'sp': None if sp is None else hex(sp),
+                'bss_start': None if bss_start is None else hex(bss_start),
+                'bss_end': None if bss_end is None else hex(bss_end),
+                'bss_witness': None if witness is None else hex(witness),
+                'stack_base': None if stack_base is None else hex(stack_base),
+                'stack_top': None if stack_top is None else hex(stack_top),
+            }
+            if entry is not None:
+                result['kernel_entry_address'] = hex(entry)
+            if errors:
+                result['status'] = 'entry-check-failed'
+                result['error'] = '; '.join(errors)
         if result['status'] == 'passed' and args.single_user:
             # Enter the native shell before any multi-user/vendor startup.
             lab.wait(r'Enter pathname of shell', 30)
@@ -151,6 +235,8 @@ cpus = 1
         commands = ['regs', 'cop0', 'mem 0xffffffff80000000 48']
         commands += (['scsi regs', 'scsi1 regs'] if is_o2 else
                      ['ip30 memcfg', 'mem 0xffffffffa0001000 20 d'])
+        if args.kernel_entry and result['status'] == 'passed':
+            commands.append('mem ' + result['kernel_entry_address'] + ' 32')
         result['monitor'] = {cmd: lab.monitor_command(cmd) for cmd in commands}
     except (Exception, KeyboardInterrupt) as error:
         result.update(status='probe-error', error=str(error))

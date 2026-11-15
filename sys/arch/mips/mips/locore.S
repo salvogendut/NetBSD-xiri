@@ -54,6 +54,12 @@
 #include "opt_kgdb.h"
 #include "opt_lockdebug.h"
 #include "opt_multiprocessor.h"
+#if defined(sgimips)
+#include "opt_xiri_ip30.h"
+#ifdef XIRI_IP30
+#include <machine/xiri_ip30.h>
+#endif
+#endif
 
 #include <sys/cdefs.h>
 #include <sys/errno.h>
@@ -82,6 +88,10 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 	/* Known state: BEV, coprocessors disabled. */
 	/* Leaving TS | RE alone (for emips) */
 	and	k0, MIPS_SR_TS | MIPS3_SR_RE
+#ifdef XIRI_IP30
+	/* We are executing in XKPHYS; keep 64-bit addressing enabled. */
+	or	k0, MIPS_SR_KX | MIPS_SR_UX
+#endif
 	mtc0	k0, MIPS_COP_0_STATUS
 	mtc0	zero, MIPS_COP_0_CAUSE
 	COP0_SYNC
@@ -98,6 +108,29 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
         or      k0, MIPS_SR_KX
         mtc0    k0, MIPS_COP_0_STATUS
 #endif
+
+#ifdef XIRI_IP30
+	/*
+	 * The Octane PROM does not zero our BSS and the stack it provides is
+	 * not owned by the kernel.  Clear BSS and use the stack reserved in
+	 * it.  The kernel runs in cached XKPHYS and is built without -msym32,
+	 * so these symbol references are full-width.
+	 */
+	PTR_LA	t0, _C_LABEL(__bss_start)
+	PTR_LA	t1, _C_LABEL(_end)
+	sltu	t2, t0, t1
+	beq	t2, zero, 9f
+	 nop
+8:
+	PTR_S	zero, 0(t0)
+	PTR_ADDIU t0, SZREG
+	sltu	t2, t0, t1
+	bne	t2, zero, 8b
+	 nop
+9:
+	PTR_LA	sp, _C_LABEL(xiri_ip30_bootstack)
+	PTR_ADDIU sp, sp, XIRI_IP30_BOOTSTACK_SIZE
+#endif /* XIRI_IP30 */
 
 #ifdef HPCMIPS_L1CACHE_DISABLE
 	mfc0	t0, MIPS_COP_0_CONFIG
@@ -133,6 +166,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 	/*
 	 * Initialize stack and call machine startup.
 	 */
+#ifndef XIRI_IP30
 	PTR_LA	v1, start
 	slt	v0, v1, sp
 	bne	v0, zero, 1f
@@ -144,6 +178,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 1:
 	move	sp, v0
 2:
+#endif /* !XIRI_IP30 */
 #ifdef __GP_SUPPORT__
 	PTR_LA	gp, _C_LABEL(_gp)
 #endif

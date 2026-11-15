@@ -1,0 +1,214 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M1",
+  "status": "passed-entry-checkpoint",
+  "scope": "Native Octane NetBSD ELF64 reaches kernel entry in IRIS, clears BSS, uses a kernel-owned stack, prints ARCS64/firmware/memory evidence and deliberately halts.  This is not a bootstrap, exception takeover, console handoff or login.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "33b5dda6a45e7cbbc44a219d7619d674659e3ec0",
+  "source_status": [
+    "M sys/arch/mips/conf/Makefile.mips",
+    "M sys/arch/mips/mips/locore.S",
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/sgimips/machdep.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30",
+    "?? sys/arch/sgimips/include/xiri_ip30.h",
+    "?? sys/arch/sgimips/sgimips/ip30_early.c",
+    "?? xiri/platforms/ip30/2026-11-15-m1-entry.json",
+    "?? xiri/platforms/ip30/DESIGN"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/conf/XIRI_IP30": "075731707f6b30f81bfabd4d737043f39b6bdb33c594d016d6d4f3b05efd107d",
+    "sys/arch/sgimips/include/xiri_ip30.h": "07c4909ec772cd9f659db94e9ebfcc7a58751295734fac6adc4dd5810f763aff",
+    "sys/arch/sgimips/sgimips/ip30_early.c": "5909170d1a60200bae4b9914b92a3ffe599aded7e6c72bf692e93725ad1a9505",
+    "sys/arch/sgimips/conf/files.sgimips": "6eb0e6ed3e45a3839c59ffcdb787c8475a550ec6a31467bc952d14a4a98a47f2",
+    "sys/arch/sgimips/sgimips/machdep.c": "8d7f8406fd264c4a601643c80c5aadcd0b757503eb3c64f11505da5a3d2e6326",
+    "sys/arch/mips/mips/locore.S": "f33dc4ae09d2308cc7585abb46c688aba7d0d2b4db0853b3c7efd53c35b575b7",
+    "sys/arch/mips/conf/Makefile.mips": "1c039f198e47a9b977f3cf35f60f5c9e67e515f01332d7f4d400975e06d777c0",
+    "xiri/platforms/probe.py": "2728ec5adbd4bb1af1a2ff9c5077344b3ae72f9275c634f5500968b1b3cd8bb1",
+    "xiri/platforms/ip30/DESIGN": "2ad53506cdb1681570e714cf8a1d9d5c6be6c2bdb2a22b6d1d037e9e08467a87"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "address_model": {
+    "kernel_entry": "0xa800000020010000",
+    "kind": "XKPHYS direct map, CCA 5 (cacheable coherent write-back exclusive-on-write)",
+    "physical_base": "0x0000000020010000",
+    "sym32": false,
+    "elf32_wrapper": false,
+    "note": "Physical base is 64 KiB aligned so the single PT_LOAD segment does not cover the 0x20000000..0x20003fff bus-error guard.  CCA 5, not CCA 2: CCA 2 is uncached.  M2 must reconcile this entry alias with mips_options.mips3_xkphys_cached, which defaults to CCA 3 for this CPU."
+  },
+  "checkpoint_validation": {
+    "entry": "serial kernel.entry must equal the image ELF e_entry",
+    "stack": "serial kernel.sp must be inside [kernel.stack.base, kernel.stack.top)",
+    "bss": "kernel.bss.witness must be zero and the BSS range must be valid",
+    "failure": "a missing or mismatched field changes the result status to entry-check-failed",
+    "negative_test": {
+      "output_directory": "../xiri/.work/octane-entry-negative-20261115",
+      "image": "xiri/platforms/ip30/arcs64-probe built by build-probe.sh",
+      "expected_entry": "0xa800000020080000",
+      "status": "entry-check-failed",
+      "error": "missing kernel.entry; missing kernel.sp; missing or invalid kernel BSS range; missing kernel.bss.witness",
+      "result_sha256": "e334227e1398546f8b7543b65ef7fe78ccb727145865b46eb276c023a7266bdf",
+      "serial_sha256": "d58892f257eecabb59f1c80611eebad324bdd9681dc4b7f0ac880bcf30186b6a",
+      "meaning": "The same --kernel-entry runner rejects the standalone diagnostic, proving the marker alone is not accepted."
+    }
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "tools": "built with ./build.sh tools inside Toolbox xiri-iris because the host has no C++ compiler; kernel build then ran on the host",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30",
+    "config_sha256": "075731707f6b30f81bfabd4d737043f39b6bdb33c594d016d6d4f3b05efd107d",
+    "netbsd_sha256": "507877eec4a88574ce702e59867b85198c330a69749867486e1b60f6aa022550",
+    "netbsd_gdb_sha256": "4c6a6b9374cf6db6b8787109a5665193b529321de091c1e6cdb9bffbdbe7b9ee",
+    "readelf_sha256": "25343b00c2e7a1da8010b80ea69b52068fbdd4c5fdc0457f97670775d899408d",
+    "size_sha256": "6dd3b87ddcfbac6ea760860764997452e7cc2322c4b7f3d936786fbe62485990",
+    "entry_symbols_sha256": "c270b6e7ec44c65f5c1dcaab3f37f488f735d834795435b798cd20564a1b6dc1",
+    "linker_map_sha256": "8e774ee37d6b1e218ae225fbc313413a5d2e76265cd5f488639bcd977481355d",
+    "build_log_sha256": "2bafcbb66c06f05ee3ba860a0567ae971601fcdd681044db983de508515fcbb2",
+    "elf": {
+      "class": "ELF64",
+      "data": "big endian",
+      "entry": "0xa800000020010000",
+      "load_vaddr": "0xa800000020010000",
+      "load_phys": "0xa800000020010000",
+      "flags": "0x30000001, noreorder, mips4",
+      "elf32_wrapper_emitted": false
+    },
+    "symbols": {
+      "kernel_text": "0xa800000020010000",
+      "start": "0xa800000020010000",
+      "xiri_ip30_early": "0xa800000020014118",
+      "__bss_start": "0xa8000000203b6a10",
+      "xiri_ip30_bootstack": "0xa8000000203b6de0",
+      "_end": "0xa8000000203d0080"
+    }
+  },
+  "octane_entry_run": {
+    "output_directory": "../xiri/.work/octane-entry-20261115-r2",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_KERNEL_ENTRY_OK --kernel-entry --timeout 300 --output ../xiri/.work/octane-entry-20261115-r2",
+    "expected_marker": "XIRI_IP30_KERNEL_ENTRY_OK",
+    "marker_meaning": "The NetBSD kernel, not the standalone diagnostic, reached its own entry, cleared BSS, set its own stack, validated ARCS64 and completed the memory-descriptor walk.  It then halts deliberately in a nop/branch spin loop.",
+    "status": "passed",
+    "elapsed_seconds": 37.73,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "fe307059fd3ed32256482c7e25b88ae48bd6fb35aaf44fdc5b97597cbe42d3d1",
+    "serial_sha256": "c563d071615ada0ebebc0e34535a58f576c723d9fd7f1615de8d4eb9b43f1098",
+    "expected_entry": "0xa800000020010000",
+    "kernel_entry_address": "0xa800000020010000",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203bad70",
+      "bss_start": "0xa8000000203b6a10",
+      "bss_end": "0xa8000000203d0080",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203b6de0",
+      "stack_top": "0xa8000000203bade0"
+    },
+    "reported": {
+      "kernel_sp": "0xa8000000203bad70",
+      "cp0_status": "0x00000000000000a0",
+      "cp0_prid": "0x0000000000000927",
+      "bss_start": "0xa8000000203b6a10",
+      "bss_end": "0xa8000000203d0080",
+      "bss_size": "0x0000000000019670",
+      "bss_witness": "0x0000000000000000",
+      "stack_base": "0xa8000000203b6de0",
+      "stack_top": "0xa8000000203bade0",
+      "spb_length": "0x0000000000000090",
+      "spb_version": "0x0000000000000040",
+      "spb_revision": "0x0000000000000000",
+      "spb_vector": "0xa800000000001800",
+      "spb_vector_length": "0x0000000000000118",
+      "memory_descriptors": "0x0000000000000008",
+      "memory_total_pages": "0x0000000000020000",
+      "memory_usable_pages": "0x000000000001fefc",
+      "memory_reserved_pages": "0x0000000000000104",
+      "memory_first_free_page": "0x0000000000020004",
+      "memory_loaded_page": "0x0000000000020010"
+    },
+    "monitor": {
+      "pc": "0xa800000020014594",
+      "symbol": "xiri_ip30_early (halt spin loop)",
+      "sp": "0xa8000000203bad70",
+      "note": "The monitor-induced stop reports Cause=DBE and an EPC in the PROM monitor; the guest PC and stack are in the kernel's deliberate nop/branch spin loop.  The loop no longer uses the wait instruction."
+    },
+    "inputs": {
+      "netbsd": "507877eec4a88574ce702e59867b85198c330a69749867486e1b60f6aa022550",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false,
+    "repeat_run": {
+      "output_directory": "../xiri/.work/octane-entry-20261115-r2-repeat",
+      "status": "passed",
+      "elapsed_seconds": 37.79,
+      "result_sha256": "cb77e69a5630297194a7478201c9fc683335e6073152e1e1b9ef8f1a09cfef62",
+      "serial_sha256": "c563d071615ada0ebebc0e34535a58f576c723d9fd7f1615de8d4eb9b43f1098",
+      "checkpoint_serial_identical": true
+    }
+  },
+  "regressions": {
+    "o2_single_user": {
+      "output_directory": "../xiri/.work/octane-o2-regression-20261115-r2",
+      "image": "../xiri/.work/netbsd-octane-build/tftp/netbsd-XIRI_O2",
+      "image_sha256": "fb85be1c5f2e83872bf082003391c059834867c2e3096927dafcdc23dbdcbe05",
+      "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine o2 --image ../xiri/.work/netbsd-octane-build/tftp/netbsd-XIRI_O2 --nvram ../xiri/.work/donors/irix-6.5.30f-original-media/nvram.bin --disk ../xiri/.work/images/xiri-netbsd-desktop-20261114-controls/netbsd-xiri.chd --expect 'Enter pathname of shell' --single-user --timeout 300 --output ../xiri/.work/octane-o2-regression-20261115-r2",
+      "status": "passed",
+      "elapsed_seconds": 84.13,
+      "clean_shutdown": true,
+      "emulator_stopped": true,
+      "originals_unchanged": true,
+      "result_sha256": "f3f2be0540ec6888d6784a8e54a4280d6e86e2bb896be663d9632dbcefbe93e2",
+      "serial_sha256": "1ab90522adaa1bc4eb2e299bbe5ccbc4a3b3c60fe515491b58d0b6303b957faf",
+      "observed": [
+        "Rebuilt XIRI_O2 from this source still attaches both AIC-7880 controllers",
+        "sd0 discovered and FFS root mounted read-only",
+        "Native uname and mount commands succeed",
+        "Clean halt to PROM"
+      ],
+      "nvram_sha256": "7be8898587b0c45a8de4bbe7fd392c30329f000d32eea5de4f32af94134493b2",
+      "disk_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "build_log_sha256": "d56b46f27e8803ee040e8e3ef909377efce910a7b5cdb80dadfd505652089f0a"
+    },
+    "indy64_single_user": {
+      "output_directory": "../xiri/.work/octane-indy64-regression-20261115-r2",
+      "config": "../xiri/lab/netbsd64/XIRI_INDY64",
+      "image": "../xiri/.work/netbsd-octane-build/tftp-indy/netbsd-XIRI_INDY",
+      "image_sha256": "d0efc9abc4fb6a37d19cc054e0b4d766ccf3e1e5ff8cac272cddbe901bdd06b9",
+      "status": "passed",
+      "elapsed_seconds": 89.51,
+      "clean_shutdown": true,
+      "result_sha256": "a80030fd3d0c8340c0726bf549b55864f188a8e43396df344f60ab952442cf34",
+      "serial_sha256": "141267fafa0049ee4d1eb6709554de78c00350cf92851004012714e5d12a3544",
+      "observed": [
+        "Rebuilt XIRI_INDY64 boots the installed NetBSD o32 userland over TFTP",
+        "Cold boot reaches the native login prompt and root shell",
+        "uname identifies XIRI_INDY64_20261030 and mount shows /dev/sd0a FFS",
+        "shutdown -h runs hooks and returns to the PROM"
+      ],
+      "disk_sha256": "269038c7b77660c83d3835208fc0b2702c93110c14b3c55a42416f51672cee2a",
+      "nvram_sha256": "ee883474d52f09278287b2044f7aeca61d2e7bc39c0bb8fd85c983ab64063d15",
+      "build_log_sha256": "0e6e2ec5e5f7382eada49959cc3e1bd50d836fd7a2fa71f8158f1e48630256d6",
+      "note": "The GENERIC64_IP2x configuration itself still fails to compile haud.c because that driver asserts 4 KiB pages; the lab's existing XIRI_INDY64 exclusion of haud is retained.  This is pre-existing and unrelated to the Octane changes."
+    }
+  },
+  "classification": "kernel-entry checkpoint, emulator-validated",
+  "not_proven": [
+    "Physical Octane hardware",
+    "JIT operation",
+    "Native exception/TLB takeover, pmap, interrupts or timekeeping",
+    "Native IOC3 serial handoff",
+    "XIO/Bridge/PCI, storage, networking",
+    "Multi-user login"
+  ],
+  "next_milestone": "M2: XKPHYS-aware memory bootstrap, low-alias exception vectors, HEART interrupt/timer attachment, cached-CCA reconciliation, and removal of the remaining KSEG0-only address conversions before autoconfiguration."
+}

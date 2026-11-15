@@ -1,0 +1,226 @@
+SGI Octane / IP30: entry, firmware and address design
+======================================================
+
+Status: M1 design, derived from the retained IRIS firmware runs and a source
+audit at NetBSD 93a258077244ea6e6a1a43a9d2e8b8fa41aa6555 plus the handover
+commit.  This is an entry-proof design, not a completed bootstrap.  Every
+claim below is either observed in the retained Octane run, stated by the
+IRIS IP30 model documentation, or marked as a source-audit task for M2.
+
+Evidence used
+-------------
+
+* The retained ARCS64 diagnostic run: SPB at 0xffffffffa0001000, signature
+  0x53435241, length 0x90, vector pointer 0xa800000000001800, vector length
+  covering service 30, one R10000, 512 MiB and 0x20000 4-KiB pages.
+* IRIS docs/octane-ip30-address-map.md: IRIX's IP30 kernel lives in XKPHYS at
+  0xa800000020010000 (physical 0x20010000); only the first 512 MiB is reachable
+  through KSEG0/KSEG1 and that window holds no Octane RAM.
+* IRIS src/dev/heart_mem.rs: physical 0..0x3fff aliases the first 16 KiB of
+  SDRAM; physical 0x20000000..0x20003fff is a bus error; RAM is reachable at
+  0x20004000 and above.
+* NetBSD source audit listed under "Audit results".
+
+Firmware ABI decision
+---------------------
+
+ARCS64 is a distinct interface and must not be fed through the existing
+32-bit structures or the o32 call bridge.
+
+Observed/required layouts (no host-layout inference):
+
+  arcbios_spb (existing, 32-bit)     ARCS64 SPB (retained Octane)
+  -----------------------------      ----------------------------
+  uint32 signature                    uint64 signature         @ 0
+  uint32 length                       uint64 length            @ 8
+  uint16 version                      uint16 version           @ 16
+  uint16 revision                     uint16 revision          @ 18
+  int32 restart/debug/...             uint64 restart/debug/
+                                             exception/utlb    @ 24..55
+  uint32 vector length                uint64 vector length     @ 56
+  int32 vector                        uint64 *vector           @ 64
+
+  struct arcbios_mem (existing)      ARCS64 memory descriptor
+  -----------------------------      -------------------------
+  uint32 type                         uint32 type              @ 0
+  uint32 base page                    (4 bytes padding)        @ 4
+  uint32 page count                   uint64 base_page         @ 8
+                                      uint64 page_count        @ 16
+
+Service numbers are shared.  ARCS64 vector entries are 64-bit function
+pointers and the calls use the N64 ABI.  The retained run validated
+GetMemoryDescriptor (18), Write (27) and GetEnvironmentVariable (30).
+EnterInteractiveMode is index 7 in the same vector.
+
+NetBSD today
+------------
+
+* sys/dev/arcbios/arcbios.h defines only the 32-bit SPB, component and
+  memory descriptor.
+* sys/dev/arcbios/arcbios_calls.S fetches vector entries with INT_L and,
+  for LP64 sgimips, translates arguments/stack to low KSEG0 aliases and an
+  o32 call frame.  That bridge assumes 32-bit firmware vectors and cannot
+  represent the Octane RAM or XKPHYS pointers.
+* sys/arch/sgimips/sgimips/machdep.c takes a 32-bit argv and jumps directly
+  into arcbios_init(), which parses the 32-bit SPB.  It would misread an
+  ARCS64 SPB.
+
+M1 uses a dedicated early path: it validates and calls the ARCS64 vector
+directly before any existing ARCS32 code runs.  The general ARCS64
+component-tree, console and reboot interfaces are M2/M3 work; the existing
+O2/Indy path is untouched.
+
+Kernel address model
+--------------------
+
+Decision: a full-width direct XKPHYS cached kernel, no -msym32.
+
+  TEXTADDR / ELF p_vaddr   0xa800000020010000
+  physical base            0x0000000020010000
+  CCA                      5 (cacheable coherent, write-back,
+                            exclusive-on-write)
+
+Reasons:
+
+* KSEG0 and KSEG1 cover only physical 0..0x1fffffff.  Octane RAM begins at
+  physical 0x20000000, so neither segment can directly map kernel RAM.
+* -msym32 tells the compiler and assembler that every symbol fits in a
+  sign-extended 32-bit value.  XKPHYS addresses do not fit, so the IP30
+  kernel is built with -mabi=64 and no -msym32.  GAS then emits full 64-bit
+  absolute sequences for PTR_LA, `la`, and absolute load/store macros.
+* NetBSD's LP64 pmap already understands XKPHYS: pmap_md_map_ephemeral_page,
+  pmap_md_direct_mapped_vaddr_p, pmap_md_pool_phystov and
+  mips_init_msgbuf have XKPHYS cases.
+* IRIX's own IP30 kernel uses the same address family.  We start at physical
+  0x20010000 rather than IRIX's 0x20004000 so the ELF PT_LOAD segment's
+  64-KiB alignment does not extend back over the 0x20000000..0x20003fff
+  bus-error guard.
+* 0xa800000020010000 encodes CCA 5, not CCA 2.  CCA 2 is uncached; CCA 5 is
+  cacheable coherent write-back exclusive-on-write.  M2 must reconcile this
+  entry alias with mips_options.mips3_xkphys_cached, which defaults to
+  MIPS_PHYS_TO_XKPHYS(3,0) (0x9800...) for this CPU because the R10000 entry
+  has no special CCA flag in this tree.  Cache and pmap code must either use
+  the aligned CCA or the address model must be changed coherently.
+
+KSEG0/KSEG1 remain valid for the first 512 MiB of physical space.  On the
+Octane that is the 16-KiB low alias, HEART's PIU registers, the widget short
+windows and the boot flash.  In particular the firmware SPB is reached
+through the KSEG1 low alias at 0xffffffffa0001000 (physical 0x1000), exactly
+as the retained diagnostic does.
+
+Entry, stack and BSS
+--------------------
+
+Kernel ELF entry remains locore.S:`start`, now at an XKPHYS address.  For
+XIRI_IP30 only, before the generic entry logic:
+
+1. Clear .bss from __bss_start to _end.
+2. Set sp to the top of xiri_ip30_bootstack, a 16-KiB array reserved in .bss.
+3. Skip locore.S's PROM-stack heuristic, which would otherwise replace sp
+   with start - CALLFRAME_SIZ.
+
+`start` then performs its normal CP0 setup (interrupts off, KX/UX enabled),
+records PRID/FPUID, sets curlwp and calls mach_init().  mach_init's first
+IP30 action is xiri_ip30_early(), before bootinfo or ARCS32 parsing.
+
+xiri_ip30_early() deliberately ends in a nop/branch spin loop after its success marker.
+It does not install exception vectors, enable interrupts, create a pmap,
+enter autoconfiguration or claim any device.  It is an entry proof, not a
+booted kernel.
+
+Memory and vector reservations (to enforce through M2)
+------------------------------------------------------
+
+The retained 512-MiB descriptor order was:
+
+  ExceptionBlock      0x00000000..0x00000fff  (low SDRAM alias)
+  SystemParameterBlock 0x00001000..0x00001fff
+  FirmwarePermanent   0x00002000..0x00003fff
+  FreeMemory          0x20004000..0x2007ffff  (diagnostic run)
+  LoadedProgram       diagnostic image
+  FreeMemory          rest, with a FirmwareTemporary hole
+  FirmwareTemporary   0x20f00000..0x20ffffff in the retained run
+  FreeMemory          to 0x3fffffff
+
+Rules for the kernel:
+
+* Reserve the low 16-KiB alias for the exception block, SPB and permanent
+  firmware data.  The low exception vectors can still be written through
+  KSEG0(0), because that is the same low alias.
+* Exclude physical 0x20000000..0x20003fff even though HEART's descriptors
+  describe it: CPU accesses there are bus errors on this board.
+* Honor descriptor types rather than total size.  LoadedProgram covers the
+  kernel image; FirmwareTemporary/Permanent and SystemParameterBlock are not
+  free RAM.  BadMemory must stay excluded.
+* Fix the KSEG0 assumptions before enabling allocation:
+  - mips_page_physload() converts vkernstart/vkernend with
+    MIPS_KSEG0_TO_PHYS(), which is wrong for XKPHYS kernel text.
+  - Several cache and pmap paths build KSEG0 addresses from physical
+    addresses; they are only valid for physical below 512 MiB.  PMAP's
+    LP64 XKPHYS cases must be used instead.
+  - The .stub tlb_update_addr and exception stubs that use explicit
+    lui/%hi/%lo on kernel symbols need PTR_LA-style full-width sequences.
+  - arcbios 32-bit calls must never run against the ARCS64 vector.
+
+HEART, vectors and timekeeping are M2 work.  The relevant routing summary
+from the IRIS address-map document is retained in the handover: HEART has
+64 interrupt vectors in five processor interrupt groups, the timer raises
+vector 50, and widget packets target HEART's ISR at widget-8 offset 0x80.
+
+M1 acceptance artifact
+----------------------
+
+The boot prints:
+
+  XIRI_IP30_KERNEL_ENTRY
+  kernel.text / kernel.entry
+  kernel.sp and CP0 Status/PRID
+  kernel.bss start/end, a zero BSS witness, and the boot-stack base/top
+  arcs64 length/version/revision/vector
+  memory descriptor count, total pages and reserved/free-pages summary
+  XIRI_IP30_KERNEL_ENTRY_OK
+
+The probe then stops the emulator and records registers, CP0 and memory.
+It enforces the checkpoint: kernel.entry must equal the image ELF e_entry,
+kernel.sp must lie inside [kernel.stack.base, kernel.stack.top), and the BSS
+witness must be zero.  A successful run must also show
+emulator_stopped=true and originals_unchanged=true.  The image hash and ELF
+headers must identify the NetBSD kernel, not
+xiri/platforms/ip30/arcs64-probe.
+
+Audit results and M2 blockers
+-----------------------------
+
+* sys/arch/mips/conf/Makefile.mips force-adds -msym32 for all LP64 MIPS
+  kernels.  XIRI_IP30 selects MIPS_SYM32=no; the ELF32 wrapper is disabled
+  because it cannot represent the kernel address.
+* sys/arch/mips/mips/locore.S: generic initial stack heuristic is skipped;
+  BSS is cleared only for XIRI_IP30.  Other ports keep their behavior.
+* sys/arch/sgimips/sgimips/machdep.c: entry hook runs before ARCS32 use.
+  Remaining mach_init code (bootinfo, argv, ARCS memory, makebootdev,
+  pmap_bootstrap, lwp0 uarea) is not executed in M1 and is not yet
+  ARCS64-correct.
+* sys/arch/mips/mips/mips_machdep.c: mips_page_physload assumes KSEG0;
+  mips_init_msgbuf already has an LP64 XKPHYS path.  Exception vector setup
+  and per-CPU uarea setup still need an address-model audit.
+* sys/arch/mips/mips/mipsX_subr.S: explicit lui %hi/%lo kernel references
+  truncate XKPHYS addresses in exception/TLB paths.
+* The kernel entry alias uses CCA 5 while the LP64 default cached XKPHYS
+  alias is CCA 3.  Establish one cached kernel CCA before enabling cache
+  maintenance or pmap ephemeral mappings, and test cache operations at the
+  chosen alias.
+* sys/arch/sgimips/sgimips/mainbus.c: passes MIPS_PHYS_TO_KSEG1(addr) to
+  children; that is acceptable only for low (<512 MiB) physical devices,
+  not RAM or wide XIO windows.  Bridge/XIO mapping is M3 work.
+* sys/dev/arcbios: keep the 32-bit path for Indy/O2; add a separate ARCS64
+  implementation (components, environment, console, reboot) when M2/M3
+  needs more than the early calls.
+
+Regression obligations
+----------------------
+
+Any change to locore.S, Makefile.mips or shared MIPS/pmap code requires
+building and booting the existing Indy and O2 configurations in addition
+to the XIRI_IP30 checkpoint.  Do not repin the qualified O2 kernel, emulator
+or disks.  Use separate build directories and sequential builds (maximum
+two jobs).

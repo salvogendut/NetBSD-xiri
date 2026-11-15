@@ -42,6 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 #include "opt_cputype.h"
 #include "opt_mips_cache.h"
 #include "opt_modular.h"
+#include "opt_xiri_ip30.h"
 
 #define __INTR_PRIVATE
 
@@ -76,6 +77,9 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 #include <machine/machtype.h>
 #include <machine/sysconf.h>
 #include <machine/bootinfo.h>
+#ifdef XIRI_IP30
+#include <machine/xiri_ip30.h>
+#endif
 
 #include <mips/cache.h>
 #include <mips/cache_r5k.h>
@@ -251,15 +255,27 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 #endif /* NKSYMS || defined(DDB) || defined(MODULAR) */
 #ifdef _LP64
 	char *argv[20];
+#else
+	char **argv = (void *)argv32;
+#endif
 
+#ifdef XIRI_IP30
+	/*
+	 * The Octane firmware uses ARCS64, not the 32-bit interface below.
+	 * Prove entry and firmware access before the legacy argv conversion
+	 * or argument-count check.  This deliberately stops at an entry
+	 * checkpoint.
+	 */
+	xiri_ip30_early();
+#endif
+
+#ifdef _LP64
 	if (argc >= __arraycount(argv))
 		panic("too many args");
 
 	for (i = 0; i < argc; i++) {
 		argv[i] = (void *)(intptr_t)argv32[i];
 	}
-#else
-	char **argv = (void *)argv32;
 #endif
 
 	/*
