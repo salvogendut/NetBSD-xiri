@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3c1",
+  "status": "passed-native-com-tty-attachment",
+  "scope": "XIRI_IP30_M3C1 attaches IOC3 UART A through com(4), keeps the polled com console for early boot, creates the native tty, and sets cn_dev to the com device for /dev/console. A HEART post-test hook routes SuperIO on Bridge pin 4 to HEART vector 16 and installs comintr. Userland tty open, interrupt-driven transmit, storage and physical hardware are not proven.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "97e5e1ac62ab20527db59546b12414beba9454f1",
+  "source_status": [
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3C1",
+    "?? sys/arch/sgimips/dev/ioc3_com.c",
+    "?? xiri/platforms/ip30/2026-11-15-m3c1-com-tty.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/conf/files.sgimips": "8e39fbe5a205efd3ab0ade4a8544992066a978011e9a020031752b6c0b2d3585",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3C1": "79a3f8bee4e92e2d7bedffbd500520b6f55d4263fbb5e8c4e61d9781def4ee7f",
+    "sys/arch/sgimips/dev/ioc3_com.c": "7eb360becf4ec0d7f61caa0ffd61e271f9dc14bb298315d57417a19716597a95",
+    "xiri/platforms/probe.py": "6195f216f29bbc1b31c930503dfd3a0cbef6895bea61a01b155cc7ca7809ce41",
+    "xiri/platforms/README": "faf257d8e976a5ce3d1e072a4f432392b2a8152326e527a699696748758b838d",
+    "xiri/platforms/ip30/DESIGN": "ff00f2fc10fafcdde4d83c33d19e4b1efc8f88930dd3c177b5a6d8dc6e4dfcfc",
+    "xiri/platforms/ip30/HANDOVER": "0442866a9d0c8361619dd41a52a0cdd49aeeaef7bec9ad08ab9a34b6662c69af"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3C1",
+    "attachment": "com0 at mainbus0 addr 0x1f620178 through the sgimips ioc3_com attachment",
+    "console": "comcnattach1 maps IOC3 UART A, derives the baud reference from the SuperIO predivider, and installs comcons as cn_tab for polled early output",
+    "tty": "com_attach_subr creates the tty; COM_HW_CONSOLE makes com set cn_tab->cn_dev to makedev(com major, unit)",
+    "observed_tty": {
+      "major": 36,
+      "unit": 0,
+      "cn_dev": "0x2400",
+      "cdevsw": "com_cdevsw",
+      "uart": "ns16650, no ERS, 16-byte FIFO"
+    },
+    "ordering": "mainbus probes com0 before heart0 and xbridge0; interrupt routing is deferred to heart_set_post_test() after the M2b checks and xbridge attach",
+    "routing": {
+      "source": "IOC3 SuperIO",
+      "bridge_pin": 4,
+      "heart_vector": 16,
+      "handler": "comintr at IPL_VM",
+      "ioc3_enable": "SERIAL_A (1 << 6)",
+      "bridge_enable": "pin 4 after the handler is established"
+    },
+    "markers": [
+      "com0: console",
+      "XIRI_IP30_M3C1_UART_OK lcr=0x3 predivider=6 frequency=7372800 divisor=48 rate=9600",
+      "XIRI_IP30_M3C1_TTY_OK major=36 unit=0 cn_dev=0x2400",
+      "XIRI_IP30_M3C1_IRQ_OK pin=4 vector=16",
+      "XIRI_IP30_M3C1_READY tty=com major=36 unit=0"
+    ],
+    "failure_markers": [
+      "XIRI_IP30_M3C1_FAILED uart_map",
+      "XIRI_IP30_M3C1_FAILED console",
+      "XIRI_IP30_M3C1_FAILED console_handle",
+      "XIRI_IP30_M3C1_FAILED attach",
+      "XIRI_IP30_M3C1_FAILED window_map",
+      "XIRI_IP30_M3C1_FAILED cn_dev",
+      "XIRI_IP30_M3C1_FAILED tty_dev",
+      "XIRI_IP30_M3C1_FAILED route",
+      "XIRI_IP30_M3C1_FAILED establish",
+      "XIRI_IP30_M3C1_FAILED enable",
+      "XIRI_IP30_M3C1_FAILED bridge",
+      "XIRI_IP30_M3C1_FAILED lcr",
+      "XIRI_IP30_M3C1_FAILED lcr_clock",
+      "XIRI_IP30_M3C1_FAILED divisor"
+    ],
+    "uart_clock": {
+      "lcr": "0x3",
+      "lcr_preserved": true,
+      "predivider": 6,
+      "frequency_hz": 7372800,
+      "rate": 9600,
+      "divisor": 48,
+      "raw_offsets": "com_lcr=3, com_scratch=7, com_dlbl=0, com_dlbh=1",
+      "disassembly": "ioc3_com_uart_info uses offsets 3, 7, 0 and 1; not COM_REG_LCR=10"
+    }
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3C1",
+    "netbsd_sha256": "2f4614c53c799a481027ce37c0307927c525205a47e538226fa07349cd8d3d7e",
+    "netbsd_gdb_sha256": "dd988151efb9e724ea1aa5813362c6f4457fe208c722a070034a4bdec3f8bbbe",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M3C1-build-final.log",
+    "build_log_sha256": "5c4a0a9bd86422af42fcdff0c451e82567fdc1e501af02e10837f24a82d0b487"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3c1-com-final",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3C1/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3C1_READY --console-input xiri_m3c1 --kernel-entry --timeout 90 --output ../xiri/.work/octane-m3c1-com-final",
+    "expected_marker": "XIRI_IP30_M3C1_READY",
+    "status": "passed",
+    "elapsed_seconds": 38.7,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "console_input": "xiri_m3c1",
+    "console_echo": true,
+    "console_reply": "use one of: halt reboot",
+    "result_sha256": "b76a77f092de2bfac6da625e13ea4cd3bedc21c8f13d80ca3916507b11ebe69a",
+    "serial_sha256": "02df22d49e6e5ec25b415c91ae0f616be2c4c650882eb1b0d228afb138ee4e36",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203f46f0",
+      "bss_start": "0xa8000000203f0490",
+      "bss_end": "0xa800000020409d80",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203f0860",
+      "stack_top": "0xa8000000203f4860"
+    },
+    "observations": [
+      "UART clock probe used physical LCR/scratch offsets, preserved LCR, and read predivider 6, frequency 7372800 Hz and divisor 48 at 9600 baud",
+      "com0 attached as ns16650 with a 16-byte FIFO and became the console",
+      "cn_dev is com major 36 unit 0 (0x2400) and cdevsw_lookup returned com_cdevsw",
+      "tty t_dev matches cn_dev",
+      "M2B HEART clock and interrupt-delivery markers passed",
+      "SuperIO routed through Bridge pin 4 to HEART vector 16 and comintr installed",
+      "Bridge error bits remained zero",
+      "external input xiri_m3c1 echoed at root device: and produced the halt/reboot rejection prompt"
+    ],
+    "inputs": {
+      "netbsd": "2f4614c53c799a481027ce37c0307927c525205a47e538226fa07349cd8d3d7e",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30_M3A": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "54957d69cb39b4f3ade82a5edcce381037a8d0d773e9e857b1317537cae77ccc",
+        "build_log_sha256": "525e7c23f7854a26bebb7087c84e3a0f32af49daed4925b5686024c578ea9295"
+      },
+      "XIRI_IP30_M3B": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "dce352ddef934374f743425d79678edd4a6523029d3fb8a9084ce3c5ffdad2df",
+        "build_log_sha256": "dac5eebd16b89f9f9cdc0b623ba0322f9e48e93a0bb6a16edabd612f9a3380db"
+      },
+      "XIRI_IP30_M3B2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "98dd5a41fbbb12e3a4fa0114ad83ff2a48cc33d8b16680b11d64f82c5de8dc43",
+        "build_log_sha256": "89eeb7829f19daa12245da7746fae9043412031cc7d105f81ffcb5625e62e02a"
+      },
+      "XIRI_IP30_M3B3": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "b24835b1932f156e1b8a51f142c5876407c132a23da7c562e2526a851824778b",
+        "build_log_sha256": "ef7f0f1d39c11e095f9ed6a671b2c971db296d0c60da089108b744182fb5d632"
+      },
+      "XIRI_O2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "89c732c3942fd8f6c5a8e8457ec24d44edc88b9f1caabdd0094c96bdcf8d3c65",
+        "build_log_sha256": "81aeca67d686b33e42c624ad47e259b5f99e009f5c08ae2af200ae994828ca2c"
+      },
+      "XIRI_INDY64": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "bd6abbdc27a2fabdc9d0f5894c36a51a4ad43f06f048aabb9f4858fa0b0bf09e",
+        "build_log_sha256": "d064ddfce3982198933e3299ce1365ea10bac6ea7f78f5f5a895e8abb0023ec8"
+      }
+    },
+    "m3b3_guest": {
+      "output_directory": "../xiri/.work/octane-m3b3-regression-20261115",
+      "status": "passed",
+      "elapsed_seconds": 39.14,
+      "expected_marker": "XIRI_IP30_M3B3_SERIAL_OK",
+      "result_sha256": "1f1d85c7e986d944e35750c9e417417ce354e4fa2b5019f85f3bfd8189624666",
+      "serial_sha256": "b5ebb401339dab6c563d1875bb89d9fece1543a7a79a889b66f20de65d102359"
+    },
+    "latest_guest_runs": "M1/O2/Indy64 latest native guest runs remain the M2b-fix baselines; M3a, M3b1, M3b2, M3b3 and M3c1 runs are recorded in their respective manifests."
+  },
+  "not_proven": [
+    "Userland open of /dev/console and the com tty",
+    "Interrupt-driven transmit and active tty RX/TX",
+    "Bridge DMA and QLogic storage",
+    "IOC3 RTC, Ethernet and input devices",
+    "Cache-error delivery",
+    "Physical Octane hardware",
+    "Full root boot and multi-user login"
+  ],
+  "next_milestone": "Add Bridge DMA and the QLogic ISP1040 storage path so a root file system can be mounted, then open /dev/console and reach login."
+}

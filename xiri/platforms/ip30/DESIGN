@@ -458,6 +458,39 @@ Not implemented here: Bridge DMA, QLogic storage, IOC3 RTC/Ethernet/input
 and generic PCI interrupt mapping.  Physical hardware and full root boot
 remain unproven.
 
+M3c1 native com/tty checkpoint (2026-11-15)
+-------------------------------------------
+
+XIRI_IP30_M3C1 includes XIRI_IP30_M3B and adds
+`com0 at mainbus0 addr 0x1f620178`.  The sgimips `ioc3_com` attachment
+drives the IOC3 SuperIO UART A through the standard `com(4)` tty driver:
+
+* `comcnattach1` maps the UART, derives the baud reference from the
+  IOC3 predivider (22.1184 MHz divided by predivider/2, with the 1.8432 MHz
+  16x default when unset), and installs `comcons` as `cn_tab` for polled
+  early output;
+* the clock probe uses the physical `com_lcr` (3) and `com_scratch` (7)
+  offsets, saves and restores LCR, and verifies the divisor after attach.
+  The retained run reports lcr 0x3, predivider 6, frequency 7372800 Hz,
+  divisor 48 at 9600 baud;
+* the standard `com_attach_subr` creates the tty and, because this is the
+  console, sets `cn_tab->cn_dev` to the com major/unit.  The checkpoint
+  observes major 36, unit 0, `cn_dev` 0x2400, and verifies
+  `cdevsw_lookup(cn_dev) == &com_cdevsw` and the tty's `t_dev`;
+* mainbus attaches `com0` before HEART and xbridge in this config
+  (alphabetical probe order), so interrupt routing is deferred to a HEART
+  post-test hook that runs after the M2b clock/interrupt checks and after
+  xbridge is attached;
+* that hook routes IOC3 SuperIO on Bridge pin 4 to HEART vector 16,
+  installs `comintr` at IPL_VM, enables IOC3 `SERIAL_A`, enables the Bridge
+  pin, and requires no Bridge error bits.
+
+The console remains polled through `comcngetc`/`comcnputc`; the tty's
+normal `comparam` path will enable receive and transmit interrupts when a
+userland process opens the port.  This checkpoint does not open the tty
+because there is still no root file system or `/dev` instance.  Interrupt
+driven transmit and the userspace tty path therefore remain unproven.
+
 Regression obligations
 ----------------------
 

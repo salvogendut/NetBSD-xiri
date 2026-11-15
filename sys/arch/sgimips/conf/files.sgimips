@@ -72,3 +72,6 @@ include "dev/bluetooth/files.bluetooth"
 include "dev/ieee1394/files.ieee1394"
 
 include "arch/sgimips/conf/majors.sgimips"
+
+attach	com at mainbus with ioc3_com
+file	arch/sgimips/dev/ioc3_com.c		ioc3_com

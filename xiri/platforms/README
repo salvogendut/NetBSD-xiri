@@ -129,8 +129,18 @@ drain, the polled fallback and no interrupt storm.  External input at the
 root-device prompt echoes and is rejected.  Bridge error status stays zero.
 Evidence is in ip30/2026-11-15-m3b3-ioc3-intr.json.
 
+M3c1 native IOC3 com/tty (2026-11-15): XIRI_IP30_M3C1 attaches
+`com0 at mainbus0 addr 0x1f620178`.  `comcnattach1` makes UART A the polled
+console, and the standard `com` attach creates the tty and points
+`cn_tab->cn_dev` at com major 36 unit 0 (`0x2400`), ready for
+`/dev/console`.  A HEART post-test hook then routes SuperIO on Bridge
+input 4 to HEART vector 16 and installs `comintr`.  Console input/output
+still works polled at the root-device prompt; a root file system and tty
+open are still required to reach login.  Evidence is in
+ip30/2026-11-15-m3c1-com-tty.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1 checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

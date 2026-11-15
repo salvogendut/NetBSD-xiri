@@ -690,3 +690,62 @@ generic PCI interrupt mapping.  Physical hardware, cache-error delivery and
 full root boot remain unproven.
 
 Next: leave serial as-is and add the Bridge DMA/QLogic storage path.
+
+
+M3c1 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3C1 includes XIRI_IP30_M3B and adds
+`com0 at mainbus0 addr 0x1f620178`.  A new sgimips com attachment
+(ioc3_com.c) uses the standard com(4) driver for IOC3 UART A:
+
+* comcnattach1 maps UART A at physical 0x1f620178 and installs the polled
+  com console as cn_tab.  The baud reference is derived from the IOC3
+  scratch predivider (22.1184 MHz / (predivider / 2), or the 1.8432 MHz
+  16x default), with 9600 baud as the initial line rate;
+* com_attach_subr creates the tty and, as this is the console, sets
+  cn_tab->cn_dev to makedev(com major, unit).  The run reports
+  XIRI_IP30_M3C1_TTY_OK major=36 unit=0 cn_dev=0x2400 after verifying the
+  cdevsw, minor number and tty t_dev;
+* mainbus probes com0 before heart0 and xbridge0, so the driver installs a
+  heart_set_post_test() hook instead of routing at attach.  The hook runs
+  after the M2b clock and interrupt-delivery checks, calls
+  xbridge_intr_route(4, 16), establishes comintr at IPL_VM,
+  enables IOC3 SERIAL_A and Bridge pin 4, then checks for Bridge errors;
+* the console remains polled for early boot and debugging.  The tty's
+  comparam path owns RX/TX interrupt enable once a userland process opens
+  the port.
+
+The UART probe uses physical com_lcr (3) and com_scratch (7), restores LCR,
+and checks the programmed divisor after com_attach_subr.  The built kernel's
+ioc3_com_uart_info disassembly carries register offsets 3, 7, 0 and 1, not
+the com(4) logical indices.
+
+Observed on the retained run:
+
+  com0 at mainbus0 addr 0x1f620178: ns16650, no ERS, 16-byte FIFO
+  com0: console
+  XIRI_IP30_M3C1_UART_OK lcr=0x3 predivider=6 frequency=7372800 divisor=48 rate=9600
+  XIRI_IP30_M3C1_TTY_OK major=36 unit=0 cn_dev=0x2400
+  XIRI_IP30_M2B_HEART_OK
+  XIRI_IP30_M2B_CLOCK_OK ...
+  XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1
+  XIRI_IP30_M3C1_IRQ_OK pin=4 vector=16
+  XIRI_IP30_M3C1_READY tty=com major=36 unit=0
+  boot device: <unknown>
+  root device: xiri_m3c1
+  use one of: halt reboot
+  root device:
+
+The typed console input echoed and was rejected by the no-root-storage
+prompt, so polled com input and output work.  XIRI_IP30_M3A, M3B, M3B2 and
+M3B3 rebuilt; the M3b3 guest still passed.  XIRI_O2 and XIRI_INDY64 rebuilt;
+they were not booted.  Evidence and hashes are in
+ip30/2026-11-15-m3c1-com-tty.json.
+
+Not implemented: opening the com tty from userland, interrupt-driven
+transmit, Bridge DMA/QLogic storage, IOC3 RTC/Ethernet/input and physical
+Octane validation.  Full root boot and login remain unproven.
+
+Next: add Bridge DMA and the QLogic ISP1040 storage path so a root file
+system can be mounted, then open /dev/console and reach the login prompt.
