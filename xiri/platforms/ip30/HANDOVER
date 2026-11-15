@@ -501,3 +501,35 @@ cleanly.
 
 Next: add HEART mask/pending/acknowledge and the clock/timecounter, then
 proceed to autoconfiguration and XIO/Bridge.
+
+
+M2b checkpoint update (2026-11-15)
+-----------------------------------
+
+XIRI_IP30_M2B continues past M2a into main() and autoconfiguration.
+
+* heart0 attaches at mainbus addr 0x0ff00000.  Its driver owns the 64-bit
+  HEART ISR/IMR set, maps ISR bits 0-15/16-31/32-49/50/51-63 to CPU
+  IP2..IP6, installs platform.intr_establish and masks/clears all vectors.
+* XIRI_IP30 uses a dedicated IPL map that masks IP2..IP6 at IPL_VM and
+  above; heart_intr_establish accepts vectors 0..63 at IPL_VM only.
+  heart_bus_reset() is a no-op so autoconfiguration cannot erase attached
+  device masks.  Event-counter names are persistent per handler.
+* The attach self-test verifies set, masked-pending, unmask and clear
+  semantics and prints XIRI_IP30_M2B_HEART_OK.
+* consinit() keeps the ARCS64 console on IP30 until IOC3 is implemented.
+* mips3_initclocks() supplies CP0 Count/Compare hardclock and the
+  mips3 timecounter.  A five-tick callout prints
+  XIRI_IP30_M2B_CLOCK_OK heart_delta=0xb3cee clockints=5 ticks=5, gated on
+  the HEART self-test.  It then installs a HEART vector-0 handler at
+  IPL_VM, verifies splvm() defers the pending ISR bit, and observes
+  delivery after splx: XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1.
+  Explicit HEART/CLOCK/INTR failure markers fail the probe.
+* The boot reaches `boot device: <unknown>` / `root device:` with no root
+  storage configured.  That is a checkpoint, not a full boot.
+* M1, O2 single-user and Indy64 single-user regressions still pass.
+
+Still unproven: cache-error delivery, physical hardware, IOC3 serial,
+XIO/Bridge/PCI, storage, root mount, networking and multi-user login.
+Next: native IOC3 serial and the M3 bus/PCI path; cache-error injection
+remains explicitly deferred.

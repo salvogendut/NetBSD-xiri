@@ -276,6 +276,55 @@ Audit results and M2 blockers
   implementation (components, environment, console, reboot) when M2/M3
   needs more than the early calls.
 
+M2b HEART and clock checkpoint (2026-11-15)
+-------------------------------------------
+
+XIRI_IP30_M2B includes XIRI_IP30_M2, removes XIRI_IP30_M2A_STOP and adds
+`heart0 at mainbus0 addr 0x0ff00000`.  It lets mach_init return to main(),
+keeps the ARCS64 console in consinit() and enters autoconfiguration.
+
+Implemented:
+
+* HEART's processor-interface interrupt block: 64 ISR bits, IMR0..3
+  masks (a set bit enables), ISR set/clear/read, IMSR and count registers.
+* Five level dispatchers map ISR bits 0-15, 16-31, 32-49, 50 and 51-63 to
+  CPU IP2..IP6.  The driver installs platform.intr_establish and intr0..4.
+* XIRI_IP30 uses its own IPL map, not the IP32 map: IP2..IP6 are masked at
+  IPL_VM and above, so HEART device sources cannot interrupt VM-protected
+  sections; IP7 remains the CP0 Count/Compare timer.  heart_intr_establish
+  accepts vectors 0..63 at IPL_VM only and rejects other IPLs.
+* heart_bus_reset() is a no-op for now.  Autoconfiguration calls it after
+  devices establish handlers, so it must not clear IMR or ISR state.
+* Event-counter names live in the persistent heart_intrhand array; the
+  driver does not pass stack storage to evcnt_attach_dynamic().
+* Attach masks all vectors, clears stale pending bits and runs a
+  mask/pending/acknowledge self-test through IMR0/ISR/IMSR.  It prints
+  XIRI_IP30_M2B_HEART_OK.
+* The ARCS64 console remains active; IOC3 console handoff is still M3.
+* platform.bus_reset and the watchdog hooks are now non-printing stubs.
+* Clock: sgimips cpu_initclocks selects mips3_initclocks(), which uses the
+  R10000 CP0 Count/Compare for hardclock and mips3_init_tc() for the
+  timecounter.  HEART count at 12.5 MHz is read but not used as the system
+  timecounter.
+* A callout scheduled from heart_attach verifies timer delivery after five
+  ticks and prints
+  XIRI_IP30_M2B_CLOCK_OK heart_delta=0xb3cee clockints=5 ticks=5.  The
+  marker is gated on the HEART self-test; a failure prints
+  XIRI_IP30_M2B_CLOCK_FAILED and the probe rejects it.
+* The callout then installs a HEART vector-0 handler at IPL_VM, raises
+  splvm(), sets ISR bit 0 and verifies delivery is deferred; after splx it
+  observes the handler run and clear the bit.  Success prints
+  XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1.  Explicit INTR/HEART/
+  CLOCK failure markers are treated as probe failures.
+
+Observed boot: entry proof, memory setup, mainbus/cpu0/heart0 attach,
+HEART mask/pending/ack pass, timer callout and interrupt-delivery markers, then
+"boot device: <unknown>" / "root device:" because no root storage is
+configured yet.  That prompt is not a completed boot.
+
+Still unproven: cache-error delivery, physical hardware, root mount,
+IOC3/XIO/Bridge/PCI, storage, networking and multi-user login.
+
 Regression obligations
 ----------------------
 

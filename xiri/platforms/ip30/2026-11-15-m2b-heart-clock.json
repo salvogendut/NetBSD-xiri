@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M2b",
+  "status": "passed-heart-clock-interrupt-checkpoint",
+  "scope": "XIRI_IP30_M2B continues past M2a into main() and autoconfiguration, attaches HEART, verifies mask/pending/acknowledge, uses an IP30 IPL map, verifies CP0 Count/Compare clock delivery, and exercises a registered HEART handler with masked (deferred) and unmasked delivery at IPL_VM.  It stops at the interrupt checkpoint; no root storage is configured.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "26d639a4d30c2f5a2bd9f60208d4e11ed9406a31",
+  "source_status": [
+    "M sys/arch/sgimips/conf/XIRI_IP30_M2",
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/dev/files.dev",
+    "M sys/arch/sgimips/sgimips/machdep.c",
+    "M sys/arch/sgimips/sgimips/console.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M2B",
+    "?? sys/arch/sgimips/dev/heart.c",
+    "?? sys/arch/sgimips/dev/heartreg.h",
+    "?? xiri/platforms/ip30/2026-11-15-m2b-heart-clock.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/dev/heart.c": "df9ed34f9239651d6e73bd9d1fce2b399e522b389f7c5c130590899d1bb79a2a",
+    "sys/arch/sgimips/dev/heartreg.h": "6cf3ae0b17f29ca1110823c3d881065d0bee0c2ad4aa1aa91d011d7540d84012",
+    "sys/arch/sgimips/dev/files.dev": "a3eb42b7d2cedbe153589d6f426502fea37daf5fc319568235e2d3b6af2d4d42",
+    "sys/arch/sgimips/conf/XIRI_IP30_M2": "3c92c256615a96da91afdd286c49c97f4304e8c58462c5bcb24863f1bf06e031",
+    "sys/arch/sgimips/conf/XIRI_IP30_M2B": "568176b191b020eda1f562e32e5de6f827fc75221bdba98a812729751baa41c3",
+    "sys/arch/sgimips/conf/files.sgimips": "d2681535af2b8ba5258bd3468055dfc9b18267dbb8579ff274b60e6494066855",
+    "sys/arch/sgimips/sgimips/machdep.c": "0d2362b0ec5f27c145624a7befd70e89543039de4b5d0b19193f48c0843114d0",
+    "sys/arch/sgimips/sgimips/console.c": "82c7d9ed65fc6d7c2b1bfcb600a678f34d435f3bd9aec8d355e0982bd0523125",
+    "xiri/platforms/probe.py": "26e75ce800380d1a3ef6cc9f8b57ffa20cd1e76a986fee99bd2db91090eed037",
+    "xiri/platforms/README": "bfcd060940a68db13a99093249400db20ca62559f415a7a3812af34c2c4bd31d",
+    "xiri/platforms/ip30/DESIGN": "ca1c515910e6021dfa2ad2168f462f3c4c9a1b029bbfb694db4bcfbb75f71c5c",
+    "xiri/platforms/ip30/HANDOVER": "cfea93a37a71f25226cf0c6a3b1c386eeb2844164394c34f4713934bdfcf39c2"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M2B",
+    "heart": {
+      "piu_base": "0x0ff00000",
+      "status": "0x18",
+      "vectors": 64,
+      "levels": 5,
+      "level_masks": [
+        "0x000000000000ffff",
+        "0x00000000ffff0000",
+        "0x0003ffff00000000",
+        "0x0004000000000000",
+        "0xfff8000000000000"
+      ],
+      "imr": "set bit enables",
+      "ack": "ISR clear through 0x10028; dispatcher does not clear source-owned bits"
+    },
+    "ipl": {
+      "map": "sgi_ip30_ipl_sr_map",
+      "vm_masked": "IP2..IP6 plus soft interrupts",
+      "sched_masked": "IP2..IP7 plus soft interrupts",
+      "heart_handler_ipl": "IPL_VM only; vectors 0..63 accepted at that IPL, other IPLs rejected"
+    },
+    "bus_reset": "heart_bus_reset() is a no-op so autoconfiguration cannot erase attached masks",
+    "evcnt_names": "persistent heart_intrhand.ih_evname, not stack storage",
+    "console": "consinit() keeps the IP30 ARCS64 console until IOC3",
+    "clock": {
+      "source": "R10000 CP0 Count/Compare",
+      "timecounter": "mips3_init_tc()",
+      "heart_count_hz": 12500000,
+      "checkpoint": "five-tick callout, gated on HEART self-test"
+    },
+    "delivery_test": "vector 0 handler at IPL_VM; splvm defers the ISR bit, splx delivers it, handler clears the ISR bit",
+    "failure_markers": "HEART_FAILED, CLOCK_FAILED and INTR_FAILED fail the probe"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M2B",
+    "netbsd_sha256": "eb57a5ef41012f7b344c59ea79c1c5d1def55189a48e150832a57c54e89df25e",
+    "netbsd_gdb_sha256": "97ebcb8b2e7da9c00e2d517813fa46ce33fa7d8f221a8f82f85e1f7e2db2fc63",
+    "readelf_sha256": "1b967faf7b75d95b69d74889d952a2cea85ace03e2dd80c197e2bf031c78db48",
+    "size_sha256": "bb2e02e8ec0f438e63c63c702295ad32238b2819b57c207364758d7cd5a1bd7a",
+    "entry_symbols_sha256": "0179f2b354cb7419bb0f530b4eb2244445f2e3653e05777fd48bb7c64be34cab",
+    "vectors_sha256": "e118cad19d99051f2e814872a7cea5498cbb890b38891f5649cd927391bb3e0e",
+    "linker_map_sha256": "77a94126add9b3d0e08fc6040c4d80183475a68ce0e937dce3410d061650a82e",
+    "build_log_sha256": "4f62b5e8d3fd8d76282f04981e1531e04eaef5e428c63aa36d43c6de65581653"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m2b-intr-20261115",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M2B/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M2B_INTR_OK --kernel-entry --timeout 90 --output ../xiri/.work/octane-m2b-intr-20261115",
+    "expected_marker": "XIRI_IP30_M2B_INTR_OK",
+    "status": "passed",
+    "elapsed_seconds": 38.48,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "fe7b4370a23324aa9436d93104df1a077c880f74514f408ee6cd17b9c6c41de4",
+    "serial_sha256": "c7314b12e2fdc198a5ea8199644acc262629ad322cf922ce8f4c5be91e9fe1c2",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203be470",
+      "bss_start": "0xa8000000203ba210",
+      "bss_end": "0xa8000000203d3900",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203ba5e0",
+      "stack_top": "0xa8000000203be5e0"
+    },
+    "observations": [
+      "mainbus0, cpu0 and heart0 attached; heart0 status 0x18",
+      "heart0 mask/pending/ack passed; XIRI_IP30_M2B_HEART_OK",
+      "XIRI_IP30_M2B_CLOCK_OK heart_delta=0xb3cee clockints=5 ticks=5",
+      "XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1",
+      "after XIRI_IP30_M2B_INTR_OK, this run also reached boot device: <unknown> / root device: with no root storage"
+    ],
+    "inputs": {
+      "netbsd": "eb57a5ef41012f7b344c59ea79c1c5d1def55189a48e150832a57c54e89df25e",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "m1_entry": {
+      "output_directory": "../xiri/.work/octane-entry-20261115-m2b-fix",
+      "image_sha256": "1c3fda886864d6b7d4b9435ff5d5fa8e0da4ff82ec2eeb6869ab61fc53b7586a",
+      "status": "passed",
+      "elapsed_seconds": 37.83,
+      "result_sha256": "dbc0cabab4192034e0e43ee07b526b181c09752eae3727c1b6f4f491cafb3715",
+      "serial_sha256": "ae42807796e3bb428beb953e6f30da8315c61853088c4b27fa15ac6cefa13101",
+      "build_log_sha256": "a638bfdb8e85aace45c36a32e08a1f1cb44e3b83f7700c5903469029fbe9234b"
+    },
+    "o2_single_user": {
+      "output_directory": "../xiri/.work/octane-o2-regression-20261115-m2b-fix",
+      "image_sha256": "4ce3809e7271652726997c7cfa3192a8b17f094c78aa1b0f6e94a12bef371f40",
+      "status": "passed",
+      "elapsed_seconds": 83.9,
+      "clean_shutdown": true,
+      "result_sha256": "a9c5c352c888fe12c97150f56bb93be29da1da9b24acc91d92c0413a17f3380b",
+      "serial_sha256": "c01242cb332c05c9af506a1a96497833d5c09554350bb7df4d3c194f655bdfd7",
+      "build_log_sha256": "2d26fc20772d8358c61986c69cdd0eb996937311b046e98fef399344d6ca2089"
+    },
+    "indy64_single_user": {
+      "output_directory": "../xiri/.work/octane-indy64-regression-20261115-m2b-fix",
+      "image_sha256": "b5b877f649a6392765066923ce8463e8b0e54ccac413fac9771f6cfec9b564a3",
+      "status": "passed",
+      "elapsed_seconds": 87.23,
+      "clean_shutdown": true,
+      "result_sha256": "974f266e5ea5accc8cb1a1fa2da868cbf695d0b170eaef396636aeefb658e463",
+      "serial_sha256": "f7c0206ea9536603dc850ff7bcee31c66bcd3fc9565dc0e7e5e1fd2c7a6e23db",
+      "build_log_sha256": "ebc2d826511071e5ad3f9993a4b8ab52cb38bf6e9c5527db301f99d181c1dc94"
+    }
+  },
+  "not_proven": [
+    "Cache-error exception delivery",
+    "Physical Octane hardware",
+    "Full Octane boot and root mount",
+    "Native IOC3 serial handoff",
+    "XIO/Bridge/PCI, storage, networking",
+    "Multi-user login"
+  ],
+  "next_milestone": "Native IOC3 serial and the M3 XIO/Bridge/PCI path; cache-error injection remains explicitly deferred."
+}

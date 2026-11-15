@@ -81,8 +81,19 @@ XIRI_IP30_M2_SLOWFAULT_OK, and halts.
 Evidence is in ip30/2026-11-15-m2a-memory.json; the M2 design notes are in
 ip30/DESIGN.
 
+M2b HEART/clock (2026-11-15): XIRI_IP30_M2B continues into
+autoconfiguration, attaches mainbus/cpu0/heart0, masks and clears HEART,
+passes a mask/pending/acknowledge self-test and prints
+XIRI_IP30_M2B_HEART_OK.  An IP30 IPL map masks HEART IP2..IP6 at IPL_VM
+and above; HEART handlers are accepted at IPL_VM only.  CP0 Count/Compare
+supplies hardclock and the timecounter; a five-tick callout prints
+XIRI_IP30_M2B_CLOCK_OK and then a vector-0 HEART handler proves masked
+(deferred) and unmasked delivery, printing XIRI_IP30_M2B_INTR_OK.  The boot
+then reaches an unconfigured `root device:` prompt.  IOC3 serial is still
+polled through ARCS64.  Evidence is in ip30/2026-11-15-m2b-heart-clock.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a checkpoints to serial
+topic/sgimips-octane, progressing from the M1/M2a/M2b checkpoints to serial
 multi-user login.  It includes the source audit, retained evidence,
 build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

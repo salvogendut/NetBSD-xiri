@@ -170,6 +170,19 @@ static const struct ipl_sr_map sgi_ip3x_ipl_sr_map = {
 	[IPL_SCHED] = MIPS_INT_MASK_5|MIPS_INT_MASK_0|MIPS_SOFT_INT_MASK,
     },
 };
+static const struct ipl_sr_map sgi_ip30_ipl_sr_map = {
+    .sr_bits = {
+	IPL2SPL_TABLE_COMMON,
+	/*
+	 * HEART drives IP2..IP6 for ISR levels 0..4.  Device handlers
+	 * use IPL_VM in this tree, so mask all five HEART pins at IPL_VM
+	 * and above; IP7 remains the CP0 Count/Compare timer.
+	 */
+	[IPL_VM] = MIPS_INT_MASK_4|MIPS_INT_MASK_3|MIPS_INT_MASK_2|
+	    MIPS_INT_MASK_1|MIPS_INT_MASK_0|MIPS_SOFT_INT_MASK,
+	[IPL_SCHED] = MIPS_INT_MASK|MIPS_SOFT_INT_MASK,
+    },
+};
 #endif /* defined(MIPS3) */
 
 phys_ram_seg_t mem_clusters[VM_PHYSSEG_MAX];
@@ -644,7 +657,7 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 		platform.intr5 = mips3_clock_intr;
 		break;
 	case MACH_SGI_IP30:
-		ipl_sr_map = sgi_ip3x_ipl_sr_map;
+		ipl_sr_map = sgi_ip30_ipl_sr_map;
 		platform.intr5 = mips3_clock_intr;
 		break;
 	case MACH_SGI_IP32:
@@ -809,7 +822,9 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 		    mem_clusters[i].start, mem_clusters[i].size);
 	}
 	printf("XIRI_IP30_M2_MEMORY_OK\n");
+#ifdef XIRI_IP30_M2A_STOP
 	xiri_ip30_halt();
+#endif
 #endif
 }
 

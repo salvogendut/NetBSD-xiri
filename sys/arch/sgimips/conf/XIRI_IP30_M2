@@ -11,3 +11,4 @@ ident		"XIRI_IP30_M2"
 
 no options	XIRI_IP30_M1_STOP
 options		XIRI_IP30_M2
+options		XIRI_IP30_M2A_STOP
