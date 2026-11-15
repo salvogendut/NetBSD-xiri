@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--kernel-entry', action='store_true', help='Octane kernel-entry checkpoint; no PROM return required')
     parser.add_argument('--flash', type=Path, help='Octane flash, copied before use')
     parser.add_argument('--expect', required=True, help='literal serial success marker')
+    parser.add_argument('--console-input', help='Octane console input to send after the marker')
     parser.add_argument('--return-to-prom', action='store_true')
     parser.add_argument('--timeout', type=int, default=300)
     args = parser.parse_args()
@@ -69,6 +70,8 @@ def main():
     out, image, emu, nvram = [getattr(args, n).resolve() for n in
                               ('output', 'image', 'emulator', 'nvram')]
     flash = args.flash.resolve() if args.flash else None
+    if args.console_input and args.machine != 'octane':
+        parser.error('--console-input requires Octane')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', image.name):
         parser.error('image filename must use letters, digits, dot, dash or underscore')
     disk = args.disk.resolve() if args.disk else None
@@ -129,6 +132,7 @@ cpus = 1
                   inputs=hashes, attached_disks=[str(out/'disk.chd')] if disk else [], commands=[],
                   harness_sha256=sha256(Path(probe.__file__)),
                   expect=args.expect, return_to_prom=args.return_to_prom, single_user=args.single_user,
+                  console_input=args.console_input, console_echo=None,
                   kernel_entry=args.kernel_entry,
                   expected_entry=None if expected_entry is None else hex(expected_entry))
     prompt = r'(?:^|\n)> ' if is_o2 else r'(?:^|\n)>> '
@@ -157,7 +161,7 @@ cpus = 1
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             serial = lab.serial_text()[lab.offset:]
-            if re.search(r'panic:|PANIC:|Stopped in pid|Exception:|Unable to execute|Error loading|XIRI_IP30_M2B_HEART_FAILED|XIRI_IP30_M2B_CLOCK_FAILED|XIRI_IP30_M2B_INTR_FAILED', serial):
+            if re.search(r'panic:|PANIC:|Stopped in pid|Exception:|Unable to execute|Error loading|XIRI_IP30_M2B_HEART_FAILED|XIRI_IP30_M2B_CLOCK_FAILED|XIRI_IP30_M2B_INTR_FAILED|XIRI_IP30_M3B3_FAILED', serial):
                 result['status'] = 'boot-blocked'
                 break
             if args.expect in serial:
@@ -171,6 +175,15 @@ cpus = 1
             time.sleep(0.1)
         else:
             result['status'] = 'timeout'
+        if args.console_input and result['status'] == 'passed':
+            lab.wait(r'root device: ', 10)
+            start = lab.offset = len(lab.serial_text())
+            lab.send(args.console_input)
+            lab.wait(re.escape(args.console_input), 10)
+            echo = lab.serial_text()[start:]
+            result['console_echo'] = args.console_input in echo
+            result['console_output'] = echo[-1200:]
+            lab.wait(r'(?:use one of:|root device: )', 10)
         if args.kernel_entry and result['status'] == 'passed':
             serial = lab.serial_text()
 

@@ -412,6 +412,52 @@ enable IOC3 interrupts, use the IOC3 RTC/Ethernet/keyboard/mouse, or implement
 Bridge DMA.  The polled console is deliberately minimal; interrupt-driven
 serial and the IOC3 interrupt path follow separately.
 
+M3b3 IOC3 serial interrupt checkpoint (2026-11-15)
+--------------------------------------------------
+
+XIRI_IP30_M3B3 includes XIRI_IP30_M3B2 and defines
+`options XIRI_IP30_M3B3`.  The option keeps the M3b2 polled-only behaviour
+available while adding:
+
+* a Bridge routing interface: IOC3 SuperIO is pin 4, destination HEART
+  widget 8 at packet address 0x80, and the pin's host register names HEART
+  vector 16;
+* Bridge `INT_MODE` bit 4 set so a falling source sends a clear packet and
+  `INT_ENABLE` bit 4 set only after the HEART handler is established;
+* UART A IER receive-data enable and IOC3 `INT_ENABLE_SET` bit 6
+  (`SERIAL_A`), with the HEART vector established at `IPL_VM`;
+* a 256-byte receive ring shared by the handler and `cn_getc`.  The
+  handler drains LSR/RBR into the ring; `cn_getc` pops the ring and, when
+  it is empty, drains the UART directly under `splhigh`.  A handler and a
+  polled reader therefore cannot consume each other's bytes: the handler
+  is serialised out while the console reader holds the CPU interrupt
+  level, and both use the same queue.
+
+The M3b3 self-test runs from a HEART post-test hook after the M2b clock and
+interrupt-delivery checks.  It temporarily enables 16550 loopback, injects
+a receive byte with `splvm`, and confirms:
+
+* masked delivery leaves the handler count unchanged while Bridge status
+  bit 4 is set;
+* `splx` delivers vector 16, the handler drains the byte, and the Bridge
+  pin and IOC3 `SERIAL_A` source clear;
+* the console reader retrieves the handler's byte from the ring;
+* a second byte drained directly by `cn_getc` under `splvm` proves the
+  polled fallback, with no handler count change;
+* ten milliseconds later the count is unchanged, `rx_overruns` is zero
+  and Bridge error bits are zero.
+
+Observed markers: `XIRI_IP30_M3B3_ROUTE_OK pin=4 vector=16`, then
+`XIRI_IP30_M3B3_RX_OK masked=deferred delivered=1 drained=1 polled=1
+storm=0`, then `XIRI_IP30_M3B3_SERIAL_OK ticks=11 bridge_errors=0
+overruns=0`.  The M2b clock and interrupt markers precede them.  A separate
+boot typed `xiri_m3b3` at `root device:`; it echoed, produced `use one of:
+halt reboot`, and returned to the prompt.
+
+Not implemented here: Bridge DMA, QLogic storage, IOC3 RTC/Ethernet/input
+and generic PCI interrupt mapping.  Physical hardware and full root boot
+remain unproven.
+
 Regression obligations
 ----------------------
 

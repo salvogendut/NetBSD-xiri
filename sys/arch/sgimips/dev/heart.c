@@ -50,6 +50,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/sysconf.h>
 
 #include <sgimips/dev/heartreg.h>
+#include <sgimips/dev/heartvar.h>
 
 #define	HEART_NINTR		64
 
@@ -91,6 +92,16 @@ CFATTACH_DECL_NEW(heart, sizeof(struct heart_softc),
     heart_match, heart_attach, NULL, NULL);
 
 static struct heart_softc *heart_sc;
+static heart_post_test_fn heart_post_test;
+static void *heart_post_test_arg;
+
+void
+heart_set_post_test(heart_post_test_fn func, void *arg)
+{
+
+	heart_post_test = func;
+	heart_post_test_arg = arg;
+}
 
 static const uint64_t heart_level_mask[5] = {
 	0x000000000000ffffULL,	/* ISR  0..15  -> IP2 */
@@ -289,6 +300,14 @@ heart_clock_check(void *arg)
 	    (unsigned long)curcpu()->ci_ev_count_compare.ev_count,
 	    (unsigned long long)getticks());
 	heart_intr_delivery_test(sc);
+	if (heart_post_test != NULL) {
+		heart_post_test_fn func = heart_post_test;
+		void *post_arg = heart_post_test_arg;
+
+		heart_post_test = NULL;
+		heart_post_test_arg = NULL;
+		func(post_arg);
+	}
 }
 
 static void

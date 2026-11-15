@@ -630,3 +630,63 @@ a full IOC3 attachment.
 Next: keep the polled console while adding an IOC3 interrupt-capable driver,
 Bridge/HEART interrupt mapping, and then the QLogic storage path.  Hardware
 operation, cache-error delivery and full root boot remain unproven.
+
+
+M3b3 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3B3 includes XIRI_IP30_M3B2 and adds `options XIRI_IP30_M3B3`.
+The option gates the interrupt path so the M3b2 polled-only console remains
+a rebuildable checkpoint.
+
+Bridge routing is exposed by `xbridge_intr_route()` and
+`xbridge_intr_enable()` in bridge.c.  IOC3 SuperIO is Bridge input 4; the
+destination is HEART widget 8 at packet address 0x80, `INT_HOST(4)` names
+HEART vector 16, and `INT_MODE` bit 4 is set for the falling-edge clear
+packet.  The Bridge pin is enabled only after `platform.intr_establish()`
+has installed vector 16 at IPL_VM.  IOC3 UART A gets IER receive enable and
+IOC3 `INT_ENABLE_SET` bit 6 (`SERIAL_A`).
+
+The handler drains 16550 LSR/RBR into a 256-byte ring and counts interrupts.
+`cn_getc` pops that ring and, when empty, drains the UART directly under
+splhigh; it uses the same queue for interrupt-delivered and polled bytes, so
+the handler and console reader cannot steal each other's input.  The ring
+counts overruns and the handler caps each drain at one ring capacity.
+
+A HEART post-test hook runs the M3b3 receive test after the M2b clock and
+interrupt-delivery checks, before the root-device prompt.  The test uses
+temporary UART loopback and splvm masking:
+
+* injected byte while masked: handler count 0, Bridge pin 4 set;
+* after splx: vector 16 handled, byte in the console ring, Bridge pin and
+  IOC3 SERIAL_A cleared;
+* cn_getc returns the handler's byte;
+* a second byte injected under splvm is drained and returned by cn_getc
+  without invoking the handler;
+* ten milliseconds later the interrupt count is unchanged, with no ring
+  overruns and no Bridge error bits.
+
+Observed on the retained run:
+
+  XIRI_IP30_M3B3_ROUTE_OK pin=4 vector=16
+  XIRI_IP30_M2B_CLOCK_OK heart_delta=0x1758a9 clockints=5 ticks=5
+  XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1
+  XIRI_IP30_M3B3_RX_OK masked=deferred delivered=1 drained=1 polled=1 storm=0
+  XIRI_IP30_M3B3_SERIAL_OK ticks=11 bridge_errors=0 overruns=0
+  boot device: <unknown>
+  root device: xiri_m3b3
+  use one of: halt reboot
+  root device:
+
+The typed input echoed and was rejected by the no-root-storage prompt,
+confirming external console input and output in addition to the loopback
+test.  XIRI_IP30_M3A, XIRI_IP30_M3B and XIRI_IP30_M3B2 rebuilt; the M3b2
+guest still passed its IOC3 console marker.  XIRI_O2 and XIRI_INDY64 rebuilt;
+they do not include ioc3early and were not booted.  Evidence and hashes
+are in ip30/2026-11-15-m3b3-ioc3-intr.json.
+
+Not implemented: Bridge DMA, QLogic storage, IOC3 RTC/Ethernet/input and
+generic PCI interrupt mapping.  Physical hardware, cache-error delivery and
+full root boot remain unproven.
+
+Next: leave serial as-is and add the Bridge DMA/QLogic storage path.

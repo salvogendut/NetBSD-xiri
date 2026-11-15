@@ -118,8 +118,19 @@ through the kernel console path.  It does not program the BAR/window, take
 IOC3 interrupts, or claim the IOC3 as a full device.  Evidence is in
 ip30/2026-11-15-m3b2-ioc3.json.
 
+M3b3 interrupt-driven IOC3 serial (2026-11-15): XIRI_IP30_M3B3 routes the
+IOC3 SuperIO interrupt on Bridge input 4 to HEART vector 16 and enables
+UART A receive interrupts.  The handler drains UART A into a 256-byte
+console ring; `cn_getc` pops the ring and can drain the UART directly, so
+interrupt-driven and polled debugging share one input stream without
+consuming each other's bytes.  A HEART post-test hook injects loopback
+receive bytes, verifies masked deferral, unmasked handler delivery, source
+drain, the polled fallback and no interrupt storm.  External input at the
+root-device prompt echoes and is rejected.  Bridge error status stays zero.
+Evidence is in ip30/2026-11-15-m3b3-ioc3-intr.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3 checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

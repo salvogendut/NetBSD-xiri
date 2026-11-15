@@ -42,6 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 #include <sys/param.h>
 #include <sys/device.h>
+#include <sys/errno.h>
 #include <sys/systm.h>
 
 #include <sys/bus.h>
@@ -57,6 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <dev/pci/pcidevs.h>
 
 #include <sgimips/dev/bridgereg.h>
+#include <sgimips/dev/bridgevar.h>
 
 struct bridge_softc {
 	device_t sc_dev;
@@ -84,6 +86,61 @@ static void	xbridge_intr_disestablish(void *);
 
 CFATTACH_DECL_NEW(xbridge, sizeof(struct bridge_softc),
     bridge_match, bridge_attach, NULL, NULL);
+
+static struct bridge_softc *bridge_sc;
+
+int
+xbridge_intr_route(int pin, int vector)
+{
+	struct bridge_softc *sc = bridge_sc;
+	uint32_t mode;
+
+	if (sc == NULL)
+		return ENXIO;
+	if (pin < 0 || pin >= 8 || vector < 0 || vector >= 64)
+		return EINVAL;
+
+	bus_space_write_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_DEST_UPPER,
+	    BRIDGE_HEART_WIDGET << 16);
+	bus_space_write_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_DEST_LOWER,
+	    BRIDGE_HEART_INTR_ADDR);
+	bus_space_write_4(sc->sc_st, sc->sc_sh,
+	    BRIDGE_INTR_HOST0 + pin * BRIDGE_INTR_HOST_STRIDE, vector);
+	mode = bus_space_read_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_MODE);
+	bus_space_write_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_MODE,
+	    mode | (1U << pin));
+	return 0;
+}
+
+int
+xbridge_intr_enable(int pin, int enable)
+{
+	struct bridge_softc *sc = bridge_sc;
+	uint32_t mask;
+
+	if (sc == NULL)
+		return ENXIO;
+	if (pin < 0 || pin >= 8)
+		return EINVAL;
+
+	mask = bus_space_read_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_ENABLE);
+	if (enable)
+		mask |= 1U << pin;
+	else
+		mask &= ~(1U << pin);
+	bus_space_write_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_ENABLE, mask);
+	return 0;
+}
+
+uint32_t
+xbridge_intr_status(void)
+{
+	struct bridge_softc *sc = bridge_sc;
+
+	if (sc == NULL)
+		return 0xffffffffU;
+	return bus_space_read_4(sc->sc_st, sc->sc_sh, BRIDGE_INTR_STATUS);
+}
 
 static int
 bridge_match(device_t parent, cfdata_t match, void *aux)
@@ -188,6 +245,7 @@ bridge_attach(device_t parent, device_t self, void *aux)
 	if (bus_space_map(sc->sc_st, ma->ma_addr, 0x100000,
 	    BUS_SPACE_MAP_LINEAR, &sc->sc_sh) != 0)
 		panic("%s: unable to map Bridge window", __func__);
+	bridge_sc = sc;
 
 	err_before = bus_space_read_4(sc->sc_st, sc->sc_sh,
 	    BRIDGE_INTR_STATUS);
