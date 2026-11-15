@@ -582,3 +582,51 @@ remain in place for the next step.
 
 Next: program/validate the Bridge windows and BARs, implement IOC3 polled
 serial and its interrupt path, then continue with Bridge DMA/QLogic.
+
+
+M3b2 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3B2 includes XIRI_IP30_M3B and adds
+`ioc3early0 at mainbus0 addr 0x1f600000`, the Bridge short window for PCI
+slot 2.  ioc3early maps that window and the type-0 configuration aperture at
+0x1f022000.  It reads IOC3 BAR0 from configuration offset 0x10 and Bridge
+device register 2 at 0x1f000214, then validates that BAR0 is non-zero,
+non-all-ones and aligned, and that the window base and memory bit agree with
+it.  It does not program either register.
+
+The retained PROM assignment is BAR0 0x500000 and window2 0x10011005, so
+the slot-2 short window maps PCI base 0x500000.  UART A at offset 0x20178
+is therefore physical 0x1f620178.  The driver polls the 16550 LSR/THR,
+prints XIRI_IP30_M3B2_IOC3_OK directly through that UART before touching
+cn_tab, installs the UART as the console, and prints
+XIRI_IP30_M3B2_IOC3_CONSOLE through kernel printf.  The entropy warning
+after the console marker provides additional confirmation that ordinary
+kernel output uses IOC3.
+
+Two build corrections were required: PCI_BAR0 is the pcireg.h name for
+offset 0x10, and the configuration aperture must include the Bridge window
+base (0x1f000000 + 0x020000 + slot*0x1000), not the bare 0x022000 offset.
+The first retained run printed IOC3 BAR0 0x500000 and window2 0x10011005
+but failed because it still expected the documentation's 0x400000/base-4
+assignment; the corrected run derives the window base from BAR0.
+
+Retained run: ../xiri/.work/octane-m3b2-ioc3-20261115b, passed in 41.46 s,
+with the PCI checkpoint intact before ioc3early and both IOC3 markers in
+order.  XIRI_O2 and XIRI_INDY64 rebuilt successfully with the files.dev
+addition; they were not booted because neither config includes ioc3early.
+Evidence and hashes are in ip30/2026-11-15-m3b2-ioc3.json.
+
+An independent review boot of the same kernel reached the root-device
+prompt, echoed and rejected `xiri_review`, and returned to the prompt.
+The HEART clock and interrupt markers also passed, and Bridge interrupt
+status remained zero.  This additionally exercises polled serial input;
+the temporary review artifacts are recorded in the evidence manifest.
+
+Not implemented: BAR/window programming, IOC3 interrupts, RTC, Ethernet,
+keyboard/mouse, Bridge DMA and device drivers.  This is a polled console proof, not
+a full IOC3 attachment.
+
+Next: keep the polled console while adding an IOC3 interrupt-capable driver,
+Bridge/HEART interrupt mapping, and then the QLogic storage path.  Hardware
+operation, cache-error delivery and full root boot remain unproven.

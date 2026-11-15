@@ -382,6 +382,36 @@ remain in place.
 Not implemented yet: BAR/window programming, pci_intr_map, IOC3 serial,
 Bridge DMA and device drivers.
 
+M3b2 polled IOC3 UART checkpoint (2026-11-15)
+----------------------------------------------
+
+XIRI_IP30_M3B2 includes XIRI_IP30_M3B and adds
+`ioc3early0 at mainbus0 addr 0x1f600000`, the Bridge short window for PCI
+slot 2.  The early driver:
+
+* maps the slot-2 short window with the normal memory tag and maps the
+  Bridge configuration aperture at 0x1f022000 for the type-0 slot-2 header;
+* reads IOC3 BAR0 at configuration offset 0x10 and Bridge device register 2
+  at 0x1f000214, then requires a non-zero, non-all-ones, aligned BAR whose
+  bits 31:20 match the window's base and whose window has the memory-space
+  bit set; it validates the PROM assignment rather than programming it;
+* uses IOC3 UART A at offset 0x20178 in the slot-2 window (physical
+  0x1f620178) with polled 16550 LSR/THR access;
+* emits XIRI_IP30_M3B2_IOC3_OK directly through the UART before changing
+  `cn_tab`, installs the UART as the console, then emits
+  XIRI_IP30_M3B2_IOC3_CONSOLE through kernel printf.
+
+The retained PROM assignment is BAR0 0x500000 and Bridge device window 2
+0x10011005: window base 5, memory space.  The slot-2 short window maps that
+PCI base, so UART A is reachable at 0x1f620178 without a pmap change.  A
+kernel printf after the console marker (the entropy warning) provides
+additional confirmation that ordinary kernel output uses IOC3.
+
+This checkpoint does not program BARs/windows, attach a full IOC3 driver,
+enable IOC3 interrupts, use the IOC3 RTC/Ethernet/keyboard/mouse, or implement
+Bridge DMA.  The polled console is deliberately minimal; interrupt-driven
+serial and the IOC3 interrupt path follow separately.
+
 Regression obligations
 ----------------------
 

@@ -109,8 +109,17 @@ yet.  PCI calls are guarded by NPCI so the inventory-only M3A config still
 builds, and PCI success requires an attached child plus no new Bridge
 errors after enumeration.  Evidence is in ip30/2026-11-15-m3b-pci.json.
 
+M3b2 polled IOC3 console (2026-11-15): XIRI_IP30_M3B2 adds
+`ioc3early0 at mainbus0 addr 0x1f600000`.  It checks the PROM's IOC3 BAR0
+against Bridge device window 2 (the retained assignment is BAR0 0x500000,
+window 0x10011005), writes a marker directly through polled IOC3 UART A at
+0x1f620178, installs the UART as `cn_tab`, and prints a second marker
+through the kernel console path.  It does not program the BAR/window, take
+IOC3 interrupts, or claim the IOC3 as a full device.  Evidence is in
+ip30/2026-11-15-m3b2-ioc3.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2 checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
