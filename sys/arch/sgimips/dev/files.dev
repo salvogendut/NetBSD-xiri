@@ -35,6 +35,10 @@ device	heart
 attach	heart at mainbus
 file	arch/sgimips/dev/heart.c		heart needs-flag
 
+device	xbridge
+attach	xbridge at mainbus
+file	arch/sgimips/dev/bridge.c		xbridge needs-flag
+
 device	crmfb: wsemuldisplaydev, vcons, rasops8, rasops15, rasops16, rasops32, i2cbus, i2c_bitbang, ddc_read_edid, edid 
 attach	crmfb at mainbus
 file	arch/sgimips/dev/crmfb.c		crmfb needs-flag

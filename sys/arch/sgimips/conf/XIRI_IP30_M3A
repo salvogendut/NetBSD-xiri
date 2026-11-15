@@ -1,0 +1,10 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3A: Octane Crossbow/Bridge and PCI inventory checkpoint.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M2B"
+
+ident		"XIRI_IP30_M3A"
+
+xbridge0	at mainbus0 addr 0x1f000000

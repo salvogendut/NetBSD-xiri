@@ -325,6 +325,36 @@ configured yet.  That prompt is not a completed boot.
 Still unproven: cache-error delivery, physical hardware, root mount,
 IOC3/XIO/Bridge/PCI, storage, networking and multi-user login.
 
+M3a XIO/Bridge inventory checkpoint (2026-11-15)
+------------------------------------------------
+
+XIRI_IP30_M3A includes XIRI_IP30_M2B and adds
+`xbridge0 at mainbus0 addr 0x1f000000`.  The Bridge's 16-MiB short window
+is reached through KSEG1 because physical 0x1f000000 is below 512 MiB.
+
+The inventory driver:
+
+* reads the Bridge common ID at 0x1f000004 and checks part 0xc002 and
+  manufacturer 0x036;
+* maps Crossbow widget 0 at 0x10000000, validates its ID and rejects an
+  all-ones or dead port-15 link status;
+* records Bridge interrupt status before the inventory and rejects any new
+  error bit (bits 31:8) afterwards; the inventory must leave the status
+  unchanged;
+* reads type-0 PCI configuration directly at
+  0x020000 + slot*0x1000 + function*0x100 in the Bridge window;
+* identifies slot 0 and 1 as QLogic ISP1040B (1077:1020), slot 2 as IOC3
+  (10a9:0003) and slot 3 as RAD (10a9:0005);
+* prints XIRI_IP30_M3_BRIDGE_OK when both the Bridge/Xbow checks and all
+  four PCI IDs match.
+
+Observed: Bridge id 0x3c00206d rev 3, Xbow id 0x40000001, port-15 link
+status 0x80000000, all four PCI IDs expected, and Bridge interrupt status
+before/after both zero with no new error bits.
+
+This checkpoint does not attach pci(4), program BARs/windows, claim IOC3,
+implement serial or take interrupts/DMA.  Those are M3b.
+
 Regression obligations
 ----------------------
 

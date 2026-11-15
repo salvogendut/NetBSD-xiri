@@ -533,3 +533,29 @@ Still unproven: cache-error delivery, physical hardware, IOC3 serial,
 XIO/Bridge/PCI, storage, root mount, networking and multi-user login.
 Next: native IOC3 serial and the M3 bus/PCI path; cache-error injection
 remains explicitly deferred.
+
+
+M3a checkpoint update (2026-11-15)
+-----------------------------------
+
+XIRI_IP30_M3A adds xbridge0 at mainbus addr 0x1f000000.  The Bridge short
+window is reachable through KSEG1; the driver verifies the Bridge ID
+(part 0xc002, manufacturer 0x036), validates the Crossbow ID and port-15
+link (rejecting all-ones), checks for new Bridge error bits, and reads
+type-0 PCI configuration directly at 0x020000 + slot*0x1000 + function*0x100.
+
+It identifies:
+  slot 0, 1: QLogic ISP1040B 1077:1020
+  slot 2:    IOC3 10a9:0003
+  slot 3:    RAD 10a9:0005
+and prints XIRI_IP30_M3_BRIDGE_OK.
+
+Observed: Bridge id 0x3c00206d rev 3, Xbow id 0x40000001, link15 status
+0x80000000, and Bridge interrupt status before/after both zero.  No
+pci(4) attachment, BAR/window programming, IOC3 serial,
+Bridge/HEART interrupt routing or DMA is implemented yet.
+
+Next: attach pci(4) for bus 0, implement IOC3 serial access and its
+interrupt path, then continue with Bridge DMA and QLogic storage.
+Hardware operation, cache-error delivery and full root boot remain
+unproven.
