@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "scope": "Standalone ARCS64 firmware diagnostic; no NetBSD kernel boot",
+  "base_revision": "93a258077244ea6e6a1a43a9d2e8b8fa41aa6555",
+  "branch": "topic/sgimips-octane",
+  "issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "status": "passed",
+  "elapsed_seconds": 36.04,
+  "emulator_stopped": true,
+  "originals_unchanged": true,
+  "attached_disks": [],
+  "kernel_booted": false,
+  "hardware_tested": false,
+  "result": "../xiri/.work/platform-checks/native-20261115/octane-handover/result.json",
+  "build": "../xiri/.work/platform-checks/native-20261115/octane-handover-build",
+  "result_sha256": "583816daa6bccbc9c858cddf332b05f6066993f8639e13d8fa9468a1d89f6866",
+  "serial_sha256": "d58892f257eecabb59f1c80611eebad324bdd9681dc4b7f0ac880bcf30186b6a",
+  "diagnostic_sha256": "193571d7c9dcc35328e06659f04f71c62ccc3c3ea2826389c8a4af211a85825b",
+  "matches_previous_diagnostic": true,
+  "source_files": {
+    "xiri/platforms/probe.py": "882ac6e40d971204d5dc672f8b280453b4c4df1c441614752f340c062ef25277",
+    "xiri/platforms/ip30/arcs64-probe.c": "d7019dab7220d2bc6b51192ab91c1c466d5d99e468c2ac4bcb39099ec26cd54b",
+    "xiri/platforms/ip30/arcs64-probe.ld": "305fd7580f1bbf439763b7e76a0b950786fa32c26b6d8021114666764cda11ff",
+    "xiri/platforms/ip30/build-probe.sh": "c12508bd7cc05ca90923dbb4a89854a496fbfed0bf9585649ea50aa90b8fd268"
+  },
+  "checks": [
+    "Python syntax",
+    "Shell syntax",
+    "Results JSON parse",
+    "Diagnostic build with -Wall -Wextra -Werror",
+    "ELF64 big-endian entry/program headers",
+    "Byte-identical diagnostic rebuild",
+    "Diskless boot marker and return to PROM",
+    "Emulator cleanup and unchanged input hashes"
+  ]
+}

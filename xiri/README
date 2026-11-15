@@ -13,3 +13,6 @@ and validation instructions.
 
 The normal build installs the theme files through share/wscons/themes/Makefile
 at /usr/share/wscons/themes.  No separate build of this directory is needed.
+
+platforms/ holds native O2/Octane bring-up diagnostics and reproduction
+instructions.  These are separate from kernel drivers and qualified images.

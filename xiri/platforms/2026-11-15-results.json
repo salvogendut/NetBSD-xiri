@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "iris": {
+    "schema": 1,
+    "source_revision": "db49ed4beb9b533a3669d6fcb5f12480e52dc16f",
+    "upstream_revision": "83c8dddc00e16c2698984af19ebb2000c0ae4451",
+    "build_source": "444e35eb plus O2 PCI correction; comments and documentation finalized after compilation",
+    "features": "default (tlbvmap), interpreter",
+    "toolchain": "nightly-2026-10-28",
+    "profile": "release; lto=false, codegen-units=16, debug=0",
+    "iris_sha256": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+    "ci_sha256": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe",
+    "regression_counts": {
+      "mace_pci": 14,
+      "cpu_executor": 213
+    }
+  },
+  "netbsd_revision": "93a258077244ea6e6a1a43a9d2e8b8fa41aa6555",
+  "native_kernel": "Existing XIRI_O2_20261114, unchanged; see lab/irix-o2/build.json",
+  "hardware_tested": false,
+  "jit_tested": false,
+  "vendor_desktops_qualified": false,
+  "artifacts": ".work/platform-checks/native-20261115",
+  "results": {
+    "o2_diskless": {
+      "status": "passed",
+      "elapsed_seconds": 81.44,
+      "emulator_stopped": true,
+      "originals_unchanged": true,
+      "result": ".work/platform-checks/native-20261115/o2-fixed/result.json",
+      "result_sha256": "14bdae78bad2affb1b1e5bd3233145002376b8532bb20488a7dd1ad62019bec8",
+      "serial_sha256": "c9da0c8b47de1eb3c862cfd42c73788e8193a8b997a1707174ac00c16f1f7e95"
+    },
+    "o2_single_user": {
+      "status": "passed",
+      "elapsed_seconds": 83.98,
+      "emulator_stopped": true,
+      "originals_unchanged": true,
+      "clean_shutdown": true,
+      "result": ".work/o2-native-20261115-single-user/result.json",
+      "result_sha256": "241bffde4cb3fcb491f64962473da10c47a429504d27f70264e23aa2b2b16490",
+      "serial_sha256": "f49d12f6fc7f2db87d734975af312fb87a909aaa3ce3c9239e8695c8d4206bd2",
+      "observed": [
+        "Both AIC-7880 controllers attach",
+        "sd0 discovered",
+        "FFS root mounted read-only",
+        "Native uname and mount commands",
+        "Clean halt to PROM"
+      ]
+    },
+    "octane_arcs64": {
+      "status": "passed",
+      "elapsed_seconds": 36.0,
+      "emulator_stopped": true,
+      "originals_unchanged": true,
+      "result": ".work/platform-checks/native-20261115/octane-candidate/result.json",
+      "result_sha256": "144a17bbde3538c348a6ed36952c1493bf39645a6bf423852ef42a5f508c2e58",
+      "serial_sha256": "d58892f257eecabb59f1c80611eebad324bdd9681dc4b7f0ac880bcf30186b6a",
+      "observed": [
+        "ELF64 entry 0xa800000020080000",
+        "ARCS64 output, argv and environment",
+        "512 MB in memory descriptors",
+        "Return to PROM"
+      ]
+    }
+  },
+  "remaining": [
+    "O2 sustained storage writes/DMA, network, graphics/input and desktop qualification",
+    "Octane NetBSD kernel entry, ARCS64, HEART, XIO/Bridge, IOC3 and storage support",
+    "Physical O2 and Octane validation",
+    "Separate IRIX 6.5.22 and 6.5.30 qualification before repinning artifacts"
+  ],
+  "source_files": {
+    "xiri/platforms/probe.py": "882ac6e40d971204d5dc672f8b280453b4c4df1c441614752f340c062ef25277",
+    "xiri/platforms/README": "4b127709c7368126ffe05cfc3e9b76d7f9519b91e1826bd91133c0fa147437db",
+    "xiri/platforms/ip30/arcs64-probe.c": "d7019dab7220d2bc6b51192ab91c1c466d5d99e468c2ac4bcb39099ec26cd54b",
+    "xiri/platforms/ip30/arcs64-probe.ld": "305fd7580f1bbf439763b7e76a0b950786fa32c26b6d8021114666764cda11ff",
+    "xiri/platforms/ip30/build-probe.sh": "c12508bd7cc05ca90923dbb4a89854a496fbfed0bf9585649ea50aa90b8fd268"
+  }
+}

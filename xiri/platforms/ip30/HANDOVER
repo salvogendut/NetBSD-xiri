@@ -1,0 +1,372 @@
+SGI Octane / IP30: implementation handover
+=========================================
+
+Prepared 2026-11-15.  Work on topic/sgimips-octane in
+https://github.com/salvogendut/NetBSD-xiri
+Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
+Integration target: xiri.  This topic starts at NetBSD commit
+93a258077244ea6e6a1a43a9d2e8b8fa41aa6555.
+
+Objective and current boundary
+------------------------------
+
+Bring native NetBSD on a single-CPU SGI Octane to a serial multi-user login,
+using IRIS for initial development, followed by physical hardware validation.
+The first implementation task is an IP30 kernel entry and early-console proof.
+Graphics, SMP and IRIX applications follow the native platform milestones.
+
+What has actually run:
+
+* Octane: a standalone big-endian N64 ELF, using ARCS64 to print output,
+  inspect argv/environment, enumerate memory and return to the PROM.  This
+  retains the PROM stack and exception handlers.  It is NOT a NetBSD kernel.
+* O2: the retained NetBSD XIRI_O2 kernel attaches both Adaptec controllers,
+  finds sd0, mounts FFS read-only, runs uname/mount in a native single-user
+  shell, and halts cleanly.  Multi-user login was not tested in this run.
+* Both results use the IRIS interpreter.  Neither physical hardware nor JIT
+  operation is qualified by these results.  No Octane NetBSD login exists.
+
+The earlier Octane test tried the O2 kernel.  Its ELF32 wrapper was rejected
+with "Can't boot 32 bit ELF"; loading its ELF64 form faulted inside firmware
+before NetBSD entry.  GENERIC64_IP3x explicitly targets O2/IP32.  Existing
+MACH_SGI_IP30 cases do not implement the missing Octane board support.
+
+Repositories, provenance and working rules
+-----------------------------------------
+
+Paths below are relative to the NetBSD-xiri checkout unless noted otherwise.
+Read ../xiri/AGENTS.md and ../xiri/docs/FORKS.md before implementation.
+
+* NetBSD: this branch; native drivers belong under sys/, diagnostics and
+  handover material under xiri/platforms/.  Do not put drivers in xiri/.
+* ../iris: xiri contains db49ed4beb9b533a3669d6fcb5f12480e52dc16f,
+  "O2: preserve wide MACE PCI windows during CPU address translation".
+  It was pushed.  Upstream checked for that cycle was
+  83c8dddc00e16c2698984af19ebb2000c0ae4451, integrated in 444e35eb.
+* ../xiri: the separate lab/documentation repository uses main.  Consult
+  docs/ROADMAP.md, docs/results/2026-11-14-octane-platform.md and
+  lab/irix-o2/README.md.  November 15 follow-up lab notes were still local
+  changes at this handover; the evidence summary is also included here as
+  xiri/platforms/2026-11-15-results.json.
+* ../prismatic is available for later display work; it is not needed for
+  the initial serial-only Octane milestones.
+
+Inspect git status and git worktree list in each repository before changes.
+Preserve existing detached lab worktrees and their pinned artifacts.  Leave
+this topic open for implementation; merge it into xiri after the agreed
+milestones are reviewed and validated, not merely because this handover ends.
+Use topic/<name> for additional topics; xiri/<name> conflicts with xiri.
+
+At the next IRIS development cycle, fetch its official upstream/main, review
+new commits and follow the sibling fork workflow.  Keep the retained emulator
+as a reproduction baseline even if newer source is integrated.  Read IRIS's
+HACKING.md and debug.md before emulator changes or guest debugging.
+
+Kernel builds must be sequential, at most -j 2, with separate object/tools
+directories for each source tree and architecture.  Never repin a qualified
+kernel, emulator or CHD just because a new source commit exists.  Preserve
+separate IRIX 6.5.22 and 6.5.30 donors, profiles and qualification records;
+shared native-component promotion requires both release lines to be checked.
+
+Existing tools and retained evidence
+-----------------------------------
+
+Files on this branch:
+
+* arcs64-probe.c / arcs64-probe.ld: freestanding firmware diagnostic.
+* build-probe.sh: builds it with the existing NetBSD MIPS64 cross tools.
+* ../probe.py: bounded O2/Octane runner using ../xiri/scripts/xiri_lab.py
+  and its load_probe() helper.  Python alone is not the entire harness.
+* ../2026-11-15-results.json: source revisions, artifact hashes, scope and
+  three retained results.  Its source_files map describes the historical
+  snapshot; later documentation edits do not alter that old evidence.
+* handover-validation.json: fresh validation of the commands below.  The
+  rebuilt diagnostic matches the previous binary byte for byte, prints the
+  success marker and returns to PROM; input hashes and cleanup checks pass.
+
+Retained artifacts live under the sibling lab, not in Git:
+
+  ../xiri/.work/platform-checks/native-20261115/
+    emulator/                 iris, iris-ci, manifest.json
+    ip30-build/               diagnostic ELF, object and readelf report
+    octane-candidate/         passed diagnostic serial/config/result
+    octane-handover/          fresh handover verification and private state
+    octane-handover-build/    byte-identical diagnostic rebuild
+    o2-fixed/                passed diskless O2 serial/config/result
+    iris-pci-tests.log        14 passing MACE PCI tests
+    iris-cpu-tests.log        213 passing CPU executor tests
+  ../xiri/.work/o2-native-20261115-single-user/
+                              passed native shell and clean halt
+
+The emulator was compiled from 444e35eb plus the O2 correction; comments and
+documentation were finalized in db49ed4b after compilation.  Its manifest
+records that distinction.  Build: nightly-2026-10-28, default tlbvmap features,
+interpreter, release with LTO=false, codegen-units=16 and debug=0.
+
+Stable baseline SHA-256 values:
+  iris:    33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5
+  iris-ci: 6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe
+  probe:   193571d7c9dcc35328e06659f04f71c62ccc3c3ea2826389c8a4af211a85825b
+
+The Octane firmware inputs are:
+  ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin
+  ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin
+Their hashes, and those of the native kernel/disk inputs, are recorded in the
+retained result.json files.  These are local prerequisites, not downloadable
+assets in the GitHub branch.  Do not commit firmware, CHDs or vendor files.
+On another workstation obtain the user's authorized local fixtures first;
+record missing fixtures explicitly rather than fabricate a passing result.
+
+Reproduce the firmware milestone first
+-------------------------------------
+
+Run from the NetBSD repository.  Choose new output paths on every run:
+
+    sh xiri/platforms/ip30/build-probe.sh \
+      ../xiri/.work/netbsd64-build/tools/bin/mips64--netbsd- \
+      /tmp/xiri-ip30-handover-build
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine octane \
+      --image /tmp/xiri-ip30-handover-build/arcs64-probe \
+      --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin \
+      --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin \
+      --expect XIRI_IP30_ARCS64_OK --return-to-prom \
+      --output /tmp/xiri-ip30-handover-run
+
+The linker must select -m elf64btsmip: this cross linker's default is N32.
+The tested ELF entry/load address is 0xa800000020080000, corresponding to
+physical 0x20080000.  It is a diagnostic placement, NOT a decided kernel ABI.
+Inspect the ELF headers/program headers; do not substitute the O2 ELF32
+wrapper.  The current harness selects one R10000, 512 MB, no graphics and no
+disks.  Missing-SCSI firmware diagnostics are expected with this fixture.
+
+Require the success marker followed by the PROM prompt, result status passed,
+emulator_stopped=true and originals_unchanged=true.  Read serial.log as well
+as the JSON.  Firmware success alone cannot satisfy any kernel milestone.
+The harness needs local Unix/control sockets and the emulator's host runtime
+libraries.  Use the host/toolbox environment if the sandbox blocks these.
+The local toolbox is xiri-iris; retained binaries avoid an initial rebuild.
+
+Architecture decisions required before kernel changes
+----------------------------------------------------
+
+1. Firmware ABI.  Current sys/dev/arcbios/{arcbios.h,arcbios.c,
+   arcbios_calls.S,genassym.cf} implement 32-bit firmware layouts and an o32
+   call bridge, including for N64 kernels.  Add a distinct ARCS64 path selected
+   before parsing argv, descriptors or component pointers.  Preserve the
+   existing O2/Indy path.  Audit signatures, widths, alignment, return values,
+   generated assembly offsets, console, environment, tree walking and reboot.
+   Native N64 pointers alone do not make a 32-bit firmware vector compatible.
+
+2. Entry and addresses.  Audit sys/arch/sgimips/sgimips/machdep.c (mach_init
+   currently takes argv32), locore_machdep.S, sys/arch/mips/mips/locore*.S,
+   sys/arch/mips/conf/Makefile.mips, the sgimips linker/config files, and MIPS
+   pmap/physical-page bootstrap.  LP64 currently adds -msym32.  Choose and
+   document whether the kernel uses a full-width direct address or a wired
+   mapped virtual layout; then audit every affected assembly/symbol/address
+   conversion.  Simply changing TEXTADDR on the O2 kernel is insufficient.
+
+3. RAM and vectors.  IRIS models Octane RAM starting at physical 0x20000000.
+   The first 16 KiB are accessible at physical zero; CPU access to the
+   corresponding high 16 KiB is a bus error, with main RAM accessible from
+   0x20004000.  See ../iris/src/dev/heart_mem.rs and verify hardware evidence
+   before treating emulator behavior as a physical guarantee.  Reserve the
+   firmware/SPB/vector areas, kernel text/data/BSS, bootstrap stack and page
+   tables explicitly.  Honor descriptor types, not just total RAM size.
+   Audit low exception vectors, cache attributes/flushes, TLB setup, overflow
+   and holes, mips_page_physload(), pmap_bootstrap() and kernel-end conversion.
+
+4. Kernel ownership.  The standalone probe borrows PROM state.  A kernel
+   must initialize its own stack/BSS and CPU state and safely take ownership
+   of exceptions/interrupts.  Establish when firmware calls remain safe and
+   transition to an IOC3 console before relying on native interrupt service.
+   A deliberate early-entry checkpoint can stop before that takeover, but
+   must be reported as an entry proof, not a completed bootstrap.
+
+Observed ARCS64 interface facts for the retained firmware:
+  SPB:                 0xffffffffa0001000; signature 0x53435241
+  SPB vector offset:   64 bytes; vector entries/pointers are 64 bits
+  Version/revision:    16-bit fields; do not widen every field blindly
+  Memory descriptor:  32-bit type, base_page at offset 8, 64-bit page count
+  Service indices:     GetMemoryDescriptor=18, Write=27, GetEnvironment=30
+  Memory total:        0x20000 4-KiB pages (512 MB, including reserved types)
+The diagnostic has layout assertions.  Extend these for any additional ABI
+structures actually used by the kernel; do not infer them from host layout.
+
+Implementation milestones and acceptance
+---------------------------------------
+
+M0 -- Reproduce and record the baseline (first session).
+  Run the diagnostic above; retain source/binary hashes, exact command,
+  firmware hashes, configuration, full serial output and cleanup result.
+  Audit the source areas above and write the chosen address/firmware design.
+  If this baseline fails, diagnose the environment or regression before
+  layering kernel changes on top of an unknown failure.
+
+M1 -- Dedicated IP30 kernel entry and early console (first code change).
+  Introduce a separate minimal serial-only config, proposed name XIRI_IP30,
+  under sys/arch/sgimips/conf.  Keep CRIME/MACE/Newport devices out of it.
+  Add the necessary entry/address handling and ARCS64 early output path.
+  Acceptance: the Octane PROM loads the new NetBSD ELF64, reaches its real
+  entry on a kernel-owned stack with initialized BSS, and prints an explicit
+  kernel-entry checkpoint plus firmware/memory information.  Capture the
+  entry address and CP0/stack state and show that this is the kernel artifact,
+  not the standalone diagnostic.  Any intentional early halt is documented.
+
+M2 -- Memory bootstrap, HEART interrupts and timekeeping.
+  Implement the remaining memory ownership/VM work, HEART attachment and
+  interrupt mask/pending/acknowledge/priority routing.  Select a supported
+  clock/timecounter and document the relationship to CPU Count/Compare.
+  Acceptance: native exception handling works, RAM reservations are correct,
+  timer interrupts advance without a storm, allocation proceeds into normal
+  autoconfiguration, and repeated boots give consistent memory accounting.
+
+M3 -- XIO/Crossbow, Bridge and native IOC3 serial.
+  Add board bus attachments and PCI configuration/mapping, preserve full
+  address width, and implement endian-correct bus_space access.  Implement
+  IOC3 serial first (polled early access may be useful before full PCI attach),
+  then its interrupt path and the PROM-to-native console handoff.  Keep the
+  dependency ordering explicit if minimal polled serial is pulled into M1.
+  Acceptance: enumerate the expected PCI functions, identify IOC3 and QLogic,
+  and demonstrate native serial input/output and interrupt delivery without
+  relying on ARCS calls after takeover.
+
+M4 -- Bridge DMA, QLogic storage and native single-user root.
+  Reuse sys/dev/pci/isp_pci.c and sys/dev/ic/isp* for the ISP1040 where suitable;
+  implement board bus_dma translation, masks, cache synchronization and
+  interrupt routing rather than inventing a second generic SCSI driver.
+  Start with a disposable native NetBSD disk and read-only root.  If an
+  embedded native ramdisk helps separate CPU/VM/userland from storage, label
+  it as an intermediate checkpoint, not disk-root acceptance.
+  Acceptance: sd0 discovery, real FFS mount, native /bin/sh, uname/mount,
+  repeatable read/checksum checks, and clean halt.  Then validate writes,
+  synchronization, cold reboot persistence and filesystem consistency only
+  on private copies before enabling writable-root qualification.
+
+M5 -- Native serial multi-user login (this issue's primary boot target).
+  Complete RTC/time handling and native tty/getty startup using the actual
+  attached serial device name.  Use a native NetBSD userland matched to the
+  kernel's supported ABI; the existing O2 fixture uses an N64 kernel with
+  o32 userland, so its CHD is a candidate, not proof of Octane compatibility.
+  Acceptance: cold boot without manual single-user intervention, login
+  prompt, successful native login, uname/mount/date and a small filesystem
+  round trip, then clean shutdown and another successful boot.  A screenshot
+  of a prompt without a successful login does not complete this milestone.
+
+M6 -- Qualification and later expansion.
+  Qualify IOC3 networking, sustained storage/DMA, input and hardware behavior.
+  Record the physical machine's CPU, memory, PROM, graphics and PCI inventory
+  before hardware testing.  The local IRIX fixture describes a one-CPU
+  195-MHz R10000 Octane, 512 MB, Solid IMPACT; that is not a fresh hardware
+  inventory.  Track IMPACT/VPro framebuffer, wscons/theme support and native
+  Xorg separately.  Newport and O2 CRM are different devices.  SMP and IRIX
+  desktops are later work; retain separate 6.5.22/6.5.30 acceptance records.
+
+Source map for board implementation
+-----------------------------------
+
+NetBSD starting points:
+  sys/arch/sgimips/conf/{files.sgimips,std.sgimips64,GENERIC64_IP3x}
+  sys/arch/sgimips/sgimips/{machdep.c,mainbus.c,locore_machdep.S}
+  sys/arch/sgimips/include/ and sys/arch/mips/include/
+  sys/arch/mips/mips/{pmap_machdep.c,bus_dma.c,cache_r10k.c,locore*.S}
+  sys/dev/arcbios/; sys/dev/pci/isp_pci.c; sys/dev/ic/isp*
+Mainbus currently uses KSEG1 mappings; audit this before adding wide widgets.
+
+IRIS models and regression locations (references, not hardware authority):
+  ../iris/src/ip30.rs and ip30_machine.rs       board map and wiring
+  ../iris/src/dev/heart.rs and heart_mem.rs     controller, RAM and vectors
+  ../iris/src/dev/xbow.rs                      Crossbow
+  ../iris/src/dev/bridge.rs and bridge_tests.rs PCI, interrupts and DMA
+  ../iris/src/dev/ioc3/                        serial, Ethernet and byte bus
+  ../iris/docs/datasheets/octane/              Bridge/Crossbow specifications
+
+Historical OpenBSD/sgi Octane code is a candidate reference, not an audited
+or imported component here.  Locate a versioned source first and retain its
+license/attribution for any reused code.  Linux public ARCS interface headers
+were consulted for diagnostic widths/service numbers (links in ../README);
+no Linux implementation was copied.  The earlier GPL XFS decision does not
+license importing GPL platform code into NetBSD kernel files.  Use hardware
+interface facts and suitably licensed implementations; keep provenance clear.
+
+Build and test discipline
+-------------------------
+
+There is no working XIRI_IP30 kernel config/build yet.  After M1 adds it,
+adapt the proven O2 build command using NEW output directories, for example:
+
+    octane_build="$PWD/../xiri/.work/netbsd-octane-build"
+    ./build.sh -m sgimips -a mips64eb -U -u -j 2 \
+      -O "$octane_build/obj" -T "$octane_build/tools" \
+      -D "$octane_build/dest" \
+      -V MKX11=no -V 'HOST_CC=cc -std=gnu17' \
+      -V 'HOST_CFLAGS=-O2 -std=gnu17' \
+      kernel.gdb="$PWD/sys/arch/sgimips/conf/XIRI_IP30"
+
+This is a planned command, not a claim that the nonexistent config builds.
+Prepare the isolated cross tools first with build.sh's tools target using
+the same machine/architecture/output options.  Preserve ELF64 netbsd and
+netbsd.gdb, readelf headers/segments, linker map, config and complete logs.
+Do not give Octane netbsd.elf32 even if the common build emits one.  Extend
+the runner for kernel milestones: --return-to-prom is for the diagnostic,
+and its current --single-user option is O2-only.
+
+Regression policy by change:
+* Firmware/entry/pmap/cache changes: build relevant Indy and O2 configurations;
+  run their native boot/shell baselines as well as the new Octane checkpoint.
+* Bus/interrupt/DMA changes: test mapping boundaries, widths/byte lanes and
+  interrupt acknowledgement, then exercise the corresponding guest device.
+* Emulator changes: keep them in ../iris, with a failing-before device/CPU
+  regression and the affected test suite; rerun native guest baselines.
+* Shared native promotion: qualify both vendor release lines; current port
+  checkpoints alone cannot replace the last qualified desktop artifacts.
+
+The O2 native regression can be run from this repository:
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine o2 \
+      --image ../xiri/.work/netbsd-o2-build/tftp/netbsd-XIRI_O2 \
+      --nvram ../xiri/.work/donors/irix-6.5.30f-original-media/nvram.bin \
+      --disk ../xiri/.work/images/xiri-netbsd-desktop-20261114-controls/netbsd-xiri.chd \
+      --expect 'Enter pathname of shell' --single-user \
+      --output ../xiri/.work/octane-handover-o2-regression
+
+Run against a stopped source CHD.  The runner creates a private reflink/copy
+and overlay; use disk-backed storage, not a large /tmp disk copy.  Check
+clean_shutdown, stopped processes and unchanged originals.  Existing logs
+retain the original executed probe; do not rewrite them after harness edits.
+
+Known O2 pitfall: db49ed4b fixed IRIS truncating the wide MACE PCI window at
+physical 0x280000000 into a low RAM alias.  Controller writes corrupted the
+TLB refill vectors, causing a later apparent reserved-instruction trap in
+memset.  This was separate from NetBSD's R10000 cache-mask fix 2a7184ec4c6.
+For a similar failure inspect vector corruption and full bus addresses before
+blaming the instruction at EPC.  Do not assume an Octane failure has the same
+cause, or mask it with an unverified kernel workaround.
+
+Every checkpoint should preserve source revisions/dirty state, build command,
+config and artifact hashes, emulator/toolchain/features, firmware hashes,
+serial and monitor logs, marker meaning, elapsed time, cleanup and unchanged
+input checks.  For failures capture PC/EPC, Cause, Status, BadVAddr, registers,
+relevant vectors and board state, plus symbolized disassembly around the fault.
+Classify it as loader, kernel, emulator or unresolved using evidence.  A
+timeout/panic/missing marker is a failed checkpoint, not partial boot success.
+
+Suggested first instruction to the next AI
+------------------------------------------
+
+Continue NetBSD-xiri topic/sgimips-octane toward native Octane serial login.
+Read this handover and the sibling Xiri fork instructions.  Reproduce M0
+using the retained emulator and private firmware state, then audit the N64
+entry, ARCS64 layouts and kernel address model.  Document the chosen design
+and implement the smallest M1 kernel entry/early-console change with a
+dedicated IP30 config.  Preserve Indy/O2 behavior and the existing qualified
+artifacts.  Stop at a reproducible kernel-entry checkpoint for the first
+review; provide the patch, exact build/boot commands, logs, test results,
+remaining blocker and next milestone.  Do not report Octane as booted to
+userland until the corresponding native acceptance checks actually pass.

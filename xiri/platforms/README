@@ -1,0 +1,110 @@
+Native O2 and Octane bring-up
+===========================
+
+This is the native platform work underlying the O2 and Octane milestone in
+../../../xiri/docs/ROADMAP.md.  It is separate from IRIX ABI compatibility.
+The integration branch is xiri in both NetBSD and IRIS.  Existing qualified
+Indy kernels, detached lab worktrees, IRIX 6.5.22 and 6.5.30 images stay pinned
+until their replacements pass their own qualification.
+
+O2 / IP32
+---------
+
+NetBSD already has CRIME/MACE support in GENERIC64_IP3x.  The retained
+XIRI_O2 kernel in the sibling lab reaches the framebuffer, serial ports,
+Ethernet and PCI.  The remaining recorded SCSI-stage RI trap was reproduced
+without disks on 2026-11-15 and traced to overwritten exception vectors.
+
+The vectors are intact at ahc_pci_attach entry.  Its controller register
+accesses use the wide MACE PCI memory window at physical 0x280000000.
+IRIS 7d46498b truncates this to 0x80000000, then applies the no-ECC RAM
+alias.  Register writes corrupt the TLB refill handler; the later memset
+store takes a TLB miss and runs that damaged handler.  This is distinct
+from the already fixed NetBSD R10000 cache-alignment bug.
+
+The IRIS correction keeps the wide PCI I/O and memory windows separate
+from RAM and preserves their byte lanes.  The unchanged XIRI_O2 kernel now attaches both SCSI controllers, reads an
+8-GB CHD, mounts its FFS root read-only and runs native single-user commands.
+The candidate halted cleanly to the PROM, with original images unchanged.
+The 14 PCI tests and 213 CPU executor tests pass.  This establishes basic
+storage and a native shell, not sustained DMA/write integrity, networking,
+graphics or an IRIX desktop.  Those remain the next O2 qualification stages.
+
+Octane / IP30
+-------------
+
+GENERIC64_IP3x currently supports O2; its name does not imply Octane support.
+Octane needs a separate board port: ARCS64 entry and firmware services,
+HEART memory/interrupts/timer, XIO/Crossbow and Bridge bus/DMA support,
+IOC3 serial/RTC/Ethernet/input, and PCI storage.  Start with one CPU and
+serial boot.  IMPACT/VPro graphics and SMP follow basic native operation.
+
+ip30/arcs64-probe.c is a standalone N64 firmware diagnostic, not a kernel.
+It demonstrates ELF64 loading at 0xa800000020080000 (physical 0x20080000),
+ARCS64 console output, 64-bit argv/environment access, memory-descriptor
+iteration and return to the firmware.  It retains the PROM stack and
+exception handlers and does not initialize NetBSD or claim any drivers.
+The load address is a tested diagnostic placement, not a final kernel ABI.
+A kernel port also needs to audit KSEG0 assumptions and the current
+-msym32 flags in sys/arch/mips/conf/Makefile.mips; changing TEXTADDR alone
+cannot make the existing kernel run at an XKPHYS address.
+
+The 2026-11-15 diskless IRIS run passed with one R10000 and 512 MB.  The
+firmware described the diagnostic's page as LoadedProgram, enumerated
+0x20000 4-KB pages, printed XIRI_IP30_ARCS64_OK and returned to the PROM.
+Physical hardware has not been tested.
+
+The implementation handover is ip30/HANDOVER.  Work continues on
+topic/sgimips-octane, starting with native kernel entry and progressing to
+serial multi-user login.  It includes the source audit, retained evidence,
+build/boot commands, milestones and regression requirements.
+Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
+
+Reproduce the Octane diagnostic from the NetBSD checkout:
+
+    sh xiri/platforms/ip30/build-probe.sh \
+      ../xiri/.work/netbsd64-build/tools/bin/mips64--netbsd- \
+      /tmp/xiri-ip30-build
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine octane --image /tmp/xiri-ip30-build/arcs64-probe \
+      --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin \
+      --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin \
+      --expect XIRI_IP30_ARCS64_OK --return-to-prom \
+      --output /tmp/xiri-ip30-probe
+
+Use a fresh output directory for each run.  The harness requires the
+sibling Xiri lab and an emulator directory containing iris and iris-ci.
+It records input hashes, the executed script and command, serial output,
+registers, cleanup and unchanged originals.  It copies mutable firmware
+state and attaches no disks unless --disk is supplied.  That option makes
+a private reflink/copy of a stopped CHD and enables an overlay beside it;
+never supply an actively running disk.  Firmware SCSI diagnostic warnings are
+expected for this diskless fixture.  Local control sockets must be allowed.
+
+For O2 use --machine o2, omit --flash and --return-to-prom, and select the
+ELF32 PROM wrapper (the underlying kernel is N64), for example
+../xiri/.work/netbsd-o2-build/tftp/netbsd-XIRI_O2.  Choose --expect to name
+an actual milestone printed by that kernel, such as "root device" for a
+diskless boot.  To check native userland, add --disk with a stopped NetBSD
+CHD, --single-user and --expect "Enter pathname of shell".  This enters
+the shell, runs uname and mount, and requires a clean halt back to the PROM.
+Use a disk-backed output directory for CHD tests.  A panic, exception, timeout,
+missing marker or failed cleanup is a failed run, never a boot success.
+
+References
+----------
+
+- ../xiri/lab/irix-o2/README.md and its retained kernel/build manifest.
+- ../xiri/docs/results/2026-11-14-octane-platform.md, the earlier loading
+  failures with the O2 kernel's ELF32 wrapper and incompatible RAM layout.
+- sys/dev/arcbios/: the existing 32-bit firmware ABI, including when called
+  by a 64-bit NetBSD kernel; it is not the Octane ARCS64 ABI.
+- Linux's public ARCS interface descriptions, consulted for interface
+  widths and function numbers (no implementation copied):
+  https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/heads/master/arch/mips/include/asm/sgiarcs.h
+  https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/heads/master/arch/mips/include/asm/fw/arc/types.h
+- MACE specification section 9.3, pp. 159-160, for the PCI address map;
+  retained locally in ../iris/docs/datasheets/o2/mace.pdf.
