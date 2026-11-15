@@ -749,3 +749,68 @@ Octane validation.  Full root boot and login remain unproven.
 
 Next: add Bridge DMA and the QLogic ISP1040 storage path so a root file
 system can be mounted, then open /dev/console and reach the login prompt.
+
+
+M3d1 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3D1 includes XIRI_IP30_M3C1 and attaches both QLogic ISP1040
+controllers behind the Bridge.
+
+For each of slots 0 and 1, xbridge_setup_qlogic() programs BAR1 to
+0x1f200000/0x1f400000, enables memory and bus master, and sets
+Bridge Device(0/1) window bases 0x1f2/0x1f4 with the memory bit.  The
+PCI memory tag for this config maps those BAR addresses to the same CPU
+short windows and uses the MIPS CHIP_WRONG_ENDIAN lane correction, which
+fixes the little-endian 8/16-bit register accesses.  The ISP NOP mailbox
+then succeeds; its `invalid NVRAM header` warning is expected without a
+QLogic NVRAM.
+
+PCI INTA on slots 0/1 maps to Bridge pins 0/1 and HEART vectors 18/19.
+xbridge_intr_establish() routes the pin, installs a counting wrapper
+around the ISP handler at IPL_VM, and enables the pin.  The stage-1 post
+test:
+
+* requires active isp0/isp1 devices and one active scsibus child under
+  each, so an implementation that skips isp_attach cannot pass;
+* checks the INT_HOST and INT_ENABLE routing registers for both pins;
+* masks at splvm, sets HEART ISR bit 18/19, and verifies the handler count
+  stays unchanged while the event remains pending;
+* unmasks without clearing the event and verifies the wrapper delivers
+  and acknowledges it exactly once;
+* waits another 10 ms to reject a storm and checks for no Bridge errors;
+* disestablishes pin 0, verifies the HEART callback and pending state are
+  gone, then re-establishes the saved ISP handler;
+* checks the A/B/C/D mapping for devices 0 and 1 (A/C device pin, B/D
+  flip bit 2).
+
+BAR/window programming failures now return before pci0 attachment.
+PCI INTB/INTC mapping follows IRIS: A/C use the device-number pin and
+B/D flip bit 2.
+
+Observed on the retained run:
+
+  XIRI_IP30_M3D1_BAR_OK bar0=0x1f200000 bar1=0x1f400000 window0=0x1f2 window1=0x1f4
+  isp0 at pci0 dev 0 function 0: QLogic 1020 Fast Wide SCSI HBA
+  isp0: interrupting at xbridge pin 0
+  isp0: invalid NVRAM header
+  isp1 at pci0 dev 1 function 0: QLogic 1020 Fast Wide SCSI HBA
+  isp1: interrupting at xbridge pin 1
+  isp1: invalid NVRAM header
+  scsibus0 at isp0: 16 targets, 8 luns per target
+  scsibus1 at isp1: 16 targets, 8 luns per target
+  XIRI_IP30_M3D1_IRQ_OK pin0=18 pin1=19 masked=deferred delivered=2 storm=0 teardown=1 mapping=1
+  XIRI_IP30_M3D1_READY isp=2 scsibus=2
+
+The plain Octane Bridge has no XBridge force-interrupt registers, so this
+run verifies the routing registers and HEART handler path rather than a
+synthetic Bridge pin transition.  The real QLogic interrupt, request and
+response ring DMA, disk discovery, root mount, /dev/console open and TTY
+RX/TX are stage 2.
+
+XIRI_IP30_M3A, M3B, M3B2, M3B3 and M3C1 rebuilt; M3b3 and M3c1 guest
+regressions passed.  XIRI_O2 and XIRI_INDY64 rebuilt.  Evidence and hashes
+are in ip30/2026-11-15-m3d1-qlogic-attach.json.
+
+Next: validate ISP mailbox/ring DMA, attach a disk, discover and read it,
+then mount root and exercise the native console tty.

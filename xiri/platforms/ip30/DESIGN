@@ -491,6 +491,43 @@ userland process opens the port.  This checkpoint does not open the tty
 because there is still no root file system or `/dev` instance.  Interrupt
 driven transmit and the userspace tty path therefore remain unproven.
 
+M3d1 QLogic attachment checkpoint (2026-11-15)
+-----------------------------------------------
+
+XIRI_IP30_M3D1 includes XIRI_IP30_M3C1 and adds both QLogic ISP1040
+controllers:
+
+* the checkpoint programs BAR1 for slots 0 and 1 to 0x1f200000 and
+  0x1f400000, sets memory/master enable, and points Bridge Device(0/1)
+  windows at PCI bases 0x1f2/0x1f4 with the memory bit;
+* the PCI memory tag for this checkpoint maps those BAR addresses to the
+  same CPU short windows and uses the MIPS `CHIP_WRONG_ENDIAN` lane
+  correction, so the ISP driver's 8/16-bit little-endian register
+  accesses use physical offsets 3/7/0/1 lanes correctly;
+* `isp0` and `isp1` attach as QLogic 1020 Fast Wide SCSI HBAs.  The
+  expected `invalid NVRAM header` warning reflects the model's absent
+  NVRAM.  `scsibus0` and `scsibus1` attach;
+* PCI INTA on slots 0 and 1 maps to Bridge pins 0 and 1 and then HEART
+  vectors 18 and 19.  `xbridge_intr_establish` routes the pin, installs a
+  counting wrapper around the ISP handler at IPL_VM, and enables the pin;
+* the stage-1 post test requires active `isp0`/`isp1` devices and one
+  active `scsibus` child under each, so a kernel that skips `isp_attach`
+  cannot claim success;
+* it checks the INT_HOST/INT_ENABLE routing registers, injects HEART ISR
+  bits 18 and 19 under `splvm`, leaves the event pending across `splx`,
+  and verifies the handler delivers and acknowledges it once, with no
+  storm or Bridge error.  It also disestablishes pin 0, checks the HEART
+  callback and pending state are gone, and re-establishes it, and checks
+  the A/B/C/D mapping for devices 0 and 1;
+* the plain Octane Bridge has no XBridge force-interrupt registers, so it
+  does not generate a synthetic Bridge pin transition or a QLogic command
+  interrupt.  PCI INTB and INTC use the board wiring: A/C select the
+  device number pin and B/D flip bit 2.
+
+The plain Octane Bridge has no XBridge force-interrupt registers, so a
+synthetic Bridge pin transition is not possible.  Actual QLogic pin
+delivery, DMA transfers, disk discovery and root mount are stage 2.
+
 Regression obligations
 ----------------------
 

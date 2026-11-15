@@ -35,5 +35,9 @@
 typedef void (*heart_post_test_fn)(void *);
 
 void	heart_set_post_test(heart_post_test_fn, void *);
+int	heart_intr_pending(int);
+void	heart_intr_set(int);
+void	heart_intr_clear(int);
+void	heart_intr_disestablish(void *);
 
 #endif /* _SGIMIPS_HEARTVAR_H_ */

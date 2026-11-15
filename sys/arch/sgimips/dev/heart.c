@@ -92,15 +92,61 @@ CFATTACH_DECL_NEW(heart, sizeof(struct heart_softc),
     heart_match, heart_attach, NULL, NULL);
 
 static struct heart_softc *heart_sc;
-static heart_post_test_fn heart_post_test;
-static void *heart_post_test_arg;
+#define	HEART_POST_TESTS	4
+static struct {
+	heart_post_test_fn func;
+	void *arg;
+} heart_post_test[HEART_POST_TESTS];
 
 void
 heart_set_post_test(heart_post_test_fn func, void *arg)
 {
+	int i;
 
-	heart_post_test = func;
-	heart_post_test_arg = arg;
+	for (i = 0; i < HEART_POST_TESTS; i++) {
+		if (heart_post_test[i].func == NULL) {
+			heart_post_test[i].func = func;
+			heart_post_test[i].arg = arg;
+			return;
+		}
+	}
+	panic("%s: no post-test slot", __func__);
+}
+
+int
+heart_intr_pending(int vector)
+{
+	struct heart_softc *sc = heart_sc;
+	uint64_t bit, isr, imr;
+
+	if (sc == NULL || vector < 0 || vector >= HEART_NINTR)
+		return 0;
+	bit = 1ULL << vector;
+	isr = bus_space_read_8(sc->sc_st, sc->sc_sh, HEART_ISR);
+	imr = bus_space_read_8(sc->sc_st, sc->sc_sh, HEART_IMR0);
+	return (isr & imr & bit) != 0;
+}
+
+void
+heart_intr_set(int vector)
+{
+	struct heart_softc *sc = heart_sc;
+
+	if (sc == NULL || vector < 0 || vector >= HEART_NINTR)
+		return;
+	bus_space_write_8(sc->sc_st, sc->sc_sh, HEART_ISR_SET,
+	    1ULL << vector);
+}
+
+void
+heart_intr_clear(int vector)
+{
+	struct heart_softc *sc = heart_sc;
+
+	if (sc == NULL || vector < 0 || vector >= HEART_NINTR)
+		return;
+	bus_space_write_8(sc->sc_st, sc->sc_sh, HEART_ISR_CLEAR,
+	    1ULL << vector);
 }
 
 static const uint64_t heart_level_mask[5] = {
@@ -236,6 +282,28 @@ heart_intr_establish(int vector, int ipl, int (*func)(void *), void *arg)
 	return &sc->sc_intr[vector];
 }
 
+void
+heart_intr_disestablish(void *cookie)
+{
+	struct heart_softc *sc = heart_sc;
+	struct heart_intrhand *ih = cookie;
+	uint64_t mask;
+	int vector;
+
+	if (sc == NULL || ih == NULL || ih < sc->sc_intr ||
+	    ih >= sc->sc_intr + HEART_NINTR)
+		return;
+	vector = ih - sc->sc_intr;
+	mask = bus_space_read_8(sc->sc_st, sc->sc_sh, HEART_IMR0);
+	mask &= ~(1ULL << vector);
+	bus_space_write_8(sc->sc_st, sc->sc_sh, HEART_IMR0, mask);
+	bus_space_write_8(sc->sc_st, sc->sc_sh, HEART_ISR_CLEAR,
+	    1ULL << vector);
+	ih->ih_fun = NULL;
+	ih->ih_arg = NULL;
+	ih->ih_ipl = 0;
+}
+
 static void
 heart_watchdog_stub(void)
 {
@@ -288,6 +356,7 @@ heart_clock_check(void *arg)
 {
 	struct heart_softc *sc = arg;
 	uint64_t count;
+	int i;
 
 	count = bus_space_read_8(sc->sc_st, sc->sc_sh, HEART_COUNT) &
 	    HEART_COUNT_MASK;
@@ -300,13 +369,15 @@ heart_clock_check(void *arg)
 	    (unsigned long)curcpu()->ci_ev_count_compare.ev_count,
 	    (unsigned long long)getticks());
 	heart_intr_delivery_test(sc);
-	if (heart_post_test != NULL) {
-		heart_post_test_fn func = heart_post_test;
-		void *post_arg = heart_post_test_arg;
+	for (i = 0; i < HEART_POST_TESTS; i++) {
+		if (heart_post_test[i].func != NULL) {
+			heart_post_test_fn func = heart_post_test[i].func;
+			void *post_arg = heart_post_test[i].arg;
 
-		heart_post_test = NULL;
-		heart_post_test_arg = NULL;
-		func(post_arg);
+			heart_post_test[i].func = NULL;
+			heart_post_test[i].arg = NULL;
+			func(post_arg);
+		}
 	}
 }
 

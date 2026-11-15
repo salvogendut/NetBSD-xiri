@@ -139,8 +139,19 @@ still works polled at the root-device prompt; a root file system and tty
 open are still required to reach login.  Evidence is in
 ip30/2026-11-15-m3c1-com-tty.json.
 
+M3d1 QLogic attachment (2026-11-15): XIRI_IP30_M3D1 programs the QLogic
+BAR1s to 0x1f200000 and 0x1f400000, points Bridge windows 0 and 1 at them,
+and uses a Bridge PCI memory tag with little-endian lane correction.
+Both ISP1040 controllers attach, report `interrupting at xbridge pin 0/1`,
+and create `scsibus0`/`scsibus1`.  The mux maps those INTA pins to HEART
+vectors 18/19; the checkpoint verifies the route registers, deferred HEART
+handler delivery, teardown/re-establishment and one `scsibus` child per
+controller without a QLogic command interrupt.  DMA, disk
+discovery, root mount and the real device interrupt are stage 2.  Evidence
+is in ip30/2026-11-15-m3d1-qlogic-attach.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1 checkpoints
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1 checkpoints
 to serial multi-user login.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1

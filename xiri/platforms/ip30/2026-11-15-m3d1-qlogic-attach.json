@@ -1,0 +1,181 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3d1",
+  "status": "passed-qlogic-attachment-and-interrupt-routing",
+  "scope": "XIRI_IP30_M3D1 programs the QLogic BAR/window assignment, attaches both ISP1040 controllers and scsibus instances, maps PCI INTA pins 0/1 to Bridge pins 0/1 and HEART vectors 18/19, and verifies the routing registers and HEART handler delivery. QLogic command interrupts, DMA, disk discovery, root mount and userland console I/O remain stage 2.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "19c993a6cb5397f6e91fc15ab8f60a962c2edebb",
+  "source_status": [
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/dev/bridge.c",
+    "M sys/arch/sgimips/dev/heart.c",
+    "M sys/arch/sgimips/dev/heartvar.h",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3D1",
+    "?? xiri/platforms/ip30/2026-11-15-m3d1-qlogic-attach.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/conf/files.sgimips": "8f3408af647750711f12533f2c348bc4a2b0200effe4b58968f39e10cad32080",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3D1": "7512171f211849959fd00954b9af81870e819411390c92defb5a9e6a6fde1084",
+    "sys/arch/sgimips/dev/bridge.c": "e3fac3cd035783929b11a1fae762769fa88b79c1597a43d6bc16821b46669495",
+    "sys/arch/sgimips/dev/heart.c": "c99593e68cd674687434618d853f2bb2a2ecae08e3230f1321758be8ae4689db",
+    "sys/arch/sgimips/dev/heartvar.h": "51ebb7b07fdb7150259f146c845112c4ccbc6ca6245212d9524825f1a3e053d0",
+    "xiri/platforms/probe.py": "d6c9509058b4360eee9d97d54990b98f7a65fd98d602a3f89872b99a13161377",
+    "xiri/platforms/README": "fa7766a35b3862b1eb02327e6811f742d2f06fe034988795613a00ab780c75b9",
+    "xiri/platforms/ip30/DESIGN": "13c06b6328cac3822af824829b5c2d0bd29891381f669e361295d44d7424dd12",
+    "xiri/platforms/ip30/HANDOVER": "845cc8f5b82b9532f0b350b0ad0a174fa54a870beb2113b6306409f1d3f93845"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3D1",
+    "bar_windows": {
+      "slot0_bar1": "0x1f200000",
+      "slot1_bar1": "0x1f400000",
+      "window0": "base 0x1f2, memory space",
+      "window1": "base 0x1f4, memory space",
+      "command": "memory enable and bus master enable"
+    },
+    "pci_memory_tag": "Bridge PCI memory tag maps 0x1f200000-0x1f5fffff to the CPU short windows and uses CHIP_WRONG_ENDIAN lane correction for little-endian 8/16-bit accesses",
+    "interrupt_map": {
+      "slots": "0 and 1",
+      "pci_pin": "INTA",
+      "bridge_pins": "0 and 1",
+      "heart_vectors": "18 and 19",
+      "handler": "counting wrapper around isp_pci_intr at IPL_VM",
+      "enable": "Bridge pin enabled after handler establishment"
+    },
+    "stage1_test": "requires active isp0/isp1 and one active scsibus child under each; checks INT_HOST/INT_ENABLE and A/B/C/D mapping; sets HEART ISR under splvm, leaves the event pending across splx, verifies one delivery/ack; rejects a storm and Bridge errors; disestablishes pin 0, checks HEART callback/pending are gone, and re-establishes it",
+    "limitation": "the plain Octane Bridge has no XBridge force-interrupt registers, so a synthetic Bridge pin transition is not available",
+    "devices": [
+      "isp0 QLogic 1020 Fast Wide SCSI HBA, xbridge pin 0",
+      "isp1 QLogic 1020 Fast Wide SCSI HBA, xbridge pin 1",
+      "scsibus0 at isp0",
+      "scsibus1 at isp1"
+    ],
+    "markers": [
+      "XIRI_IP30_M3D1_BAR_OK bar0=0x1f200000 bar1=0x1f400000 window0=0x1f2 window1=0x1f4",
+      "XIRI_IP30_M3D1_IRQ_OK pin0=18 pin1=19 masked=deferred delivered=2 storm=0 teardown=1 mapping=1",
+      "XIRI_IP30_M3D1_READY isp=2 scsibus=2"
+    ],
+    "failure_markers": [
+      "XIRI_IP30_M3D1_FAILED bar/window",
+      "XIRI_IP30_M3D1_FAILED attach",
+      "XIRI_IP30_M3D1_FAILED route",
+      "XIRI_IP30_M3D1_FAILED pending",
+      "XIRI_IP30_M3D1_FAILED delivered",
+      "XIRI_IP30_M3D1_FAILED storm",
+      "XIRI_IP30_M3D1_FAILED bridge"
+    ],
+    "negative_review": "an external kernel that skipped isp_attach created zero SCSI buses; the success gate now requires one active scsibus child under each ISP device"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3D1",
+    "netbsd_sha256": "fdff9dc1298f7fead854145d5602dd6eb6e7429b87c69e595820435cac140353",
+    "netbsd_gdb_sha256": "9f2405f137ff64abb09e3adbbc8f4602a2128821bb643c4024c838d08eefe49f",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M3D1-build-final.log",
+    "build_log_sha256": "d492f828a789edceddf24039d9beaf2498e19c096d10b52142d31edc0ce44579"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3d1-irq-final",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D1/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3D1_READY --timeout 120 --output ../xiri/.work/octane-m3d1-irq-final",
+    "expected_marker": "XIRI_IP30_M3D1_READY",
+    "status": "passed",
+    "elapsed_seconds": 47.93,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "2ecb7701448009a216e00a04b826704442184966c5573934819b8906be90d01a",
+    "serial_sha256": "a3d9a4297465331016895f92a313b459f7bebd7addd564377f3c2a80d267bc64",
+    "observations": [
+      "QLogic BARs and Bridge windows programmed and read back",
+      "both ISP1040 controllers attached and reported xbridge pin 0/1",
+      "scsibus0 and scsibus1 attached as active children of isp0/isp1",
+      "A/B/C/D-to-pin mapping checked for devices 0 and 1",
+      "INT_HOST and INT_ENABLE routing registers matched vectors 18/19",
+      "HEART event stayed pending under splvm, was delivered once after splx and acknowledged",
+      "interrupt teardown removed the HEART callback and pending state; re-establishment succeeded",
+      "Bridge error bits remained zero",
+      "no QLogic command interrupt or disk I/O was generated in this stage"
+    ],
+    "inputs": {
+      "netbsd": "fdff9dc1298f7fead854145d5602dd6eb6e7429b87c69e595820435cac140353",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30_M3A": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "914b6e6d08ee709ed3d53c833a28743b66de650a41e3a29faa379a02b2c23f2a",
+        "build_log_sha256": "7a58926c996ad572ca97ac0e5d920cce590007814a01323d04465008391896a4"
+      },
+      "XIRI_IP30_M3B": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "4719b19eca5dfbc08de79f8296af3094f9b7fba5786a35c3b8e4a377620dafc8",
+        "build_log_sha256": "7dfb708ef519304b1331b6a6798f8461f3216e6b599d38c9e9ab7c31270fcaf3"
+      },
+      "XIRI_IP30_M3B2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "94eeb855316c019af7050f401ca76bc85548bb193642d9e7a2f5600565af93f0",
+        "build_log_sha256": "d02abea461c0baf704b778ae3ccbe0eda5e2dd49eaee30b9b24ba9e300360cfe"
+      },
+      "XIRI_IP30_M3B3": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "03d1c8b79408fafbf7f665a73b91c71fe05aa94f332a660cb02037bbf897ea0a",
+        "build_log_sha256": "edb9c1b1ab11f1cf05b7d210beb6578b455889117daeac646d0e321d351959a5"
+      },
+      "XIRI_IP30_M3C1": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "a2fa1f4e1d6948b8f9cb7bd11c9cc525eb8d9c5b907ae7e4a6222c007ba4e018",
+        "build_log_sha256": "57a3d1cad472ee3b714608d529e60a143eb8131727ee80d78db09a57c298420c"
+      },
+      "XIRI_O2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "e840f1fe7582603da41fe9226e8fd2ccfede62d50285afb194b1fa4f9ef01f07",
+        "build_log_sha256": "f0a811aeba25426a7d0e2e68989979666a32ea0753c77e5002d790697657079a"
+      },
+      "XIRI_INDY64": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "df20e19cd61958c7cf9222a5dc81099e2172acc791c7cb1ee4e51b1b41750848",
+        "build_log_sha256": "f00924ccb01021dc5dba7dc4708e3a39d3cde39d6b57bfba0f111e50f1e4e897"
+      }
+    },
+    "m3b3_guest": {
+      "output_directory": "../xiri/.work/octane-m3b3-regression-20261115c",
+      "status": "passed",
+      "elapsed_seconds": 38.63,
+      "expected_marker": "XIRI_IP30_M3B3_SERIAL_OK",
+      "result_sha256": "953f1ac8162c468f3cd3f38ba302d3c6dd3419fa0446cd5b20ef45f0eaeeda5d",
+      "serial_sha256": "23cf1b467325822fa3ab77c0aa910e5a0facf7ab14e68a78fecbf6c818331d12"
+    },
+    "m3c1_guest": {
+      "output_directory": "../xiri/.work/octane-m3c1-regression-20261115b",
+      "status": "passed",
+      "elapsed_seconds": 38.69,
+      "expected_marker": "XIRI_IP30_M3C1_READY",
+      "result_sha256": "b5d91febf6f7234d65979bb840a5af7a73c1f30a635e212aefc289c3419eadea",
+      "serial_sha256": "3bf3040e1bcb3d47a299b21410106479d0f671f251ae441ec0bc34ce5300b5dc"
+    },
+    "latest_guest_runs": "M1/O2/Indy64 latest native guest runs remain the M2b-fix baselines; M3a, M3b1, M3b2, M3b3, M3c1 and M3d1 runs are recorded in their respective manifests."
+  },
+  "not_proven": [
+    "QLogic command interrupt generated by the controller",
+    "ISP request/response ring DMA and disk I/O",
+    "Disk discovery and read",
+    "Root filesystem mount",
+    "Userland /dev/console open and active TTY RX/TX",
+    "Physical Octane hardware"
+  ],
+  "next_milestone": "Validate ISP mailbox/ring DMA, attach a disk, discover and read it, then mount root and exercise the native console tty."
+}
