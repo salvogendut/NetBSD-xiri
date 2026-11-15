@@ -100,10 +100,19 @@ QLogic ISP1040B controllers, the IOC3 and the RAD, then prints
 XIRI_IP30_M3_BRIDGE_OK.  It does not attach pci(4) or claim devices.
 Evidence is in ip30/2026-11-15-m3a-bridge.json.
 
+M3b1 PCI attachment (2026-11-15): XIRI_IP30_M3B adds
+`pci0 at xbridge0 bus 0`.  xbridge supplies a sgimips PCI chipset with
+direct type-0 configuration access and enumerates both QLogic controllers,
+the IOC3 and the RAD.  It prints XIRI_IP30_M3B_PCI_OK.  BAR/window
+programming, PCI interrupt mapping, IOC3 serial and DMA are not implemented
+yet.  PCI calls are guarded by NPCI so the inventory-only M3A config still
+builds, and PCI success requires an attached child plus no new Bridge
+errors after enumeration.  Evidence is in ip30/2026-11-15-m3b-pci.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a checkpoints to
-serial multi-user login.  It includes the source audit, retained evidence,
-build/boot commands, milestones and regression requirements.
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1 checkpoints
+to serial multi-user login.  It includes the source audit, retained
+evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
 
 Reproduce the Octane diagnostic from the NetBSD checkout:

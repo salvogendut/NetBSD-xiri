@@ -35,7 +35,7 @@ device	heart
 attach	heart at mainbus
 file	arch/sgimips/dev/heart.c		heart needs-flag
 
-device	xbridge
+device	xbridge: pcibus
 attach	xbridge at mainbus
 file	arch/sgimips/dev/bridge.c		xbridge needs-flag
 

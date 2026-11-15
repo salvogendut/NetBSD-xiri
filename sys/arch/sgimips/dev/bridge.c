@@ -48,6 +48,11 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <machine/autoconf.h>
 #include <machine/machtype.h>
 
+#include "pci.h"
+
+#if NPCI > 0
+#include <dev/pci/pcivar.h>
+#endif
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcidevs.h>
 
@@ -57,10 +62,25 @@ struct bridge_softc {
 	device_t sc_dev;
 	bus_space_tag_t sc_st;
 	bus_space_handle_t sc_sh;
+#if NPCI > 0
+	struct sgimips_pci_chipset sc_pc;
+#endif
 };
 
 static int	bridge_match(device_t, cfdata_t, void *);
 static void	bridge_attach(device_t, device_t, void *);
+#if NPCI > 0
+static int	xbridge_bus_maxdevs(pci_chipset_tag_t, int);
+static pcireg_t	xbridge_conf_read(pci_chipset_tag_t, pcitag_t, int);
+static void	xbridge_conf_write(pci_chipset_tag_t, pcitag_t, int, pcireg_t);
+static int	xbridge_intr_map(const struct pci_attach_args *,
+		    pci_intr_handle_t *);
+static const char *
+		xbridge_intr_string(pci_chipset_tag_t, pci_intr_handle_t,
+		    char *, size_t);
+static void *	xbridge_intr_establish(int, int, int (*)(void *), void *);
+static void	xbridge_intr_disestablish(void *);
+#endif
 
 CFATTACH_DECL_NEW(xbridge, sizeof(struct bridge_softc),
     bridge_match, bridge_attach, NULL, NULL);
@@ -83,6 +103,76 @@ bridge_conf_read(struct bridge_softc *sc, int slot, int function, int reg)
 	data = bus_space_read_4(sc->sc_st, sc->sc_sh, off);
 	return data;
 }
+
+#if NPCI > 0
+static int
+xbridge_bus_maxdevs(pci_chipset_tag_t pc, int busno)
+{
+
+	return busno == 0 ? 4 : 0;
+}
+
+static pcireg_t
+xbridge_conf_read(pci_chipset_tag_t pc, pcitag_t tag, int reg)
+{
+	struct bridge_softc *sc = pc->cookie;
+	int bus, device, function;
+
+	if ((unsigned int)reg >= PCI_CONF_SIZE)
+		return (pcireg_t)-1;
+	pci_decompose_tag(pc, tag, &bus, &device, &function);
+	if (bus != 0 || device < 0 || device >= 4 || function != 0)
+		return (pcireg_t)-1;
+	return bridge_conf_read(sc, device, function, reg);
+}
+
+static void
+xbridge_conf_write(pci_chipset_tag_t pc, pcitag_t tag, int reg,
+    pcireg_t data)
+{
+	struct bridge_softc *sc = pc->cookie;
+	bus_size_t off;
+	int bus, device, function;
+
+	if ((unsigned int)reg >= PCI_CONF_SIZE)
+		return;
+	pci_decompose_tag(pc, tag, &bus, &device, &function);
+	if (bus != 0 || device < 0 || device >= 4 || function != 0)
+		return;
+	off = BRIDGE_CONFIG0_BASE + device * BRIDGE_SLOT_STRIDE +
+	    function * BRIDGE_FUNC_STRIDE + reg;
+	bus_space_write_4(sc->sc_st, sc->sc_sh, off, data);
+}
+
+static int
+xbridge_intr_map(const struct pci_attach_args *pa, pci_intr_handle_t *ihp)
+{
+
+	return -1;
+}
+
+static const char *
+xbridge_intr_string(pci_chipset_tag_t pc, pci_intr_handle_t ih, char *buf,
+    size_t len)
+{
+
+	snprintf(buf, len, "xbridge intr %d", ih);
+	return buf;
+}
+
+static void *
+xbridge_intr_establish(int irq, int level, int (*func)(void *), void *arg)
+{
+
+	panic("%s: PCI interrupts not implemented", __func__);
+}
+
+static void
+xbridge_intr_disestablish(void *ih)
+{
+}
+
+#endif /* NPCI > 0 */
 
 static void
 bridge_attach(device_t parent, device_t self, void *aux)
@@ -164,7 +254,52 @@ bridge_attach(device_t parent, device_t self, void *aux)
 	if (found[0] == expected[0] && found[1] == expected[1] &&
 	    found[2] == expected[2] && found[3] == expected[3] &&
 	    new_errors == 0) {
+#if NPCI > 0
+		struct pcibus_attach_args pba;
+		pci_chipset_tag_t pc = &sc->sc_pc;
+		device_t child;
+		uint32_t err_post, post_errors;
+
 		printf("XIRI_IP30_M3_BRIDGE_OK\n");
+
+		pc->cookie = sc;
+		pc->iot = sc->sc_st;
+		pc->ioh = sc->sc_sh;
+		pc->pc_bus_maxdevs = xbridge_bus_maxdevs;
+		pc->pc_conf_read = xbridge_conf_read;
+		pc->pc_conf_write = xbridge_conf_write;
+		pc->pc_intr_map = xbridge_intr_map;
+		pc->pc_intr_string = xbridge_intr_string;
+		pc->intr_establish = xbridge_intr_establish;
+		pc->intr_disestablish = xbridge_intr_disestablish;
+
+		memset(&pba, 0, sizeof(pba));
+		pba.pba_iot = normal_memt;
+		pba.pba_memt = normal_memt;
+		pba.pba_dmat = &pci_bus_dma_tag;
+		pba.pba_dmat64 = NULL;
+		pba.pba_bus = 0;
+		pba.pba_pc = pc;
+		pba.pba_bridgetag = NULL;
+		pba.pba_flags = PCI_FLAGS_IO_OKAY | PCI_FLAGS_MEM_OKAY;
+		child = config_found(self, &pba, pcibusprint, CFARGS_NONE);
+
+		err_post = bus_space_read_4(sc->sc_st, sc->sc_sh,
+		    BRIDGE_INTR_STATUS);
+		post_errors = (err_post & ~err_after) &
+		    BRIDGE_INTR_ERROR_MASK;
+		aprint_normal_dev(self,
+		    "post-pci intr status %#x new %#x child %s\n",
+		    err_post, post_errors, child != NULL ? "attached" :
+		    "missing");
+		if (child != NULL && post_errors == 0)
+			printf("XIRI_IP30_M3B_PCI_OK\n");
+		else
+			printf("XIRI_IP30_M3B_PCI_FAILED child=%p errors=%#x\n",
+			    child, post_errors);
+#else
+		printf("XIRI_IP30_M3_BRIDGE_OK\n");
+#endif
 	} else {
 		printf("XIRI_IP30_M3_BRIDGE_FAILED pci ids or errors\n");
 	}

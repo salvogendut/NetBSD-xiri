@@ -559,3 +559,26 @@ Next: attach pci(4) for bus 0, implement IOC3 serial access and its
 interrupt path, then continue with Bridge DMA and QLogic storage.
 Hardware operation, cache-error delivery and full root boot remain
 unproven.
+
+
+M3b1 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3B adds pci0 at xbridge0 bus 0.  xbridge exposes a sgimips PCI
+chipset with direct type-0 configuration reads/writes through the Bridge
+short window, bus 0 devices 0..3 function 0.  PCI interrupt mapping
+returns -1 until the Bridge/HEART interrupt registers and device users are
+implemented.
+
+pci0 attaches and reports both QLogic ISP1040B controllers, the IOC3 and
+the RAD as "not configured".  PCI calls are guarded by NPCI so M3A still
+builds.  Success requires config_found() to attach a child and a post-PCI
+Bridge status check with no new error bits; the run reports status 0 and
+prints XIRI_IP30_M3B_PCI_OK.
+
+Not implemented: BAR/Bridge window programming, pci_intr_map, IOC3 serial,
+Bridge DMA and device drivers.  The PROM's IOC3 BAR0 and Bridge window 2
+remain in place for the next step.
+
+Next: program/validate the Bridge windows and BARs, implement IOC3 polled
+serial and its interrupt path, then continue with Bridge DMA/QLogic.

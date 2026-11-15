@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3b1",
+  "status": "passed-pci-attachment",
+  "scope": "XIRI_IP30_M3B attaches pci(4) bus 0 behind xbridge, enumerates both QLogic ISP1040B controllers, the IOC3 and the RAD, and stops at the PCI checkpoint.  BAR/window programming, PCI interrupt mapping, IOC3 serial and DMA are not implemented yet.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "e73e92e3e35c66c945fce1dc58fe6b243a2ed84a",
+  "source_status": [
+    "M sys/arch/sgimips/dev/files.dev",
+    "M sys/arch/sgimips/dev/bridge.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3B",
+    "?? xiri/platforms/ip30/2026-11-15-m3b-pci.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/dev/bridge.c": "12f2c17ac6fb0cee4de207e5529e4a4da522c7615eaa8ebf506f3ad859544281",
+    "sys/arch/sgimips/dev/bridgereg.h": "c9d76135459bac7491cdd5a2b3ba615293ee2bfd780a3b090140f0d415a6dd0c",
+    "sys/arch/sgimips/dev/files.dev": "3259f3439788805a7b0772080a857b070e18b1bcd32b82988d245588014015d7",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3B": "e2f9fd39db83fd49f643b53c2f4576f52f8f852adbba00d83d99fd7f9926bd90",
+    "xiri/platforms/probe.py": "26e75ce800380d1a3ef6cc9f8b57ffa20cd1e76a986fee99bd2db91090eed037",
+    "xiri/platforms/README": "217788678d6204703e066d63f8d97d38b374508e1deb7b43b79a5c07eb84bb53",
+    "xiri/platforms/ip30/DESIGN": "d4621b963f9003bd20134f90b9f2502cfa99f8f0bc63bf9f325256bf33144e77",
+    "xiri/platforms/ip30/HANDOVER": "8a7ba24d83b4828d6d78da84d396f41f929bce2699ddd9021f6afcb3934c25dc"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3B",
+    "attachment": "pci0 at xbridge0 bus 0",
+    "chipset": "direct type-0 config at 0x020000 + slot*0x1000 + function*0x100; bus 0 devices 0..3 function 0",
+    "interrupts": "xbridge_intr_map returns -1; PCI interrupt establishment not implemented",
+    "bars_windows": "not programmed; PROM-assigned IOC3 BAR0 and Bridge device window 2 remain",
+    "devices": [
+      "pci0 dev0 1077:1020 QLogic ISP1040B",
+      "pci0 dev1 1077:1020 QLogic ISP1040B",
+      "pci0 dev2 10a9:0003 IOC3",
+      "pci0 dev3 10a9:0005 RAD"
+    ],
+    "build_guard": "PCI chipset/attachment code is guarded by NPCI; XIRI_IP30_M3A still builds and runs inventory-only",
+    "success_checks": "PCI_OK requires config_found() to return a child and no new Bridge error bits after enumeration"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3B",
+    "netbsd_sha256": "742d577076070f1c0a3a8f0494dc1b345a0ba284ce1c29f2bb1b75a49aa6c31d",
+    "netbsd_gdb_sha256": "83ba9e58d2f3e88f5d8945d73a2b3f6fa549789406e76c767230ef02443f23ed",
+    "readelf_sha256": "5f30d05e94c38fc8b8a4988c375ab5fb33672cba511b79ce2188b348075a7a10",
+    "size_sha256": "6f5fd8ad038ac30e14fbfd45ef02f38683483f8bcff9dac0ee7180ab144ad504",
+    "entry_symbols_sha256": "3946d91bd3ea769b7786483487bc917934b3641a2aa2d87ed9895b41f03ccfa5",
+    "linker_map_sha256": "58db4afc665739cf17b417a1e69028ec895c8ab7964d4163cc3f3aa47d4e657d",
+    "build_log_sha256": "f2eda1ac97093868fa9f73a5ff61d5f8366757bbf61bc5ee13da7e0d872f49e7"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3b-pci-20261115b",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3B_PCI_OK --kernel-entry --timeout 90 --output ../xiri/.work/octane-m3b-pci-20261115b",
+    "expected_marker": "XIRI_IP30_M3B_PCI_OK",
+    "status": "passed",
+    "elapsed_seconds": 38.89,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "ca96d2e37c08a4ad4b2e92281b52c965a0b14d4103ee74a31b70405f3765893b",
+    "serial_sha256": "6be6920a898961eae74b12470f4379a8b913d602482223bc71002e5a2092c0eb",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203eb9f0",
+      "bss_start": "0xa8000000203e7790",
+      "bss_end": "0xa800000020400f00",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203e7b60",
+      "stack_top": "0xa8000000203ebb60"
+    },
+    "observations": [
+      "xbridge inventory passed",
+      "pci0 at xbridge0 bus 0",
+      "four expected devices enumerated as not configured",
+      "post-pci intr status 0 new 0 child attached",
+      "XIRI_IP30_M3B_PCI_OK"
+    ],
+    "inputs": {
+      "netbsd": "742d577076070f1c0a3a8f0494dc1b345a0ba284ce1c29f2bb1b75a49aa6c31d",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30": "ec7c836b60a87b86b33bbb33a9c061e3dcdab5a9cc4b0897e91d75eaa1e2e4ec",
+      "XIRI_O2": "3db53fba1f3f6682ce6099fda09d81fc19abcd311515815f95ef112aabea4e4d",
+      "XIRI_INDY64": "c82233811e188d24d8d42afc98a23cca674b4881227442289998d8c9717b9a08"
+    },
+    "latest_guest_runs": "M1/O2/Indy64 build logs are recorded above; their latest native guest runs remain the M2b-fix baselines. Corrected M3A and M3B guest runs are recorded separately in this manifest."
+  },
+  "not_proven": [
+    "BAR and Bridge window programming",
+    "PCI interrupt mapping/routing",
+    "Native IOC3 serial and interrupt delivery",
+    "Bridge DMA and QLogic storage",
+    "Cache-error delivery",
+    "Physical Octane hardware",
+    "Full root boot and multi-user login"
+  ],
+  "next_milestone": "M3b2: program/validate Bridge windows and BARs, then implement IOC3 polled serial and interrupt delivery.",
+  "m3a_revalidation": {
+    "output_directory": "../xiri/.work/octane-m3a-bridge-20261115e",
+    "status": "passed",
+    "elapsed_seconds": 38.69,
+    "result_sha256": "b4afdde8d0fdae2eea55844cb0c685ffadb145ef213002830b04ca25d826e2bb",
+    "serial_sha256": "cdbb80c9bcdfd5c0c7b9b49270bbc097a547d413fcbc12b8e3bdd4c40ef28ae0",
+    "netbsd_sha256": "647f9b2fdafdfad00ca7e847b2759f011f08c901f2645ec085ecbef11d27feb5"
+  }
+}

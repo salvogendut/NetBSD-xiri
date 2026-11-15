@@ -355,6 +355,33 @@ before/after both zero with no new error bits.
 This checkpoint does not attach pci(4), program BARs/windows, claim IOC3,
 implement serial or take interrupts/DMA.  Those are M3b.
 
+M3b1 PCI bus attachment checkpoint (2026-11-15)
+------------------------------------------------
+
+XIRI_IP30_M3B includes XIRI_IP30_M3A and adds `pci0 at xbridge0 bus 0`.
+xbridge now provides a sgimips PCI chipset:
+
+* bus 0, devices 0..3, function 0;
+* direct type-0 configuration reads/writes through the Bridge window;
+* PCI interrupt mapping is intentionally rejected (-1) until the Bridge
+  interrupt registers and IOC3/QLogic users are implemented;
+* pba_iot/pba_memt are the normal tag only for enumeration; no BAR or
+  Bridge window programming is performed.
+* All PCI chipset/attachment code is guarded by NPCI so XIRI_IP30_M3A
+  still builds and runs its inventory-only path with no pci(4).
+* PCI success requires config_found() to return an attached child and a
+  second Bridge error-status check to show no new error bits after
+  enumeration.
+
+Observed: pci0 attaches and reports both QLogic ISP1040B controllers, the
+IOC3 and the RAD as "not configured"; post-PCI interrupt status remains 0
+with no new errors and an attached child, then prints
+XIRI_IP30_M3B_PCI_OK.  The PROM's IOC3 BAR0 and Bridge device window 2
+remain in place.
+
+Not implemented yet: BAR/window programming, pci_intr_map, IOC3 serial,
+Bridge DMA and device drivers.
+
 Regression obligations
 ----------------------
 
