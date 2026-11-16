@@ -708,6 +708,37 @@ The M4a read-only and M4b clean-restart probes were rerun in the M4c output
 tree and passed.  Crash recovery, graphical login and physical hardware
 remain separate checkpoints.
 
+M4d recovery after abrupt emulator stop (2026-11-16)
+----------------------------------------------------
+
+M4d starts from a fresh disposable CHD and prep boot, uses the ttyC0
+multi-user path, and creates `/m4d-persist/baseline.txt` with
+`M4D_BASELINE_V1`.  It records the SHA-256 and `ls -lnai` metadata, runs
+`sync`, then creates additional text and 256 KiB writes without another
+sync.  The emulator is stopped through the IRIS control path without a
+guest shutdown; the root filesystem is left dirty.
+
+A single-user recovery boot sees the root read-only.  `fsck -fp
+/dev/sd0a` salvages the free-block count, summary information and block
+bitmaps, then marks the filesystem clean.  A following `fsck -fn` reports
+`File system is already clean`.  The synced baseline hash
+`5def9f34...`, 16-byte size and inode metadata are unchanged.  Unsynced
+writes are not required to survive and are not asserted.
+
+The recovered disk is then booted multi-user again: `/etc/rc` reaches
+login, root logs in on `/dev/ttyC0`, the baseline and metadata still
+match, and the guest halts cleanly.  The disposable base CHD remains
+unchanged; the same overlay carries the crash and recovery.
+
+Observed:
+
+  /dev/rsd0a: FREE BLK COUNT(S) WRONG IN SUPERBLK (SALVAGED)
+  /dev/rsd0a: SUMMARY INFORMATION BAD (SALVAGED)
+  /dev/rsd0a: BLK(S) MISSING IN BIT MAPS (SALVAGED)
+  /dev/rsd0a: MARKING FILE SYSTEM CLEAN
+  ** File system is already clean
+  M4D_LOGIN_OK
+
 Regression obligations
 ----------------------
 

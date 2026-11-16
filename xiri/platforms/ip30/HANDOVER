@@ -999,3 +999,26 @@ ip30/2026-11-16-m4c-multi-user-login.json.
 
 Next: make crash recovery a separate checkpoint without weakening the
 clean-shutdown and multi-user evidence.
+
+M4d checkpoint update (2026-11-16)
+----------------------------------
+
+M4d uses a fresh disposable CHD and the ttyC0 prep.  A multi-user login
+creates `/m4d-persist/baseline.txt` (`M4D_BASELINE_V1`), records its hash
+and metadata, and syncs.  Additional text and 256 KiB writes are issued
+without another sync, then IRIS is stopped without a guest shutdown.
+
+The recovery boot is single-user.  `/sbin/fsck -fp /dev/sd0a` salvages
+free-block accounting, summary information and block bitmaps and marks
+the filesystem clean; `/sbin/fsck -fn` then reports it already clean.
+The synced baseline hash `5def9f34...` and metadata survive.  Unsynced
+writes are explicitly not required to survive.
+
+A subsequent multi-user boot reaches login, root logs in on `/dev/ttyC0`,
+the baseline still matches, and the guest halts cleanly.  The base CHD is
+unchanged; the same overlay contains the crash and recovery.  Physical
+hardware remains separate.  Evidence is in
+ip30/2026-11-16-m4d-crash-recovery.json.
+
+Next: physical Octane validation, without weakening the emulated recovery
+and prior login evidence.

@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "date": "2026-11-16",
+  "milestone": "M4d",
+  "status": "passed-crash-recovery",
+  "scope": "A synced baseline survives an abrupt emulator stop without guest shutdown. The dirty root is recovered by single-user fsck, the synced baseline hash/metadata are unchanged, and a later multi-user login succeeds with a clean shutdown. Unsynced writes are not required to survive.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "bc1ab70174b",
+  "source_status": [
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json",
+    "M xiri/platforms/ip30/2026-11-15-m4b-persistence.json",
+    "M xiri/platforms/ip30/2026-11-16-m4c-multi-user-login.json",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? xiri/platforms/probe-m4d.py",
+    "?? xiri/platforms/test_probe_m4d.py",
+    "?? xiri/platforms/ip30/2026-11-16-m4d-crash-recovery.json"
+  ],
+  "source_files": {
+    "xiri/platforms/probe-m4d.py": "45216925e94712e72a40ae562d95699c43aa50588e574c59d43926d5cb4d95ad",
+    "xiri/platforms/probe-m4c.py": "a14aa1535d32ba8b35353453e8927b587b7e4084754c1d31ca904e714e79a0aa",
+    "xiri/platforms/probe.py": "168061c645004708b567d86b4c1009f95fb9bacd74edccb7d986aa761bf894b3",
+    "xiri/platforms/README": "1384b12f068206fdcea6d6319c28df6a0fffebaf038c1eef41759222684ec655",
+    "xiri/platforms/ip30/DESIGN": "f2f85e1d693e20bffe54bcbd7520939f17cb09608d6d41e20f5a2f27016baeac",
+    "xiri/platforms/ip30/HANDOVER": "bbd49da5ab363a767fb5e8b2a8e2145f9d1b837d1af258115be36f1bd2e5c9a2",
+    "xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json": "4f0208f07f9799f70ee541b5d52750c0c7ee147f2efa5251c48b75b13a73204b",
+    "xiri/platforms/ip30/2026-11-15-m4b-persistence.json": "9f2cb78e79a4d4bf2f3fa37162e666771d551168064d1ea32a23e4c38410aebe",
+    "xiri/platforms/ip30/2026-11-16-m4c-multi-user-login.json": "35ec88ad16a2aa3ee35163e3b452efa171afbda252b2391b98434c75d2f12f01",
+    "xiri/platforms/test_probe_m4d.py": "6359f6199ac407922bdd4236a782d6d33de8bd199799506ceff8844b999e19cd"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "harness": "xiri/platforms/probe-m4d.py",
+    "kernel": "reuses the committed M4a XIRI_IP30_M4A kernel",
+    "prep": "reuses the M4c disposable-disk prep enabling ttyC0",
+    "crash": "creates and syncs baseline.txt, then creates unsynced text and 256 KiB writes and stops IRIS through the control path without guest shutdown",
+    "recovery": "single-user fsck -fp repairs the dirty root; code 4 is rejected as requiring reboot and is never followed by verification or normal shutdown; fsck -fn must report clean; baseline hash/metadata must match",
+    "login": "multi-user boot reaches login, root logs in on ttyC0, baseline is verified and the system halts cleanly"
+  },
+  "build": {
+    "status": "reused-m4a-build",
+    "netbsd_sha256": "af898703b1a93568700b97bbff3104787d9a846da28522be01e82b86177244de",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M4A-evcount2-build.log",
+    "build_log_sha256": "b2b57023d9b98052d1000714e7efe2fc6338f639b69af791c7f17f7ac25f08c0"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m4d-crash-recovery-20261116",
+    "status": "passed-crash-recovery",
+    "result_sha256": "556499246187ad5ca48a07fef075954293a562325ecf88fdedd1bf1c3c377d4b",
+    "originals_unchanged": true,
+    "changed_inputs": [],
+    "inputs": {
+      "netbsd": "af898703b1a93568700b97bbff3104787d9a846da28522be01e82b86177244de",
+      "nvram": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "disk": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "disk": {
+      "source": "/var/home/salvogendut/Dev/xiri/.work/m4a-root.chd",
+      "source_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "copy": "/var/home/salvogendut/Dev/xiri/.work/octane-m4d-crash-recovery-20261116/disk.chd",
+      "copy_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "overlay": "/var/home/salvogendut/Dev/xiri/.work/octane-m4d-crash-recovery-20261116/disk.chd.diff.chd",
+      "overlay_sha256": "7f6793d5f13e3313373f42f5de8c3de66ca4e8880c2bd637391c44f69c0d59e3",
+      "overlay_bytes": 3702784
+    },
+    "prep": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4d-crash-recovery-20261116/prep",
+      "status": "passed",
+      "elapsed_seconds": 79.79,
+      "clean_shutdown": true,
+      "serial_sha256": "2a948e477f748a28bc9eaac2c76f1bb3b2e19c5bb1f150de9a2ae21414f1d8d3"
+    },
+    "baseline": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4d-crash-recovery-20261116/baseline",
+      "status": "synced-before-abrupt-stop",
+      "elapsed_seconds": 140.88,
+      "clean_shutdown": false,
+      "abrupt_stop": true,
+      "serial_sha256": "1483c790552e5cb362720b3b6e7b77b15639524bb255c77a91c3d418552b3848",
+      "file_sha256": "5def9f340d5a86e89bfcf6a97196c92bc85b936ebef15f3c91674dc7990cb674",
+      "file_metadata": {
+        "inode": "274945",
+        "mode": "-rw-r--r--",
+        "links": "1",
+        "uid": "0",
+        "gid": "0",
+        "size": "16",
+        "mtime": "Nov 14 10:31"
+      },
+      "unsynced_writes": [
+        "/m4d-persist/unsynced.txt",
+        "/m4d-persist/unsynced.bin"
+      ]
+    },
+    "recovery": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4d-crash-recovery-20261116/recovery",
+      "status": "fsck-recovered",
+      "elapsed_seconds": 116.44,
+      "clean_shutdown": true,
+      "serial_sha256": "c2b99efa3782c903f31bda4f1d635e830cf20d146099af924c4ae452161ff116",
+      "fsck_preen": "/sbin/fsck -fp /dev/sd0a; printf '\\nXIRI_M4C_7e0ebdb5dfc743be8272f5b8df48ab16_RC=%s\\n' \"$?\"\n/dev/rsd0a: FREE BLK COUNT(S) WRONG IN SUPERBLK (SALVAGED)\n/dev/rsd0a: SUMMARY INFORMATION BAD (SALVAGED)\n/dev/rsd0a: BLK(S) MISSING IN BIT MAPS (SALVAGED)\n/dev/rsd0a: 31990 files, 688038 used, 3422665 free (2425 frags, 427530 blocks, 0.1% fragmentation)\n/dev/rsd0a: MARKING FILE SYSTEM CLEAN\n\nXIRI_M4C_7e0ebdb5dfc743be8272f5b8df48ab16_RC=0\nxiri-octane# ",
+      "fsck_check": "/sbin/fsck -fn /dev/sd0a; printf '\\nXIRI_M4C_ec2138ef0d5e4b0cbd6571643d01176e_RC=%s\\n' \"$?\"\n** /dev/rsd0a (NO WRITE)\n** File system is already clean\n** Last Mounted on /\n** Root file system\n** Phase 1 - Check Blocks and Sizes\n** Phase 2 - Check Pathnames\n** Phase 3 - Check Connectivity\n** Phase 4 - Check Reference Counts\n** Phase 5 - Check Cyl groups\n31990 files, 688038 used, 3422665 free (2425 frags, 427530 blocks, 0.1% fragmentation)\n\nXIRI_M4C_ec2138ef0d5e4b0cbd6571643d01176e_RC=0\nxiri-octane# ",
+      "fsck_clean": true,
+      "file_sha256": "5def9f340d5a86e89bfcf6a97196c92bc85b936ebef15f3c91674dc7990cb674",
+      "file_metadata": {
+        "inode": "274945",
+        "mode": "-rw-r--r--",
+        "links": "1",
+        "uid": "0",
+        "gid": "0",
+        "size": "16",
+        "mtime": "Nov 14 10:31"
+      }
+    },
+    "login": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4d-crash-recovery-20261116/login",
+      "status": "passed",
+      "elapsed_seconds": 166.23,
+      "clean_shutdown": true,
+      "serial_sha256": "7955966b11c618a6c64695a005dfa3e6d2daa97456fd8dce18fce6ac3036eb8d",
+      "identity": "root",
+      "tty": "/dev/ttyC0",
+      "file_sha256": "5def9f340d5a86e89bfcf6a97196c92bc85b936ebef15f3c91674dc7990cb674",
+      "file_metadata": {
+        "inode": "274945",
+        "mode": "-rw-r--r--",
+        "links": "1",
+        "uid": "0",
+        "gid": "0",
+        "size": "16",
+        "mtime": "Nov 14 10:31"
+      }
+    }
+  },
+  "observations": [
+    "baseline.txt was synced before additional text and 256 KiB writes were issued",
+    "IRIS was stopped without a guest shutdown; the baseline boot has clean_shutdown false",
+    "fsck -fp salvaged free-block counts, summary information and block bitmaps",
+    "fsck -fp marked the filesystem clean; fsck -fn reported it already clean",
+    "the synced baseline hash and metadata were unchanged after recovery",
+    "unsynced writes were not required to survive",
+    "multi-user login on ttyC0 succeeded after recovery",
+    "the subsequent guest shutdown was clean",
+    "the disposable base CHD was unchanged and the overlay persisted",
+    "fsck exit code 4 is rejected before file verification and halt"
+  ],
+  "not_proven": [
+    "Physical Octane hardware and physical power loss",
+    "Graphical login and desktop/network services"
+  ],
+  "next_milestone": "Physical Octane validation without weakening the emulated recovery evidence.",
+  "tests": {
+    "command": "python3 xiri/platforms/test_probe_m4d.py -q",
+    "status": "passed",
+    "tests": 1,
+    "log": "../xiri/.work/octane-m4d-crash-recovery-20261116/negative-tests.log",
+    "log_sha256": "445221b98f22d14309aaea4fee1a9f41c9659ced4c922d71fbc0dcbbde571045"
+  }
+}
