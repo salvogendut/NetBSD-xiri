@@ -198,6 +198,10 @@ clean, then a multi-user login verifies the baseline and halts cleanly.
 Unsynced writes are not required.  Evidence is in
 ip30/2026-11-16-m4d-crash-recovery.json.
 
+Physical handoff: read-only M4a runbook, pinned artifacts, PROM/serial
+settings and staged M1-M4a checks are in ip30/PHYSICAL-HANDOFF.  Physical
+hardware and power-loss testing remain separate.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
 topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3/M4a/M4b/M4c/M4d checkpoints
 to physical hardware validation.  It includes the source audit, retained

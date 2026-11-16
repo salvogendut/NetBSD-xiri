@@ -1022,3 +1022,8 @@ ip30/2026-11-16-m4d-crash-recovery.json.
 
 Next: physical Octane validation, without weakening the emulated recovery
 and prior login evidence.
+
+Physical handoff: ip30/PHYSICAL-HANDOFF and
+ip30/2026-11-16-physical-handoff.json.  The runbook pins the read-only
+M4a path, PROM/serial settings, stage kernels and stop points.  Physical
+power-loss testing remains a later checkpoint.

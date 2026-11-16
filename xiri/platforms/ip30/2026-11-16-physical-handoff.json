@@ -1,0 +1,225 @@
+{
+  "schema": 1,
+  "date": "2026-11-16",
+  "milestone": "Physical-handoff",
+  "status": "pending-physical-hardware",
+  "scope": "Read-only M4a physical validation handoff using the dedicated dumps-on-none physical kernel. Pins artifacts, PROM/serial settings, disk capacity rules, staged M1-M4a checks, per-stage terminal states, and excludes emulator-only M3d3. No physical hardware was exercised.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "1bee7e44579",
+  "source_status": [
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json",
+    "M xiri/platforms/ip30/2026-11-15-m4b-persistence.json",
+    "M xiri/platforms/ip30/2026-11-16-m4c-multi-user-login.json",
+    "M xiri/platforms/ip30/2026-11-16-m4d-crash-recovery.json",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M4A_PHYS",
+    "?? xiri/platforms/ip30/PHYSICAL-HANDOFF",
+    "?? xiri/platforms/ip30/2026-11-16-physical-handoff.json"
+  ],
+  "source_files": {
+    "xiri/platforms/ip30/PHYSICAL-HANDOFF": "9bf89cc55f410400c8f98fbcf40c222883ca07603b4a45afffa6a4a92c7511c5",
+    "xiri/platforms/README": "fbf81a2f4d609b8b42eebaa83b7c6230ee50998821fb1b226293777eb872904f",
+    "xiri/platforms/ip30/HANDOVER": "6d8043f17f2b14a5c5c56875d5dc3dcf017413b641dcd05d18fd939fed9605c8",
+    "xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json": "a367cbf2e89a7a2ab83852a3949bcf4ee12e34057d39f251d2de66ebc90a8a2a",
+    "xiri/platforms/ip30/2026-11-15-m4b-persistence.json": "de31015d89945c1a8b68010eff6f24d1dcf1fd9aa29c34adb283c934ca07b1a9",
+    "xiri/platforms/ip30/2026-11-16-m4c-multi-user-login.json": "4a4e3f8c44e460ee3fd20353208bb31556245ae399256380052b7c2a7d89f02d",
+    "xiri/platforms/ip30/2026-11-16-m4d-crash-recovery.json": "e6905373a2122e6d0f2662160631e7782f392a36df6b0bbab6dbcd7b730cab7c",
+    "sys/arch/sgimips/conf/XIRI_IP30_M4A_PHYS": "ab18d0c8850524c456211c94491f8b9ded0dbfa38f9f7427ed79a6611dbac819",
+    "sys/arch/sgimips/conf/XIRI_IP30_M4A": "33dea809222ee1e11c2841b7e68d4b3028b1f186be02b660d34623cb8dfbc465",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3D3": "9fa2a78cdafc52014e7be406941b37778210cbffa587cb7b4d47dcae89370e01"
+  },
+  "pinned_build": {
+    "source_revision": "1bee7e44579",
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M4A_PHYS",
+    "config_sha256": "ab18d0c8850524c456211c94491f8b9ded0dbfa38f9f7427ed79a6611dbac819",
+    "kernel": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M4A_PHYS/netbsd",
+    "kernel_sha256": "6886f788361d53568561d0f3a1535177959353323cfd6c1dd44946fb72f8ef3b",
+    "netbsd_gdb_sha256": "4dfbd5fff1237f4b5adaf384a928b5030c36d423b00e28a1a3faa3f94057a18b",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M4A_PHYS-build.log",
+    "build_log_sha256": "41e33b457364e30368b57a7a3980bd2bccbb9cdb6298c222c20789c973f383fd",
+    "dump_device": "none"
+  },
+  "stage_kernels": [
+    {
+      "stage": "M1",
+      "config": "XIRI_IP30",
+      "sha256": "1c3fda886864d6b7d4b9435ff5d5fa8e0da4ff82ec2eeb6869ab61fc53b7586a",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30/netbsd",
+      "marker": "XIRI_IP30_KERNEL_ENTRY_OK",
+      "terminal_state": "halt-loop; front-panel reset/power-cycle"
+    },
+    {
+      "stage": "M2a",
+      "config": "XIRI_IP30_M2",
+      "sha256": "7540ebb910fc95a61dca03e57afdc31e51b7c1fd7c800d0ad44cb41918a7a26e",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M2/netbsd",
+      "marker": "XIRI_IP30_M2_MEMORY_OK",
+      "terminal_state": "halt-loop; front-panel reset/power-cycle"
+    },
+    {
+      "stage": "M2b",
+      "config": "XIRI_IP30_M2B",
+      "sha256": "eb57a5ef41012f7b344c59ea79c1c5d1def55189a48e150832a57c54e89df25e",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M2B/netbsd",
+      "marker": "XIRI_IP30_M2B_INTR_OK",
+      "terminal_state": "continues to root device prompt; type halt"
+    },
+    {
+      "stage": "M3a",
+      "config": "XIRI_IP30_M3A",
+      "sha256": "2d17ca5ea9287aab7412d8f9292caca65f2c0b6dc3240b3978c8bc470d8002fc",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3A/netbsd",
+      "marker": "XIRI_IP30_M3_BRIDGE_OK",
+      "terminal_state": "continues to root device prompt; type halt"
+    },
+    {
+      "stage": "M3b1",
+      "config": "XIRI_IP30_M3B",
+      "sha256": "b45d42929329462f515b76fe618b093d2191088b9eb5ecfefc8be576bccc031a",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B/netbsd",
+      "marker": "XIRI_IP30_M3B_PCI_OK",
+      "terminal_state": "continues to root device prompt; type halt"
+    },
+    {
+      "stage": "M3b2",
+      "config": "XIRI_IP30_M3B2",
+      "sha256": "2bfdbc2c7987fb735e6dd467d51ea64789c7736e8482f05998dd9548faa57aa4",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B2/netbsd",
+      "marker": "XIRI_IP30_M3B2_IOC3_CONSOLE",
+      "terminal_state": "continues to root device prompt; type halt"
+    },
+    {
+      "stage": "M3b3",
+      "config": "XIRI_IP30_M3B3",
+      "sha256": "2a03da8ae48c15d1439e3bc839b79fe3afe36ebf91f37090ba0c361aead25e6f",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B3/netbsd",
+      "marker": "XIRI_IP30_M3B3_SERIAL_OK",
+      "terminal_state": "continues to root device prompt; type halt"
+    },
+    {
+      "stage": "M3c1",
+      "config": "XIRI_IP30_M3C1",
+      "sha256": "d2412d03ed90ada7da1bcc6be09f5b0cf13a6ecc2bec82ff47fc03683d73a467",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3C1/netbsd",
+      "marker": "XIRI_IP30_M3C1_READY",
+      "terminal_state": "continues to root device prompt; type halt"
+    },
+    {
+      "stage": "M3d1",
+      "config": "XIRI_IP30_M3D1",
+      "sha256": "ce63016d60db1f4621e38478c7dffd617697dea2cb0263e45599f6daa801c3e0",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D1/netbsd",
+      "marker": "XIRI_IP30_M3D1_READY",
+      "terminal_state": "continues to root device prompt; type halt; no disk required"
+    },
+    {
+      "stage": "M3d2",
+      "config": "XIRI_IP30_M3D2",
+      "sha256": "ffd3afdd5a751a86a3e3cda857091ce5ac3e95836f0a77bc8fa11dbb7af38fbc",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D2/netbsd",
+      "marker": "XIRI_IP30_M3D2_READY",
+      "terminal_state": "continues to root device prompt; type halt; no disk required"
+    },
+    {
+      "stage": "M3d3",
+      "config": "XIRI_IP30_M3D3",
+      "sha256": "9e8815edde05d0f9dae053ec71649e58f5d5a76bfef0aa05d796798c331e5a10",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D3/netbsd",
+      "marker": "EMULATOR-ONLY",
+      "terminal_state": "do not boot physically; emulator test thread exits and kernel reaches root prompt"
+    },
+    {
+      "stage": "M4a",
+      "config": "XIRI_IP30_M4A_PHYS",
+      "sha256": "6886f788361d53568561d0f3a1535177959353323cfd6c1dd44946fb72f8ef3b",
+      "path": "../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M4A_PHYS/netbsd",
+      "marker": "root on sd0a / single-user shell",
+      "terminal_state": "read-only shell; shutdown -h now, no remount"
+    }
+  ],
+  "serial": {
+    "prom": "setenv -f console d",
+    "baud": 9600,
+    "format": "8N1",
+    "flow_control": "none",
+    "physical_connector": "IOC3 first serial port",
+    "ioc3_uart": "UART A at 0x1f620178",
+    "driver_marker": "XIRI_IP30_M3C1_UART_OK lcr=0x3 predivider=6 frequency=7372800 divisor=48 rate=9600",
+    "capture": "raw serial log"
+  },
+  "prom": {
+    "prelude": [
+      "setenv -f console d",
+      "setenv AutoLoad No"
+    ],
+    "m4a_read_only": "boot -f bootp():netbsd-XIRI_IP30_M4A_PHYS --s",
+    "stage": "boot -f bootp():<pinned-kernel-filename>",
+    "bootp_note": "Use the local PROM bootp()<server>:<filename> form if required; filename stays pinned."
+  },
+  "read_only_config_validation": {
+    "output_directory": "../xiri/.work/octane-m4a-phys-readonly-20261116",
+    "status": "passed",
+    "clean_shutdown": true,
+    "expected_root_line": "root on sd0a (no dumps-on suffix)",
+    "result_sha256": "20ad75d006fce1654a7920b35959b553d78437bf80fc4866a5219449242aab15",
+    "serial_sha256": "c7c7616773ec99511dac68700e981c6c6aa7286185b8784e9e99dc9600d1542d",
+    "not_physical": true
+  },
+  "disks": {
+    "m4a_root": {
+      "source_chd": "../xiri/.work/m4a-root.chd",
+      "chd_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "image_bytes": 8589934592,
+      "physical_target": 1,
+      "guest_volume": "sd0a",
+      "root_start_sector": 8256,
+      "root_sectors": 16703488,
+      "capacity_note": "Destination drive must be at least 8 GiB; guest sd0 reports the physical drive capacity, which may exceed the image size. Root partition remains the 8 GiB image partition.",
+      "mount": "read-only only"
+    },
+    "m3d3_test": {
+      "source_raw": "../xiri/.work/m3d3-disk.raw",
+      "raw_sha256": "523aa1bd4c1e2795d15a7caa8a029d444d4a67454c7a8a9afe7f35f6c71a54cb",
+      "physical_target": 1,
+      "guest_volume": "sd0",
+      "emulator_only": true,
+      "reason": "requires exactly 32768 sectors and SGI/IRIS EMUL DISK/1.0 identity; a physical disk changes neither identity nor capacity",
+      "read_only_test": true
+    }
+  },
+  "stage_terminal_states": {
+    "M1_M2a": "deliberate xiri_ip30_halt() spin; no PROM return; front-panel reset or power-cycle",
+    "M2b_M3d2": "continue to root device prompt; type halt; no disk required",
+    "M3d3": "emulator-only; test thread kthread_exit; kernel continues to root prompt; do not boot physically",
+    "M4a": "single-user read-only shell; shutdown -h now; wait unmounting done/Option?; no remount"
+  },
+  "m4a_gate": {
+    "required": [
+      "root on sd0a (no dumps-on suffix)",
+      "Enter pathname of shell or RETURN for /bin/sh:",
+      "root_device on / type ffs (read-only, local)",
+      "/dev/console character device",
+      "interactive input/output",
+      "com0 rxintr and com0 txintr",
+      "sd0 physical identity/capacity"
+    ],
+    "forbidden": [
+      "mount -u -w /",
+      "mkdir",
+      "touch",
+      "printf > file",
+      "truncate",
+      "mknod",
+      "M4b/M4c/M4d commands"
+    ]
+  },
+  "safety": "Stop at the read-only shell. All disk writes in preparation are host-side only. The physical kernel has dumps on none. Do not boot M4b/M4c/M4d or use the emulator-only M3d3 image on physical hardware.",
+  "not_proven": [
+    "Physical Octane execution",
+    "Physical power-loss recovery",
+    "Physical multi-user/write durability"
+  ],
+  "next": "Physical M1-to-M4a read-only execution; power-loss testing remains separate."
+}
