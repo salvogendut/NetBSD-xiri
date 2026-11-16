@@ -1,0 +1,347 @@
+{
+  "schema": 1,
+  "date": "2026-11-16",
+  "milestone": "M4c",
+  "status": "passed-multi-user-serial-login-and-persistence",
+  "scope": "A disposable CHD is prepared once to enable the existing ttyC0 getty, then two multi-user boots complete /etc/rc, log in as root on /dev/ttyC0, exercise interactive TTY input/output, create and persist a file across a clean reboot, and pass M4a/M4b regressions. Crash recovery and graphical login are separate.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "4521ae38692",
+  "source_status": [
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json",
+    "M xiri/platforms/ip30/2026-11-15-m4b-persistence.json",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? xiri/platforms/probe-m4c.py",
+    "?? xiri/platforms/test_probe_m4c.py",
+    "?? xiri/platforms/ip30/2026-11-16-m4c-multi-user-login.json"
+  ],
+  "source_files": {
+    "xiri/platforms/probe-m4c.py": "a14aa1535d32ba8b35353453e8927b587b7e4084754c1d31ca904e714e79a0aa",
+    "xiri/platforms/test_probe_m4c.py": "b4c2c00e9d909ea47976401324f41864e0125c9ca6dc65b6c7f8adccfac7b528",
+    "xiri/platforms/probe.py": "168061c645004708b567d86b4c1009f95fb9bacd74edccb7d986aa761bf894b3",
+    "xiri/platforms/probe-m4b.py": "ad12eedc727b8ae5b712a0018584ae1e5f4ba1dd8c7856e7b1f1c60d6c2eda00",
+    "xiri/platforms/test_probe_m4b.py": "eb90fc6723c818d4a9ecc8a4f91f194e87f1e995931863ee0b3c8fde10b7a046",
+    "xiri/platforms/README": "66935983782f54bd6fa471fb1efabb5bfbefa2c44ef0c76c6c5e619f12759d86",
+    "xiri/platforms/ip30/DESIGN": "225264549155026ca07d179c6813a4fa9ec49458b396ee372753e61f357e4078",
+    "xiri/platforms/ip30/HANDOVER": "2e31cc28321387a790f919b2743a25085aa01467a57f72bfff0518b4afb86bee",
+    "xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json": "d115ea4a4170ad1b74ad1bf4f95f6684904e54b3498647ae1c6743ddbc16ccdd",
+    "xiri/platforms/ip30/2026-11-15-m4b-persistence.json": "8378151179a0e6c9b2f4f49ac1af563554b0bbb3aeb99c8b32858f08bcca0172"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "harness": "xiri/platforms/probe-m4c.py",
+    "kernel": "reuses the committed M4a XIRI_IP30_M4A kernel",
+    "prep": "single-user boot remounts root writable, changes /etc/ttys so ttyC0 is on and the Indy ttyZ0 is off, syncs and halts",
+    "multi_user": "boots without --s; /etc/rc reaches Starting cron and login: on ttyC0; root logs in without a password",
+    "tty": "tty reports /dev/ttyC0; stty and command echo prove interactive input/output",
+    "persistence": "first login creates /m4c-persist/persist.txt with M4C_PERSIST_V1, records SHA-256 and ls -lnai, syncs and halts; second login verifies both after reboot",
+    "regressions": "M4a and M4b probes rerun against the original source CHD"
+  },
+  "build": {
+    "status": "reused-m4a-build",
+    "netbsd_sha256": "af898703b1a93568700b97bbff3104787d9a846da28522be01e82b86177244de",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M4A-evcount2-build.log",
+    "build_log_sha256": "b2b57023d9b98052d1000714e7efe2fc6338f639b69af791c7f17f7ac25f08c0"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m4c-multi-user-20261116f",
+    "status": "passed-multi-user-login-and-persistence",
+    "result_sha256": "09709ea039656194bc58413182347846eb29d8def34e81882772a4ae71fa209d",
+    "originals_unchanged": true,
+    "changed_inputs": [],
+    "inputs": {
+      "netbsd": "af898703b1a93568700b97bbff3104787d9a846da28522be01e82b86177244de",
+      "nvram": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "disk": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "disk": {
+      "source": "/var/home/salvogendut/Dev/xiri/.work/m4a-root.chd",
+      "source_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "copy": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/disk.chd",
+      "copy_sha256": "61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d",
+      "overlay": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/disk.chd.diff.chd",
+      "overlay_sha256": "82e11276d5c7f56f6703ac978cc546a37af2e3ea3df8232e7a5a93789920d6cd",
+      "overlay_bytes": 3735552
+    },
+    "prep": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/prep",
+      "status": "passed",
+      "elapsed_seconds": 77.24,
+      "clean_shutdown": true,
+      "serial_sha256": "b3cd484adc744e368a1d2971a5e0c18a3e8aec20120af57cfb1e381d875a7380",
+      "commands": [
+        "mount -u -w /",
+        "awk '{ if ($1==\"ttyC0\") sub(/[[:space:]]off[[:space:]]secure/, \"\\ton\\tsecure\"); else if ($1==\"ttyZ0\") sub(/[[:space:]]on[[:space:]]secure/, \"\\toff\\tsecure\"); print }' /etc/ttys > /etc/ttys.m4c",
+        "mv /etc/ttys.m4c /etc/ttys",
+        "grep -E '^ttyC0|^ttyZ0' /etc/ttys",
+        "sync",
+        "echo M4C_PREP_SYNC_OK"
+      ],
+      "command_results": [
+        {
+          "command": "mount -u -w /",
+          "returncode": 0
+        },
+        {
+          "command": "awk '{ if ($1==\"ttyC0\") sub(/[[:space:]]off[[:space:]]secure/, \"\\ton\\tsecure\"); else if ($1==\"ttyZ0\") sub(/[[:space:]]on[[:space:]]secure/, \"\\toff\\tsecure\"); print }' /etc/ttys > /etc/ttys.m4c",
+          "returncode": 0
+        },
+        {
+          "command": "mv /etc/ttys.m4c /etc/ttys",
+          "returncode": 0
+        },
+        {
+          "command": "grep -E '^ttyC0|^ttyZ0' /etc/ttys",
+          "returncode": 0
+        },
+        {
+          "command": "sync",
+          "returncode": 0
+        },
+        {
+          "command": "echo M4C_PREP_SYNC_OK",
+          "returncode": 0
+        }
+      ]
+    },
+    "boot1": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/boot1",
+      "status": "passed",
+      "elapsed_seconds": 167.43,
+      "clean_shutdown": true,
+      "serial_sha256": "25176bc76b57c423082b0912bdc97ec817f8fa4fd8eca18b4b23a289432651c4",
+      "commands": [
+        "id; whoami",
+        "uname -a",
+        "/sbin/mount",
+        "tty",
+        "stty -a",
+        "test -c /dev/console",
+        "printf 'XIRI_M4C_CONSOLE_%s\\n' CHAR_OK",
+        "printf 'XIRI_M4C_CONSOLE_%s\\n' WRITE >/dev/console",
+        "echo M4C_TTY_IO_OK",
+        "mkdir -p /m4c-persist",
+        "printf 'M4C_PERSIST_V1\\n' > /m4c-persist/persist.txt",
+        "echo M4C_FILE_OK",
+        "sha256 /m4c-persist/persist.txt",
+        "ls -lnai /m4c-persist",
+        "sync",
+        "echo M4C_SYNC_OK"
+      ],
+      "identity": "root",
+      "tty": "/dev/ttyC0",
+      "file_sha256": "be6a140b73b241a615cb4d00a71f252ad5dd44931a488a2e949ba4629a326859",
+      "file_metadata": {
+        "inode": "343681",
+        "mode": "-rw-r--r--",
+        "links": "1",
+        "uid": "0",
+        "gid": "0",
+        "size": "15",
+        "mtime": "Nov 14 10:31"
+      },
+      "command_results": [
+        {
+          "command": "id; whoami",
+          "returncode": 0
+        },
+        {
+          "command": "uname -a",
+          "returncode": 0
+        },
+        {
+          "command": "/sbin/mount",
+          "returncode": 0
+        },
+        {
+          "command": "tty",
+          "returncode": 0
+        },
+        {
+          "command": "stty -a",
+          "returncode": 0
+        },
+        {
+          "command": "test -c /dev/console",
+          "returncode": 0
+        },
+        {
+          "command": "printf 'XIRI_M4C_CONSOLE_%s\\n' CHAR_OK",
+          "returncode": 0
+        },
+        {
+          "command": "printf 'XIRI_M4C_CONSOLE_%s\\n' WRITE >/dev/console",
+          "returncode": 0
+        },
+        {
+          "command": "echo M4C_TTY_IO_OK",
+          "returncode": 0
+        },
+        {
+          "command": "mkdir -p /m4c-persist",
+          "returncode": 0
+        },
+        {
+          "command": "printf 'M4C_PERSIST_V1\\n' > /m4c-persist/persist.txt",
+          "returncode": 0
+        },
+        {
+          "command": "echo M4C_FILE_OK",
+          "returncode": 0
+        },
+        {
+          "command": "sha256 /m4c-persist/persist.txt",
+          "returncode": 0
+        },
+        {
+          "command": "ls -lnai /m4c-persist",
+          "returncode": 0
+        },
+        {
+          "command": "sync",
+          "returncode": 0
+        },
+        {
+          "command": "echo M4C_SYNC_OK",
+          "returncode": 0
+        }
+      ]
+    },
+    "boot2": {
+      "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/boot2",
+      "status": "passed",
+      "elapsed_seconds": 167.49,
+      "clean_shutdown": true,
+      "serial_sha256": "c444c58ec539b3370643f470d9e1323110385113315014a69dbcbc90c9666403",
+      "commands": [
+        "id; whoami",
+        "uname -a",
+        "/sbin/mount",
+        "tty",
+        "stty -a",
+        "test -c /dev/console",
+        "printf 'XIRI_M4C_CONSOLE_%s\\n' CHAR_OK",
+        "printf 'XIRI_M4C_CONSOLE_%s\\n' WRITE >/dev/console",
+        "echo M4C_TTY_IO_OK",
+        "sha256 /m4c-persist/persist.txt",
+        "cat /m4c-persist/persist.txt",
+        "ls -lnai /m4c-persist"
+      ],
+      "command_results": [
+        {
+          "command": "id; whoami",
+          "returncode": 0
+        },
+        {
+          "command": "uname -a",
+          "returncode": 0
+        },
+        {
+          "command": "/sbin/mount",
+          "returncode": 0
+        },
+        {
+          "command": "tty",
+          "returncode": 0
+        },
+        {
+          "command": "stty -a",
+          "returncode": 0
+        },
+        {
+          "command": "test -c /dev/console",
+          "returncode": 0
+        },
+        {
+          "command": "printf 'XIRI_M4C_CONSOLE_%s\\n' CHAR_OK",
+          "returncode": 0
+        },
+        {
+          "command": "printf 'XIRI_M4C_CONSOLE_%s\\n' WRITE >/dev/console",
+          "returncode": 0
+        },
+        {
+          "command": "echo M4C_TTY_IO_OK",
+          "returncode": 0
+        },
+        {
+          "command": "sha256 /m4c-persist/persist.txt",
+          "returncode": 0
+        },
+        {
+          "command": "cat /m4c-persist/persist.txt",
+          "returncode": 0
+        },
+        {
+          "command": "ls -lnai /m4c-persist",
+          "returncode": 0
+        }
+      ]
+    },
+    "persistence": {
+      "path": "/m4c-persist/persist.txt",
+      "sha256": "be6a140b73b241a615cb4d00a71f252ad5dd44931a488a2e949ba4629a326859",
+      "metadata": {
+        "inode": "343681",
+        "mode": "-rw-r--r--",
+        "links": "1",
+        "uid": "0",
+        "gid": "0",
+        "size": "15",
+        "mtime": "Nov 14 10:31"
+      },
+      "content_ok": true
+    },
+    "regressions": {
+      "m4a": {
+        "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/m4a-regression",
+        "command": "/usr/bin/python3 /var/home/salvogendut/Dev/NetBSD-xiri/xiri/platforms/probe.py --xiri /var/home/salvogendut/Dev/xiri --emulator /var/home/salvogendut/Dev/xiri/.work/platform-checks/native-20261115/emulator --image /var/home/salvogendut/Dev/xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M4A/netbsd --nvram /var/home/salvogendut/Dev/xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash /var/home/salvogendut/Dev/xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --output /var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/m4a-regression --machine octane --disk /var/home/salvogendut/Dev/xiri/.work/m4a-root.chd --single-user --expect XIRI_IP30_M3D2_READY --timeout 240",
+        "returncode": 0,
+        "status": "passed",
+        "clean_shutdown": true,
+        "result_sha256": "b9aad3eea3a0d874f25cd2a3ef39a2e86ecb2ea17c336de1573701b75ce97832",
+        "serial_sha256": "bc53092a451b65ea59b07d1424805f4cf08148d9dc3bee897dfe0b92f31a9ba9"
+      },
+      "m4b": {
+        "output_directory": "/var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/m4b-regression",
+        "command": "/usr/bin/python3 /var/home/salvogendut/Dev/NetBSD-xiri/xiri/platforms/probe-m4b.py --xiri /var/home/salvogendut/Dev/xiri --emulator /var/home/salvogendut/Dev/xiri/.work/platform-checks/native-20261115/emulator --image /var/home/salvogendut/Dev/xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M4A/netbsd --nvram /var/home/salvogendut/Dev/xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash /var/home/salvogendut/Dev/xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --disk /var/home/salvogendut/Dev/xiri/.work/m4a-root.chd --output /var/home/salvogendut/Dev/xiri/.work/octane-m4c-multi-user-20261116f/m4b-regression --timeout 240",
+        "returncode": 0,
+        "status": "passed-persistence-across-clean-restart",
+        "clean_shutdown": null,
+        "result_sha256": "b714a7204266b1c11b725701d0cd19d440f142b84a5135c6d33bfcd605e72827",
+        "boot1_serial_sha256": "caeb6db78c1bedbf28056668209447280f3d2b61bc768984e2fb236a15884115",
+        "boot2_serial_sha256": "0d622b489810604815390f131d4eee3896179216672fceccb8df899990aae2fd"
+      }
+    }
+  },
+  "observations": [
+    "prep changed ttyC0 to on and ttyZ0 to off on the disposable disk",
+    "both multi-user boots reached Starting cron and the login prompt",
+    "login reported root on ttyC0 and tty printed exactly /dev/ttyC0",
+    "root filesystem was mounted writable as /dev/sd0a",
+    "test -c /dev/console succeeded and a direct write emitted the visible console marker",
+    "every command returned status zero; failed stty/console tests are rejected",
+    "M4C_PERSIST_V1 file hash and 15-byte metadata matched after reboot",
+    "prep and both multi-user boots halted cleanly",
+    "M4a read-only regression passed",
+    "M4b clean-restart regression and its negative suite passed"
+  ],
+  "not_proven": [
+    "Crash recovery and unclean-shutdown recovery",
+    "Graphical login and desktop/network services",
+    "Physical Octane hardware"
+  ],
+  "next_milestone": "Keep crash recovery separate from clean shutdown and multi-user login.",
+  "tests": {
+    "command": "python3 xiri/platforms/test_probe_m4c.py -q",
+    "status": "passed",
+    "tests": 8,
+    "log": "../xiri/.work/octane-m4c-multi-user-20261116f/negative-tests.log",
+    "log_sha256": "a2cd4416892a8d5062b34e3841070554341a9eefb207940ccfd77ca880f16977"
+  }
+}

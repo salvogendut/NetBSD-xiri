@@ -20,10 +20,10 @@
     "xiri/platforms/probe-m4b.py": "ad12eedc727b8ae5b712a0018584ae1e5f4ba1dd8c7856e7b1f1c60d6c2eda00",
     "xiri/platforms/test_probe_m4b.py": "eb90fc6723c818d4a9ecc8a4f91f194e87f1e995931863ee0b3c8fde10b7a046",
     "xiri/platforms/probe.py": "168061c645004708b567d86b4c1009f95fb9bacd74edccb7d986aa761bf894b3",
-    "xiri/platforms/README": "86efea48fac04199dd96f03f89f27c895d5ce45c05cf9c85902b48d47e799ff8",
-    "xiri/platforms/ip30/DESIGN": "f5009e0cbeccab2d25d54f631cc481f6d32ce5eee9c43bee9f6114b822abff73",
-    "xiri/platforms/ip30/HANDOVER": "e0f181c4413674c25faaf28d3e64fa2e5ba8f0ba1c8b7960a27785b566bfabc0",
-    "xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json": "781ace252ee4f2d46c5b867a1a01cc917e5168d8c333c8d800c1e9ef3708c0bd"
+    "xiri/platforms/README": "66935983782f54bd6fa471fb1efabb5bfbefa2c44ef0c76c6c5e619f12759d86",
+    "xiri/platforms/ip30/DESIGN": "225264549155026ca07d179c6813a4fa9ec49458b396ee372753e61f357e4078",
+    "xiri/platforms/ip30/HANDOVER": "2e31cc28321387a790f919b2743a25085aa01467a57f72bfff0518b4afb86bee",
+    "xiri/platforms/ip30/2026-11-15-m4a-read-only-root.json": "d115ea4a4170ad1b74ad1bf4f95f6684904e54b3498647ae1c6743ddbc16ccdd"
   },
   "design": "xiri/platforms/ip30/DESIGN",
   "implementation": {

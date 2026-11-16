@@ -680,6 +680,34 @@ hash is unchanged after the second boot.  The M4a read-only baseline was
 rerun and passed with the original source CHD.  Crash recovery and
 multi-user login remain separate checkpoints.
 
+M4c multi-user serial login and persistence (2026-11-16)
+-------------------------------------------------------
+
+The Xiri image defaults to the Indy `ttyZ0` getty, which does not exist on
+Octane.  M4c therefore uses one disposable single-user prep boot to enable
+the existing `ttyC0` entry and disable `ttyZ0` in `/etc/ttys`, then runs two
+multi-user boots against the same disk and overlay.
+
+Both multi-user boots complete `/etc/rc` to `Starting cron` and present a
+`login:` prompt on ttyC0.  Root logs in without a password; the tests require
+`uid=0(root)`, the writable `/dev/sd0a on / type ffs (local)` mount, exact
+`tty` output `/dev/ttyC0`, a successful `test -c /dev/console`, the visible
+`XIRI_M4C_CONSOLE_WRITE` marker, and interactive stty/echo.  Every command
+runs under the POSIX login shell and its `$?` must be zero; a failed stty or
+console test fails the probe.  The `/etc/rc` module, dhcpcd and xiri_famd
+failures are nonfatal and remain visible in the serial log.
+
+The first login creates `/m4c-persist/persist.txt` with
+`M4C_PERSIST_V1`, records SHA-256 and `ls -lnai` metadata, and syncs.
+After a clean halt and reboot, the second login finds the same
+`be6a140b...` hash, 15-byte size and inode metadata, then halts cleanly.
+The disposable base CHD remains unchanged and the persistent overlay is
+retained.
+
+The M4a read-only and M4b clean-restart probes were rerun in the M4c output
+tree and passed.  Crash recovery, graphical login and physical hardware
+remain separate checkpoints.
+
 Regression obligations
 ----------------------
 

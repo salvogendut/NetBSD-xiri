@@ -184,9 +184,17 @@ and base, and a clean halt.  Negative tests cover zeroed/swapped/repeated
 pages and integrity-target mutations.  The M4a read-only baseline still
 passes.  Evidence is in ip30/2026-11-15-m4b-persistence.json.
 
+M4c multi-user serial login (2026-11-16): a prep boot enables the existing
+`ttyC0` getty for Octane, then two multi-user boots complete `/etc/rc`,
+log in as root on `/dev/ttyC0`, require exact tty/console checks and zero
+command statuses, exercise interactive TTY input/output, and verify a
+created file survives a clean reboot with matching hash/metadata.
+M4a and M4b regressions pass.  Evidence is in
+ip30/2026-11-16-m4c-multi-user-login.json.
+
 The implementation handover is ip30/HANDOVER.  Work continues on
-topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3/M4a/M4b checkpoints
-to serial multi-user login.  It includes the source audit, retained
+topic/sgimips-octane, progressing from the M1/M2a/M2b/M3a/M3b1/M3b2/M3b3/M3c1/M3d1/M3d2/M3d3/M4a/M4b/M4c checkpoints
+to crash recovery and physical hardware validation.  It includes the source audit, retained
 evidence, build/boot commands, milestones and regression requirements.
 Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
 

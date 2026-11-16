@@ -29,9 +29,9 @@
     "sys/arch/sgimips/dev/ioc3_com.c": "6b9c5daec9e08158d96ce71211a497fc9a8981a41cde89a4cf5141747642e829",
     "sys/dev/ic/com.c": "5086157107f05a4603ee2b900fc0ec0293a08ed88da515f2a695b211ec87994c",
     "sys/dev/ic/comvar.h": "6350112f34dc00496c4ba3b39139dc81601f48d26a63b62f9a9c937fc7f98982",
-    "xiri/platforms/README": "86efea48fac04199dd96f03f89f27c895d5ce45c05cf9c85902b48d47e799ff8",
-    "xiri/platforms/ip30/DESIGN": "f5009e0cbeccab2d25d54f631cc481f6d32ce5eee9c43bee9f6114b822abff73",
-    "xiri/platforms/ip30/HANDOVER": "e0f181c4413674c25faaf28d3e64fa2e5ba8f0ba1c8b7960a27785b566bfabc0",
+    "xiri/platforms/README": "66935983782f54bd6fa471fb1efabb5bfbefa2c44ef0c76c6c5e619f12759d86",
+    "xiri/platforms/ip30/DESIGN": "225264549155026ca07d179c6813a4fa9ec49458b396ee372753e61f357e4078",
+    "xiri/platforms/ip30/HANDOVER": "2e31cc28321387a790f919b2743a25085aa01467a57f72bfff0518b4afb86bee",
     "xiri/platforms/probe.py": "168061c645004708b567d86b4c1009f95fb9bacd74edccb7d986aa761bf894b3"
   },
   "design": "xiri/platforms/ip30/DESIGN",

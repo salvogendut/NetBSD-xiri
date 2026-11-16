@@ -972,3 +972,30 @@ in ip30/2026-11-15-m4b-persistence.json.
 
 Next: define crash-recovery and multi-user login checkpoints without
 weakening the clean-persistence evidence.
+
+M4c checkpoint update (2026-11-16)
+----------------------------------
+
+The image's `/etc/ttys` defaults to Indy `ttyZ0`; Octane needs `ttyC0`.
+A one-time single-user prep boot enables ttyC0, disables ttyZ0, syncs and
+halts.  Two multi-user boots then complete `/etc/rc` (to `Starting cron`),
+show `login:` on `NetBSD/sgimips ... (ttyC0)`, and log in as root without
+a password.  The nonfatal modules/dhcpcd/xiri_famd failures are retained
+in the serial logs.
+
+Both boots verify `uid=0(root)`, a writable `/dev/sd0a on / type ffs
+(local)` root, exact `tty` output `/dev/ttyC0`, a successful
+`test -c /dev/console`, the visible console-write marker, and interactive
+stty/echo.  Each command's POSIX `$?` must be zero, so failed stty or
+console-test commands fail the probe.  The first creates
+`/m4c-persist/persist.txt` (SHA-256 `be6a140b...`,
+15 bytes), records metadata, syncs and halts.  The second login finds the
+same hash and metadata after reboot, then halts cleanly.  The base CHD is
+unchanged and the overlay persists.
+
+M4a and M4b were rerun in this output tree and passed.  Crash recovery and
+physical hardware remain separate.  Evidence is in
+ip30/2026-11-16-m4c-multi-user-login.json.
+
+Next: make crash recovery a separate checkpoint without weakening the
+clean-shutdown and multi-user evidence.
