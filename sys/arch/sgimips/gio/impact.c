@@ -49,6 +49,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define IMPACT_WIDTH 1280
 #define IMPACT_HEIGHT 1024
 #define IMPACT_SPAN 64
+#define IMPACT_TILE_HEIGHT 8
 #define IMPACT_FBSIZE (IMPACT_WIDTH * IMPACT_HEIGHT * sizeof(uint32_t))
 
 struct impact_softc {
@@ -103,12 +104,12 @@ impact_cmd(struct impact_softc *sc, unsigned reg, uint32_t val, bool exec)
 }
 
 static bool
-impact_wait(struct impact_softc *sc)
+impact_wait(struct impact_softc *sc, unsigned maxlevel)
 {
 	/* Bound failures: an unresponsive board must not hang the kernel. */
 	for (unsigned n = 0; n < 1000000; n++) {
 		if ((bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-		    IMPACT_FIFOSTATUS) & IMPACTSR_FIFO_MASK) == 0)
+		    IMPACT_FIFOSTATUS) & IMPACTSR_FIFO_MASK) <= maxlevel)
 			return true;
 		delay(1);
 	}
@@ -142,43 +143,61 @@ impact_setup(struct impact_softc *sc)
 	    IMPACT_XMAP_BASE + IMPACTSR_XMAP_MAIN_MODE, 0x7a4);
 }
 
+static uint32_t
+impact_rgb(uint32_t pixel)
+{
+	return ((pixel & 0xff) << 16) | (pixel & 0xff00) |
+	    ((pixel >> 16) & 0xff);
+}
+
+static void
+impact_block(struct impact_softc *sc, unsigned x, unsigned y,
+    unsigned w, unsigned h)
+{
+	impact_cmd(sc, IMPACTSR_CMD_BLOCKXYSTARTI, IMPACTSR_XYCOORDS(x, y), false);
+	impact_cmd(sc, IMPACTSR_CMD_BLOCKXYENDI,
+	    IMPACTSR_XYCOORDS(x + w - 1, y + h - 1), false);
+	impact_cmd(sc, IMPACTSR_CMD_IR_ALIAS, 0x18, true);
+}
+
+static bool
+impact_fill(struct impact_softc *sc, unsigned x, unsigned y, unsigned w,
+    unsigned h, uint32_t pixel)
+{
+	if (!impact_wait(sc, 0))
+		return false;
+	impact_cmd(sc, IMPACTSR_CMD_PP1FILLMODE,
+	    IMPACTSR_PP1FILLMODE(0x6300, 3), false);
+	impact_cmd(sc, IMPACTSR_CMD_FILLMODE, 0, false);
+	impact_cmd(sc, IMPACTSR_CMD_PACKEDCOLOR, impact_rgb(pixel), false);
+	impact_block(sc, x, y, w, h);
+	return true;
+}
+
 static bool
 impact_span(struct impact_softc *sc, unsigned x, unsigned y, const uint32_t *p,
     unsigned count)
 {
-	bool solid = true;
-	for (unsigned i = 1; i < count; i++)
-		solid &= p[i] == p[0];
-	if (!impact_wait(sc))
+	if (memcmp(p, p + 1, (count - 1) * sizeof(*p)) == 0)
+		return impact_fill(sc, x, y, count, 1, p[0]);
+	if (!impact_wait(sc, 0))
 		return false;
 	impact_cmd(sc, IMPACTSR_CMD_PP1FILLMODE,
 	    IMPACTSR_PP1FILLMODE(0x6300, 3), false);
-	impact_cmd(sc, IMPACTSR_CMD_FILLMODE, solid ? 0 : (3U << 22), false);
-	if (solid) {
-		uint32_t rgb = ((p[0] & 0xff) << 16) | (p[0] & 0xff00) |
-		    ((p[0] >> 16) & 0xff);
-		impact_cmd(sc, IMPACTSR_CMD_PACKEDCOLOR, rgb, false);
-	} else {
-		/* Four-byte packed RGB, hardware red in bits 7:0. */
-		impact_cmd(sc, IMPACTSR_CMD_XFRMODE, 0x80, false);
-		impact_cmd(sc, IMPACTSR_CMD_XFRSIZE,
-		    IMPACTSR_YXCOORDS(count, 1), false);
-	}
-	impact_cmd(sc, IMPACTSR_CMD_BLOCKXYSTARTI, IMPACTSR_XYCOORDS(x, y), false);
-	impact_cmd(sc, IMPACTSR_CMD_BLOCKXYENDI,
-	    IMPACTSR_XYCOORDS(x + count - 1, y), false);
-	impact_cmd(sc, IMPACTSR_CMD_IR_ALIAS, 0x18, true);
-	if (!solid) {
-		for (unsigned i = 0; i < count; i += 2) {
-			if (!impact_wait(sc))
-				return false;
-			uint32_t a = ((p[i] & 0xff) << 16) | (p[i] & 0xff00) |
-			    ((p[i] >> 16) & 0xff);
-			uint32_t b = ((p[i + 1] & 0xff) << 16) | (p[i + 1] & 0xff00) |
-			    ((p[i + 1] >> 16) & 0xff);
-			impact_cmd(sc, IMPACTSR_CMD_CHAR_H, a, false);
-			impact_cmd(sc, IMPACTSR_CMD_CHAR_L, b, true);
-		}
+	impact_cmd(sc, IMPACTSR_CMD_FILLMODE, 3U << 22, false);
+	impact_cmd(sc, IMPACTSR_CMD_XFRMODE, 0x80, false);
+	impact_cmd(sc, IMPACTSR_CMD_XFRSIZE, IMPACTSR_YXCOORDS(count, 1), false);
+	impact_block(sc, x, y, count, 1);
+	for (unsigned i = 0; i < count; i += 2) {
+		/*
+		 * Reserve room below the programmed HQ3 high water mark (32)
+		 * for eight 64-bit writes. The commands remain in FIFO order.
+		 * Drain at each new block, not between pairs of pixels.
+		 */
+		if (i % 8 == 0 && !impact_wait(sc, 16))
+			return false;
+		impact_cmd(sc, IMPACTSR_CMD_CHAR_H, impact_rgb(p[i]), false);
+		impact_cmd(sc, IMPACTSR_CMD_CHAR_L, impact_rgb(p[i + 1]), true);
 	}
 	return true;
 }
@@ -226,13 +245,66 @@ impact_flush(struct impact_softc *sc, unsigned x, unsigned y,
 	}
 }
 
+/*
+ * Coalesce uniform shadow pixels into a hardware rectangle. Keep the
+ * comparison, FIFO transaction and previous-image update atomic with
+ * respect to console output. One tile covers at most 2 KiB on this UP.
+ */
+static void
+impact_update_tile(struct impact_softc *sc, unsigned x, unsigned y)
+{
+	uint32_t *p = sc->sc_pixels + y * IMPACT_WIDTH + x;
+	uint32_t *prev = sc->sc_previous + y * IMPACT_WIDTH + x;
+	const size_t rowbytes = IMPACT_SPAN * sizeof(*p);
+	bool dirty = false;
+	int s = splhigh();
+
+	if (sc->sc_failed)
+		goto done;
+	if (memcmp(p, p + 1, rowbytes - sizeof(*p)) != 0)
+		goto spans;
+	for (unsigned row = 0; row < IMPACT_TILE_HEIGHT; row++) {
+		unsigned off = row * IMPACT_WIDTH;
+		if (row != 0 && memcmp(p, p + off, rowbytes) != 0)
+			goto spans;
+		dirty |= memcmp(prev + off, p + off, rowbytes) != 0;
+	}
+	if (dirty) {
+		if (!impact_fill(sc, x, y, IMPACT_SPAN, IMPACT_TILE_HEIGHT, p[0])) {
+			sc->sc_failed = true;
+			goto done;
+		}
+		for (unsigned row = 0; row < IMPACT_TILE_HEIGHT; row++) {
+			unsigned off = row * IMPACT_WIDTH;
+			memcpy(prev + off, p, rowbytes);
+		}
+	}
+done:
+	splx(s);
+	return;
+spans:
+	splx(s);
+	impact_flush(sc, x, y, IMPACT_SPAN, IMPACT_TILE_HEIGHT);
+}
+
+CTASSERT(IMPACT_WIDTH % IMPACT_SPAN == 0);
+CTASSERT(IMPACT_HEIGHT % IMPACT_TILE_HEIGHT == 0);
+
 static void
 impact_update(void *cookie)
 {
 	struct impact_softc *sc = cookie;
 	for (;;) {
-		if (!sc->sc_polling)
-			impact_flush(sc, 0, 0, IMPACT_WIDTH, IMPACT_HEIGHT);
+		for (unsigned y = 0; !sc->sc_polling && !sc->sc_failed &&
+		    y < IMPACT_HEIGHT; y += IMPACT_TILE_HEIGHT) {
+			unsigned off = y * IMPACT_WIDTH;
+			/* A concurrent write after this check is seen next pass. */
+			if (memcmp(sc->sc_pixels + off, sc->sc_previous + off,
+			    IMPACT_TILE_HEIGHT * IMPACT_WIDTH * sizeof(uint32_t)) == 0)
+				continue;
+			for (unsigned x = 0; x < IMPACT_WIDTH; x += IMPACT_SPAN)
+				impact_update_tile(sc, x, y);
+		}
 		if (sc->sc_failed) {
 			aprint_error_dev(sc->sc_gen.sc_dev,
 			    "command FIFO timeout; display updates stopped\n");
@@ -365,7 +437,7 @@ impact_cnattach(struct gio_attach_args *ga)
 		return ENXIO;
 	sc->sc_iot = ga->ga_iot;
 	sc->sc_ioh = ga->ga_ioh;
-	if (!impact_wait(sc))
+	if (!impact_wait(sc, 0))
 		return ETIMEDOUT;
 	sc->sc_pixels = impact_console_pixels;
 	impact_setup(sc);
@@ -445,7 +517,7 @@ impact_attach(device_t parent, device_t self, void *aux)
 	if (bus_space_map(sc->sc_iot, ga->ga_addr, IMPACT_REG_SIZE, 0,
 	    &sc->sc_ioh) != 0)
 		return;
-	if (!impact_wait(sc)) {
+	if (!impact_wait(sc, 0)) {
 		aprint_error_dev(self, "command FIFO not ready\n");
 		bus_space_unmap(sc->sc_iot, sc->sc_ioh, IMPACT_REG_SIZE);
 		return;
