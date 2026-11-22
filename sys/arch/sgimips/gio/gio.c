@@ -111,6 +111,7 @@ struct gio_probe {
  */
 static const struct gio_probe slot_bases[] = {
 	{ GIO_SLOT_GFX,  0x1f000000, MACH_SGI_IP22, MACH_SGI_IP22_FULLHOUSE },
+	{ GIO_SLOT_GFX,  0x1f000000, MACH_SGI_IP28, MACH_SGI_IP22_FULLHOUSE },
 
 	{ GIO_SLOT_EXP0, 0x1f400000, MACH_SGI_IP12, -1 },
 	{ GIO_SLOT_EXP0, 0x1f400000, MACH_SGI_IP20, -1 },

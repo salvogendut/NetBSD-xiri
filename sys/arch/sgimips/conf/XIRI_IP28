@@ -1,0 +1,18 @@
+# $NetBSD$
+# Indigo2 R10000: load the Xiri IRIX personality as compat_irix_o32.kmod.
+include "arch/sgimips/conf/GENERIC64_IP28"
+ident "XIRI_IP28"
+options MODULAR
+no config netbsd
+config netbsd root on sd0a type ffs
+
+# Firmware-initialized IMPACT; serial remains the early/debug console.
+options WSEMUL_VT100
+impact* at gio? slot ? addr ?
+wsdisplay* at impact? console ?
+pckbc* at hpc0 offset ?
+pckbd* at pckbc?
+pms* at pckbc?
+wskbd* at pckbd? console ?
+wsmouse* at pms? mux 0
+pseudo-device wsmux
