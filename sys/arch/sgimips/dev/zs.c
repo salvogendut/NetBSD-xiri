@@ -645,6 +645,7 @@ zs_get_chan_addr(int zs_unit, int channel)
 		break;
 
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		if (zs_unit != 0)
 			panic("zs_get_chan_addr zs_unit != 0 on IP%d",
 								mach_type);
@@ -660,7 +661,7 @@ zs_get_chan_addr(int zs_unit, int channel)
 	 * We need to swap serial ports to match reality on
 	 * non-keyboard channels.
 	 */
-	if (mach_type == MACH_SGI_IP22) {
+	if (mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28) {
 		if (channel == 0)
 			zc = &addr->zs_chan_b;
 		else
@@ -787,6 +788,7 @@ zscngetc(dev_t dev)
 		break;
 
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 	default:
 		zs = zs_get_chan_addr(0, cons_port);
 		break;
@@ -807,6 +809,7 @@ zscnputc(dev_t dev, int c)
 		break;
 
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 	default:
 		zs = zs_get_chan_addr(0, cons_port);
 		break;

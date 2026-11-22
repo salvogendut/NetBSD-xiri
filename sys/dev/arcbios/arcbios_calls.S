@@ -36,6 +36,9 @@
 #include <mips/cpuregs.h>
 
 #include "assym.h"
+#if defined(sgimips) && !defined(_STANDALONE)
+#include "opt_arcbios64.h"
+#endif
 
 RCSID("$NetBSD: arcbios_calls.S,v 1.7 2026/05/03 23:06:13 adrian Exp $")
 
@@ -54,7 +57,34 @@ RCSID("$NetBSD: arcbios_calls.S,v 1.7 2026/05/03 23:06:13 adrian Exp $")
 
 #ifndef _STANDALONE
 
-#if defined(sgimips) && defined(_LP64)
+#if defined(ARCBIOS64)
+/* N64 firmware preserves the ABI registers, but not the kernel's curlwp. */
+NESTED(arcbios_4orless_args, 32, ra)
+XNESTED(arcbios_5to8_args)
+	PTR_SUBU sp, 32
+	REG_S	ra, 24(sp)
+	REG_S	MIPS_CURLWP, 16(sp)
+	mfc0	k0, MIPS_COP_0_STATUS
+	MFC0_HAZARD
+	REG_S	k0, 8(sp)
+	and	k0, ~MIPS_SR_INT_IE
+	or	k0, MIPS_SR_COP_1_BIT | MIPS_SR_KX
+	mtc0	k0, MIPS_COP_0_STATUS
+	COP0_HAZARD_FPUENABLE
+	PTR_L	t9, _C_LABEL(ARCBIOS)
+	PTR_ADDU t9, t0
+	PTR_L	t9, 0(t9)
+	jalr	t9
+	 nop
+	REG_L	k0, 8(sp)
+	REG_L	MIPS_CURLWP, 16(sp)
+	REG_L	ra, 24(sp)
+	mtc0	k0, MIPS_COP_0_STATUS
+	COP0_SYNC
+	jr	ra
+	 PTR_ADDU sp, 32
+END(arcbios_4orless_args)
+#elif defined(sgimips) && defined(_LP64)
 /*
  * IP2x ARCS is o32 firmware, even when the kernel is n64.  In particular,
  * addiu sp,sp,... in the PROM discards an XKPHYS stack address's upper

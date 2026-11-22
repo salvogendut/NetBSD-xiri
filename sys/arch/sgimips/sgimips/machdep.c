@@ -42,6 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 #include "opt_cputype.h"
 #include "opt_mips_cache.h"
 #include "opt_modular.h"
+#include "opt_arcbios64.h"
 
 #define __INTR_PRIVATE
 
@@ -76,6 +77,9 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 #include <machine/machtype.h>
 #include <machine/sysconf.h>
 #include <machine/bootinfo.h>
+#ifdef ARCBIOS64
+#include <machine/arcs64.h>
+#endif
 
 #include <mips/cache.h>
 #include <mips/cache_r5k.h>
@@ -177,7 +181,7 @@ extern void	ip22_sdcache_enable(void);
 extern void mips3_clock_intr(vaddr_t, uint32_t, uint32_t);
 #endif
 
-void	mach_init(int, int32_t *, uintptr_t, int32_t);
+void	mach_init(int, int32_t *, uintptr_t, uintptr_t);
 
 void	sgimips_count_cpus(struct arcbios_component *,
 	    struct arcbios_treewalk_context *);
@@ -232,11 +236,15 @@ static const char *bootinfo_msg = NULL;
  * Process arguments passed to us by the ARCS firmware.
  */
 void
-mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
+mach_init(int argc, int32_t argv32[], uintptr_t magic, uintptr_t bipval)
 {
 	paddr_t first, last;
 	vsize_t size;
-	void *bip = (void *)(intptr_t)bip32;
+#ifdef ARCBIOS64
+	void *bip = (void *)bipval;
+#else
+	void *bip = (void *)(intptr_t)(int32_t)bipval;
+#endif
 	struct arcbios_mem *mem;
 	const char *cpufreq, *osload;
 	char *bootpath = NULL;
@@ -256,7 +264,11 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 		panic("too many args");
 
 	for (i = 0; i < argc; i++) {
+#ifdef ARCBIOS64
+		argv[i] = (void *)(uintptr_t)((uint64_t *)argv32)[i];
+#else
 		argv[i] = (void *)(intptr_t)argv32[i];
+#endif
 	}
 #else
 	char **argv = (void *)argv32;
@@ -284,6 +296,11 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	}
 
 	cpu_setmodel("%s", arcbios_system_identifier);
+#ifdef ARCBIOS64
+	printf("ARCS64: %s firmware initialized\n", arcbios_system_identifier);
+	*SGIMIPS_ARCS64_CPU_INFO_CELL = (uintptr_t)&cpu_info_store;
+	sgimips_arcs64_set_slowfault_cell();
+#endif
 
 	/*
 	 * Copy exception-dispatch code down to exception vector.
@@ -385,7 +402,7 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	 * that's far too late for some peripherals (notably Indigo2 INT2
 	 * timer programming/calibration.)
 	 */
-	if (mach_type == MACH_SGI_IP22) {
+	if (mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28) {
 		i = *(volatile u_int32_t *)MIPS_PHYS_TO_KSEG1(0x1fbd9858);
 		if (i & 0x01)
 			mach_subtype = MACH_SGI_IP22_FULLHOUSE; /* Indigo2 */
@@ -582,6 +599,7 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 		platform.intr5 = mips3_clock_intr;
 		break;
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		ipl_sr_map = sgi_ip2x_ipl_sr_map;
 		platform.intr5 = mips3_clock_intr;
 		break;
@@ -611,8 +629,9 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 		if ((mem = arcbios_GetMemoryDescriptor(mem)) != NULL) {
 			i++;
 			printf("Mem block %d: type %d, "
-			    "base 0x%04"PRIx32", size 0x%04"PRIx32"\n",
-			    i, mem->Type, mem->BasePage, mem->PageCount);
+			    "base 0x%04"PRIx64", size 0x%04"PRIx64"\n",
+			    i, mem->Type, (uint64_t)mem->BasePage,
+			    (uint64_t)mem->PageCount);
 		}
 	} while (mem != NULL);
 #endif
@@ -943,6 +962,19 @@ void ddb_trap_hook(int where)
 void mips_machdep_cache_config(void)
 {
 
+#ifdef ARCBIOS64
+	/* R10000 describes its secondary cache directly in CP0 Config. */
+	if (MIPS_PRID_IMPL(mips_options.mips_cpu_id) == MIPS_R10000) {
+		const uint32_t config = mips3_cp0_config_read();
+		mips_cache_info.mci_sdcache_size = (512 * 1024) <<
+		    __SHIFTOUT(config, MIPS4_CONFIG_SS_MASK);
+		mips_cache_info.mci_sdcache_line_size =
+		    MIPS4_CONFIG_CACHE_L2_LSIZE(config);
+		mips_cache_info.mci_sdcache_ways = 2;
+		mips_cache_info.mci_scache_unified = true;
+		return;
+	}
+#endif
 	arcbios_tree_walk(mips_machdep_find_l2cache, NULL);
 
 	switch (MIPS_PRID_IMPL(mips_options.mips_cpu_id)) {

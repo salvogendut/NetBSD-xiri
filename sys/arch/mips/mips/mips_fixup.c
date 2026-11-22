@@ -476,9 +476,14 @@ mips_fixup_stubs(uint32_t *start, uint32_t *end)
 #endif
 	extern uint32_t __stub_start[], __stub_end[];
 
-	KASSERT(MIPS_KSEG0_P(start));
-	KASSERT(MIPS_KSEG0_P(end));
-	KASSERT(MIPS_KSEG0_START == ((intptr_t)start & ~__MASK(28)));
+	/*
+	 * This optional optimization decodes compact, sign-extended addresses.
+	 * XKPHYS kernels use full-width stubs which must remain indirect until
+	 * the decoder understands their address-building instruction sequences.
+	 */
+	if (!MIPS_KSEG0_P(start) || !MIPS_KSEG0_P(end) ||
+	    MIPS_KSEG0_START != ((intptr_t)start & ~__MASK(28)))
+		return;
 
 	if (end > __stub_start)
 		end = __stub_start;

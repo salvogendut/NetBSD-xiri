@@ -89,7 +89,8 @@ static int
 imc_match(device_t parent, cfdata_t match, void *aux)
 {
 
-	if ((mach_type == MACH_SGI_IP22) || (mach_type == MACH_SGI_IP20))
+	if (mach_type == MACH_SGI_IP20 || mach_type == MACH_SGI_IP22 ||
+	    mach_type == MACH_SGI_IP28)
 		return 1;
 
 	return 0;

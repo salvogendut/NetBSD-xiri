@@ -85,7 +85,7 @@ static void     ioc_blink(void *);
 static int
 ioc_match(device_t parent, cfdata_t match, void *aux)
 {
-	if (mach_type == MACH_SGI_IP22)
+	if (mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28)
 		return 1;
 
 	return 0;

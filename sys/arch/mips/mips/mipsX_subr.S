@@ -125,6 +125,12 @@ RCSID("$NetBSD: mipsX_subr.S,v 1.122 2026/10/24 14:25:04 skrll Exp $")
 #include "opt_mips3_wired.h"
 #include "opt_multiprocessor.h"
 #include "opt_vmswap.h"
+#if defined(sgimips)
+#include "opt_arcbios64.h"
+#ifdef ARCBIOS64
+#include <machine/arcs64.h>
+#endif
+#endif
 
 #include <sys/cdefs.h>
 #include <sys/endian.h>
@@ -145,6 +151,20 @@ RCSID("$NetBSD: mipsX_subr.S,v 1.122 2026/10/24 14:25:04 skrll Exp $")
 
 #if defined(MIPS1) || defined(MIPS2)
 #error use locore_mips1.S
+#endif
+
+/*
+ * Several critical sections write a known state with interrupts disabled.
+ * A kernel running in XKPHYS must keep the KX bit set across that write or
+ * its next kernel-data access becomes an unmapped 32-bit address.
+ */
+#ifdef ARCBIOS64
+#define	DISABLE_INTERRUPTS_STATUS(reg) \
+	li	reg, MIPS_SR_KX; \
+	mtc0	reg, MIPS_COP_0_STATUS
+#else
+#define	DISABLE_INTERRUPTS_STATUS(reg) \
+	mtc0	zero, MIPS_COP_0_STATUS
 #endif
 
 #if defined(__mips_o32)
@@ -332,6 +352,19 @@ RCSID("$NetBSD: mipsX_subr.S,v 1.122 2026/10/24 14:25:04 skrll Exp $")
 	.text
 
 
+#ifdef ARCBIOS64
+/*
+ * Publish mips3_slowfault for the copied exception vector.  The vector
+ * cannot reach XKPHYS text with a 26-bit j or a compact lui/%lo sequence.
+ */
+LEAF(sgimips_arcs64_set_slowfault_cell)
+	lui	t0, %hi(SGIMIPS_ARCS64_SLOWFAULT_CELL)
+	PTR_LA	t1, MIPSX(slowfault)
+	jr	ra
+	 PTR_S	t1, %lo(SGIMIPS_ARCS64_SLOWFAULT_CELL)(t0)
+END(sgimips_arcs64_set_slowfault_cell)
+#endif
+
 /*
  * some useful labels for debugging
  */
@@ -420,7 +453,12 @@ VECTOR(MIPSX(xtlb_miss), unknown)
 VECTOR(MIPSX(tlb_miss), unknown)
 	.set	noat
 	_MFC0	k0, MIPS_COP_0_BAD_VADDR	#00: k0=bad address
+#ifdef ARCBIOS64
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #01: k1=hi of cpu_info cell
+	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #01a: k1=cpu_info_store
+#else
 	lui	k1, %hi(CPUVAR(PMAP_SEG0TAB))	#01: k1=hi of seg0tab
+#endif
 #ifdef _LP64
 	bltz	k0, MIPSX(nopagetable)		#02: k0<0 -> kernel access
 #ifdef MIPSNNR2
@@ -438,7 +476,11 @@ VECTOR(MIPSX(tlb_miss), unknown)
 	PTR_ADDU k1, 1 << PTR_SCALESHIFT	#04: fetch kernel segtab
 1:
 #endif
+#ifdef ARCBIOS64
+	PTR_L	k1, CPU_INFO_PMAP_SEG0TAB(k1)	#05: k1=seg0tab
+#else
 	PTR_L	k1, %lo(CPUVAR(PMAP_SEG0TAB))(k1)#05: k1=seg0tab
+#endif
 #endif /* !MIPS3_LOONGSON2 */
 MIPSX(tlb_miss_common):
 #ifdef _LP64
@@ -505,10 +547,18 @@ MIPSX(tlb_miss_common):
 	tlbwr					#19: write to tlb
 	sll	$0, $0, 3			#1a: standard nop (ehb)
 #if (MIPS3 + MIPS64 + MIPS64R2) > 0
+#ifdef ARCBIOS64
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #1b: k1=hi of cpu_info cell
+	REG_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #1b: k1=cpu_info_store
+	REG_L	k0, CPU_INFO_EV_TLBMISSES(k1)	#1c
+	REG_ADDU k0, 1				#1d
+	REG_S	k0, CPU_INFO_EV_TLBMISSES(k1)	#1e
+#else
 	lui	k1, %hi(CPUVAR(EV_TLBMISSES))	#1b: k1=hi of tlbmisses
 	REG_L	k0, %lo(CPUVAR(EV_TLBMISSES))(k1) #1c
 	REG_ADDU k0, 1				#1d
 	REG_S	k0, %lo(CPUVAR(EV_TLBMISSES))(k1) #1e
+#endif
 #endif
 	eret					#1f: return from exception
 	.set	at
@@ -547,11 +597,22 @@ VECTOR(MIPSX(xtlb_miss), unknown)
 	PTR_SRL k1, XSEGSHIFT+XSEGLENGTH+2	#03: clear valid bits
 	bnez	k1, MIPSX(nopagetable)		#04: not legal address
 	 PTR_SRA k0, XSEGSHIFT - PTR_SCALESHIFT	#05: k0=seg offset (almost)
+#ifdef ARCBIOS64
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #06: k1=hi of cpu_info cell
+	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #07: k1=cpu_info_store
+	PTR_ADDIU k1, k1, CPU_INFO_PMAP_SEGTAB	#08: k1=kernel/user segtab array
+	bgez	k0, 1f				#09: k0<0 -> kernel fault
+	 nop					#0a: branch delay
+	PTR_ADDIU k1, k1, 1 << PTR_SCALESHIFT	#0b: select kernel segtab
+1:
+	PTR_L	k1, 0(k1)			#0c: k1=segment tab
+#else
 	bgez	k0, 1f				#06: k0<0 -> kernel fault
 	 lui	k1, %hi(CPUVAR(PMAP_SEGTAB))	#07: k1=hi of segtab
 	PTR_ADDU k1, 1 << PTR_SCALESHIFT	#08: advance to kernel segtab
 1:
 	PTR_L	k1, %lo(CPUVAR(PMAP_SEGTAB))(k1)#09: k1=segment tab
+#endif
 	andi	k0, (NSEGPG-1)<<PTR_SCALESHIFT	#0a: k0=seg offset (mask 0x3)
 	PTR_ADDU k1, k0				#0b: k1=seg entry address
 	dmfc0	k0, MIPS_COP_0_BAD_VADDR	#0c: k0=bad address (again)
@@ -587,13 +648,28 @@ _VECTOR_END(MIPSX(xtlb_miss))
  */
 VECTOR(MIPSX(cache), unknown)
 	PTR_LA	k0, _C_LABEL(MIPSX(cache_exception))	#00
+#ifdef ARCBIOS64
+	dsll	k0, 8					#01: clear XKPHYS bits
+	dsrl	k0, 8					#02: keep physical address
+	li	k1, 0x9000				#03: XKPHYS uncached
+	dsll	k1, k1, 48				#04
+	or	k0, k0, k1				#05
+#else
 	li	k1, MIPS_PHYS_MASK			#01
 	and	k0, k1					#02
 	li	k1, MIPS_KSEG1_START			#03
 	or	k0, k1					#04
+#endif
+#ifdef ARCBIOS64
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL)	#05: k1=hi of cpu_info cell
+	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1)	#05: k1=cpu_info_store
+	jr	k0					#06
+	 PTR_L	k1, CPU_INFO_CURLWP(k1)			#07: k1=curlwp
+#else
 	lui	k1, %hi(CPUVAR(CURLWP))			#05: k1=hi of curlwp
 	jr	k0					#06
 	 PTR_L	k1, %lo(CPUVAR(CURLWP))(k1)		#07: k1=lo of curlwp
+#endif
 _VECTOR_END(MIPSX(cache))
 
 /*
@@ -632,9 +708,16 @@ VECTOR(MIPSX(exception), unknown)
 						#  shifted left by 2 bits so
 						#  we dont have to shift.
 	PTR_L	k0, 0(k0)			#09: get the function address
+#ifdef ARCBIOS64
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #0a: k1=hi of cpu_info cell
+	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #0a: k1=cpu_info_store
+	jr	k0				#0b: jump to the function
+	 PTR_L	k1, CPU_INFO_CURLWP(k1)		#0c: k1=curlwp
+#else
 	lui	k1, %hi(CPUVAR(CURLWP))		#0a: k1=hi of curlwp
 	jr	k0				#0b: jump to the function
 	 PTR_L	k1, %lo(CPUVAR(CURLWP))(k1)	#0c: k1=lo of curlwp
+#endif
 	nop					#0d
 	nop					#0e
 #ifndef _LP64
@@ -642,9 +725,18 @@ VECTOR(MIPSX(exception), unknown)
 #endif
 	.p2align 4
 MIPSX(nopagetable):
+#ifdef ARCBIOS64
+	lui	k0, %hi(SGIMIPS_ARCS64_SLOWFAULT_CELL) #10: k0=hi of slowfault cell
+	PTR_L	k0, %lo(SGIMIPS_ARCS64_SLOWFAULT_CELL)(k0) #10: k0=mips3_slowfault
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #10: k1=hi of cpu_info cell
+	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #10: k1=cpu_info_store
+	jr	k0				#11: no page table present
+	 PTR_L	k1, CPU_INFO_CURLWP(k1)		#12: k1=curlwp
+#else
 	lui	k1, %hi(CPUVAR(CURLWP))		#10: k1=hi of curlwp
 	j	MIPSX(slowfault)		#11: no page table present
 	 PTR_L	k1, %lo(CPUVAR(CURLWP))(k1)	#12: k1=lo of curlwp
+#endif
 	nop					#13: branch delay slot
 	.set	at
 _VECTOR_END(MIPSX(exception))
@@ -661,9 +753,16 @@ VECTOR(MIPSX(intr), unknown)
 	 nop					#04:  branch delay
 	j	MIPSX(kern_intr)		#05: nope, kernel intr
 1:
+#ifdef ARCBIOS64
+	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #06: k1=hi of cpu_info cell
+	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #06: k1=cpu_info_store
+	j	MIPSX(user_intr)		#07: user intr
+	 PTR_L	k1, CPU_INFO_CURLWP(k1)		#08: k1=curlwp
+#else
 	lui	k1, %hi(CPUVAR(CURLWP))		#06: k1=hi of curlwp
 	j	MIPSX(user_intr)		#07: user intr
 	 PTR_L	k1, %lo(CPUVAR(CURLWP))(k1)	#08: k1=lo of curlwp
+#endif
 	.set	at
 _VECTOR_END(MIPSX(intr))
 
@@ -1478,9 +1577,9 @@ MIPSX(user_gen_exception_common2):
 /*
  * We have pending asynchronous traps; all the state is already saved.
  */
-	lui	ra, %hi(MIPSX(user_return))	# return directly to user return
+	PTR_LA	ra, MIPSX(user_return)		# return directly to user return
 	j	_C_LABEL(ast)
-	 PTR_ADDIU ra, %lo(MIPSX(user_return))	# return directly to user return
+	 nop
 	.set	at
 END(MIPSX(user_gen_exception))
 
@@ -1792,9 +1891,9 @@ NESTED_NOPROFILE(MIPSX(systemcall), CALLFRAME_SIZ, ra)
 /*
  * We have pending asynchronous traps; all the state is already saved.
  */
-	lui	ra, %hi(MIPSX(user_return))	# return directly to user return
+	PTR_LA	ra, MIPSX(user_return)		# return directly to user return
 	j	_C_LABEL(ast)
-	 PTR_ADDIU ra, %lo(MIPSX(user_return))	# return directly to user return
+	 nop
 END(MIPSX(systemcall))
 
 /*
@@ -2126,7 +2225,7 @@ LEAF(MIPSX(tlb_update_addr))
 	di	ta0				# Disable interrupts
 #else
 	mfc0	ta0, MIPS_COP_0_STATUS		# Save the status register.
-	mtc0	zero, MIPS_COP_0_STATUS		# Disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 #endif
 	COP0_SYNC
 #if (PGSHIFT & 1) == 0
@@ -2252,7 +2351,7 @@ END(MIPSX(tlb_update_addr))
  */
 LEAF(MIPSX(tlb_read_entry))
 	mfc0	v1, MIPS_COP_0_STATUS		# Save the status register.
-	mtc0	zero, MIPS_COP_0_STATUS		# Disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 	COP0_SYNC
 #ifdef MIPS3
 	nop
@@ -2301,7 +2400,7 @@ END(MIPSX(tlb_read_entry))
  */
 LEAF_NOPROFILE(MIPSX(tlb_invalidate_addr))
 	mfc0	ta0, MIPS_COP_0_STATUS		# save status register
-	mtc0	zero, MIPS_COP_0_STATUS		# disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 	COP0_SYNC
 
 #if (PGSHIFT & 1) == 0
@@ -2399,7 +2498,7 @@ END(MIPSX(tlb_invalidate_addr))
  */
 LEAF_NOPROFILE(MIPSX(tlb_invalidate_asids))
 	mfc0	v1, MIPS_COP_0_STATUS		# save status register
-	mtc0	zero, MIPS_COP_0_STATUS		# disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 	COP0_SYNC
 
 	_MFC0	t0, MIPS_COP_0_TLB_HI		# Save the current ASID.
@@ -2465,7 +2564,7 @@ END(MIPSX(tlb_invalidate_asids))
  */
 LEAF_NOPROFILE(MIPSX(tlb_invalidate_globals))
 	mfc0	v1, MIPS_COP_0_STATUS		# save status register
-	mtc0	zero, MIPS_COP_0_STATUS		# disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 	COP0_SYNC
 
 	_MFC0	t0, MIPS_COP_0_TLB_HI		# save current ASID
@@ -2521,7 +2620,7 @@ END(MIPSX(tlb_invalidate_globals))
  */
 LEAF_NOPROFILE(MIPSX(tlb_invalidate_all))
 	mfc0	ta0, MIPS_COP_0_STATUS		# save status register
-	mtc0	zero, MIPS_COP_0_STATUS		# disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 	COP0_SYNC
 
 	INT_L	a0, _C_LABEL(mips_options) + MO_NUM_TLB_ENTRIES
@@ -2592,7 +2691,7 @@ LEAF_NOPROFILE(MIPSX(tlb_record_asids))
 	xor	t0, v1
 	mtc0	t0, MIPS_COP_0_STATUS		# disable interrupts
 #else
-	mtc0	zero, MIPS_COP_0_STATUS		# disable interrupts
+	DISABLE_INTERRUPTS_STATUS(k0)
 #endif
 #endif
 	COP0_SYNC

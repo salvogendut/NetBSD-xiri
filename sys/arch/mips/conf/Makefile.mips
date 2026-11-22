@@ -55,15 +55,30 @@ AFLAGS.fp.S+=		-Wa,-mhard-float
 CFLAGS+=	${GP} -mno-abicalls -msoft-float -ffixed-24
 .if defined(LP64) && ${LP64} == "yes"
 .if ${MACHINE_MIPS64}
-CFLAGS+=	-msym32 -mabi=64
-AFLAGS+=	-msym32 -mabi=64
+CFLAGS+=	-mabi=64
+AFLAGS+=	-mabi=64
+#
+# A machine whose kernel runs in XKPHYS cannot use -msym32: its symbols do
+# not fit in a sign-extended 32-bit address.  The default remains -msym32
+# for every other 64-bit MIPS kernel.
+#
+.if !defined(MIPS_SYM32) || ${MIPS_SYM32} != "no"
+CFLAGS+=	-msym32
+AFLAGS+=	-msym32
+.endif
 .endif
 .if !empty(MACHINE_ARCH:Mmips*64eb)
 LDFLAGS+=	-Wl,-m,elf64btsmip
 LINKFORMAT+=	-m elf64btsmip
+#
+# An XKPHYS kernel cannot be represented as the traditional 32-bit SGI
+# wrapper.  Machines that still need the wrapper leave this at its default.
+#
+.if !defined(MIPS_ELF32_WRAPPER) || ${MIPS_ELF32_WRAPPER} != "no"
 SYSTEM_LD_TAIL_EXTRA+= \
 		;echo ${OBJCOPY} -O elf32-ntradbigmips $@ $@.elf32; \
 		${OBJCOPY} -O elf32-ntradbigmips $@ $@.elf32
+.endif
 .endif
 .if !empty(MACHINE_ARCH:Mmips*64el)
 LDFLAGS+=	-Wl,-m,elf64ltsmip

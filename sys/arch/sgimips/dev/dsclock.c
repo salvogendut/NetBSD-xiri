@@ -81,7 +81,8 @@ dsclock_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct mainbus_attach_args *ma = aux;
 
-	if (mach_type == MACH_SGI_IP22 && ma->ma_addr == 0x1fbe0000)
+	if ((mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28) &&
+	    ma->ma_addr == 0x1fbe0000)
 		return 1;
 
 	return 0;

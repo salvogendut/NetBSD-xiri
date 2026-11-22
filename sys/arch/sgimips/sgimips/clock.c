@@ -98,6 +98,7 @@ cpu_initclocks(void)
 #if defined(MIPS3)
 	case MACH_SGI_IP20:
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 	case MACH_SGI_IP30:
 	case MACH_SGI_IP32:
 		mips3_initclocks();

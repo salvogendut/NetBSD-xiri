@@ -40,3 +40,27 @@ IP30		64	0xa800000020004000	0xa800000020080000
 IP32		32	0x80002000		0x80069000
 IP32		64	0xa800000000002000	0xa800000000078000
 IP33		64	0xa800000000019000	0xa800000000300000
+
+IP28 native bring-up (Xiri fork, November 2026)
+----------------------------------------------
+GENERIC64_IP28 is an N64 R10000 configuration linked at the address above.
+Use the ELF64 ip28boot from stand/boot64; the IP22/IP24 ELF32 boot files
+cannot be loaded by this PROM. The ARCBIOS64 option selects the firmware
+layout and high-address exception-vector path; it is not an IP30 board port.
+
+With console=d, IRIS Indigo2 IP28 (1 GB RAM) boots FFS from WD33C93/HPC3,
+runs the native single-user shell, reads and writes files, exchanges packets
+through sq0 and halts back to the PROM. The native drivers take over from
+firmware after early boot. Physical hardware, sustained DMA/cache workloads,
+IMPACT display/input, Xorg and a matching IRIX module are not qualified.
+
+Example PROM settings for a disk at SCSI ID 1:
+  setenv SystemPartition dksc(0,1,8)
+  setenv OSLoader boot
+  setenv OSLoadPartition dksc(0,1,0)
+  setenv OSLoadFilename netbsd.ip28
+  setenv OSLoadOptions single
+  boot
+The disk volume header must contain ip28boot as boot, and its FFS root must
+contain the GENERIC64_IP28 kernel as netbsd.ip28. Use a separate candidate
+disk; preserve the existing working kernel, loader and module as a set.

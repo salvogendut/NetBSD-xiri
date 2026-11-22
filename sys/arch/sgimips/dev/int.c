@@ -100,6 +100,7 @@ int_match(device_t parent, cfdata_t match, void *aux)
 	case MACH_SGI_IP12:
 	case MACH_SGI_IP20:
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		return 1;
 	}
 
@@ -131,6 +132,7 @@ int_attach(device_t parent, device_t self, void *aux)
 		break;
 
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		if (mach_subtype == MACH_SGI_IP22_FULLHOUSE)
 			address = INT2_IP22;
 		else
@@ -177,6 +179,7 @@ int_attach(device_t parent, device_t self, void *aux)
 	case MACH_SGI_IP12:
 	case MACH_SGI_IP20:
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		/* Clean out interrupt masks */
 		bus_space_write_1(iot, ioh, INT2_LOCAL0_MASK, 0);
 		bus_space_write_1(iot, ioh, INT2_LOCAL1_MASK, 0);
@@ -218,7 +221,7 @@ int_attach(device_t parent, device_t self, void *aux)
 	curcpu()->ci_cycles_per_hz = curcpu()->ci_cpu_freq / (2 * hz);
 	curcpu()->ci_divisor_delay = curcpu()->ci_cpu_freq / (2 * 1000000);
 
-	if (mach_type == MACH_SGI_IP22) {
+	if (mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28) {
 		/* Wire interrupts 7, 11 to mappable interrupt 0,1 handlers */
 		intrtab[7].ih_fun = int2_mappable_intr;
 		intrtab[7].ih_arg = (void*) 0;

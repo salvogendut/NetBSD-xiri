@@ -103,6 +103,7 @@ consinit(void)
 	case MACH_SGI_IP12:
 	case MACH_SGI_IP20:
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		if (gio_video_init(consdev) || zs_serial_init(consdev))
 			return;
 		break;
@@ -181,6 +182,7 @@ gio_video_init(const char *consdev)
 			break;
 
 		case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 #if (NPCKBC > 0)
 			/* XXX Hardcoded iotag, HPC address XXX */
 			pckbc_cnattach(normal_memt,
@@ -245,6 +247,7 @@ kgdb_port_init(void)
 	case MACH_SGI_IP12:
 	case MACH_SGI_IP20:
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		zs_kgdb_init();			/* XXX */
 	}
 # endif

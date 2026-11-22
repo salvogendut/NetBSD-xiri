@@ -170,7 +170,7 @@ static int
 gio_match(device_t parent, cfdata_t match, void *aux)
 {
 	if (mach_type == MACH_SGI_IP12 || mach_type == MACH_SGI_IP20 ||
-	    mach_type == MACH_SGI_IP22)
+	    mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28)
 		return 1;
 	
 	return 0;
@@ -434,7 +434,8 @@ gio_arb_config(int slot, uint32_t flags)
 #endif
 
 #if (NIMC > 0)
-	if (mach_type == MACH_SGI_IP20 || mach_type == MACH_SGI_IP22)
+	if (mach_type == MACH_SGI_IP20 || mach_type == MACH_SGI_IP22 ||
+	    mach_type == MACH_SGI_IP28)
 		return (imc_gio64_arb_config(slot, flags));
 #endif
 
@@ -461,6 +462,7 @@ gio_intr_establish(int slot, int level, int (*func)(void *), void *arg)
 		break;
 
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		if (mach_subtype == MACH_SGI_IP22_FULLHOUSE) {
 			if (slot == GIO_SLOT_EXP1)
 				panic("gio_intr_establish: slot %d", slot);

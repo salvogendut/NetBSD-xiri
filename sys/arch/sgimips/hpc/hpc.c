@@ -386,7 +386,7 @@ hpc_match(device_t parent, cfdata_t cf, void *aux)
 	struct gio_attach_args* ga = aux;
 
 	if (mach_type == MACH_SGI_IP12 || mach_type == MACH_SGI_IP20 ||
-	    mach_type == MACH_SGI_IP22) {
+	    mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28) {
 		/* Make sure it's actually there and readable */
 		if (!platform.badaddr((void*)MIPS_PHYS_TO_KSEG1(ga->ga_addr),
 		    sizeof(uint32_t)))
@@ -424,6 +424,7 @@ hpc_attach(device_t parent, device_t self, void *aux)
 		break;
 
 	case MACH_SGI_IP22:
+	case MACH_SGI_IP28:
 		if (mach_subtype == MACH_SGI_IP22_FULLHOUSE)
 			sysmask = HPCDEV_IP22;
 		else
@@ -613,7 +614,7 @@ hpc_revision(struct hpc_softc *sc, struct gio_attach_args *ga)
 	 * If IP22, probe slot 0 to determine if HPC1.5 or HPC3. Slot 1 must
 	 * be HPC1.5.
 	 */
-	if (mach_type == MACH_SGI_IP22) {
+	if (mach_type == MACH_SGI_IP22 || mach_type == MACH_SGI_IP28) {
 		if (ga->ga_addr == HPC_BASE_ADDRESS_0)
 			return (3);
 

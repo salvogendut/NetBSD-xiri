@@ -44,6 +44,23 @@
 
 #define	ARCBIOS_PAGESIZE	4096
 
+#if defined(_KERNEL) && defined(sgimips) && !defined(_STANDALONE)
+#include "opt_arcbios64.h"
+#endif
+
+/*
+ * ARCS64 widens firmware longs and pointers; enums remain 32 bits.
+ * Standalone genassym retains the ARC32 vector layout: its ARCS64 assembly
+ * wrapper doubles the generated offsets when reading the firmware vector.
+ */
+#if defined(ARCBIOS64) && !defined(_STANDALONE)
+typedef uint64_t arcbios_ulong_t;
+typedef int64_t arcbios_long_t;
+#else
+typedef uint32_t arcbios_ulong_t;
+typedef int32_t arcbios_long_t;
+#endif
+
 /* ARC BIOS status codes. */
 #define	ARCBIOS_ESUCCESS	0	/* Success */
 #define	ARCBIOS_E2BIG		1	/* argument list too long */
@@ -78,22 +95,22 @@
  * 4.2.2: System Parameter Block
  */
 struct arcbios_spb {
-	uint32_t	SPBSignature;
-	uint32_t	SPBLength;
+	arcbios_ulong_t	SPBSignature;
+	arcbios_ulong_t	SPBLength;
 	uint16_t	Version;
 	uint16_t	Revision;
-	int32_t		RestartBlock;
-	int32_t		DebugBlock;
-	int32_t		GEVector;
-	int32_t		UTLBMissVector;
-	uint32_t	FirmwareVectorLength;
-	int32_t		FirmwareVector;
-	uint32_t	PrivateVectorLength;
-	int32_t		PrivateVector;
-	uint32_t	AdapterCount;
-	uint32_t	AdapterType;
-	uint32_t	AdapterVectorLength;
-	int32_t		AdapterVector;
+	arcbios_long_t	RestartBlock;
+	arcbios_long_t	DebugBlock;
+	arcbios_long_t	GEVector;
+	arcbios_long_t	UTLBMissVector;
+	arcbios_ulong_t	FirmwareVectorLength;
+	arcbios_long_t	FirmwareVector;
+	arcbios_ulong_t	PrivateVectorLength;
+	arcbios_long_t	PrivateVector;
+	arcbios_ulong_t	AdapterCount;
+	arcbios_ulong_t	AdapterType;
+	arcbios_ulong_t	AdapterVectorLength;
+	arcbios_long_t	AdapterVector;
 };
 
 #define	ARCBIOS_SPB_SIGNATURE	0x53435241	/* A R C S */
@@ -108,11 +125,11 @@ struct arcbios_component {
 	uint32_t	Flags;
 	uint16_t	Version;
 	uint16_t	Revision;
-	uint32_t	Key;
-	uint32_t	AffinityMask;
-	uint32_t	ConfigurationDataSize;
-	uint32_t	IdentifierLength;
-	int32_t		Identifier;
+	arcbios_ulong_t	Key;
+	arcbios_ulong_t	AffinityMask;
+	arcbios_ulong_t	ConfigurationDataSize;
+	arcbios_ulong_t	IdentifierLength;
+	arcbios_long_t	Identifier;
 };
 
 /*
@@ -277,8 +294,8 @@ struct arcbios_sysid {
  */
 struct arcbios_mem {
 	uint32_t	Type;
-	uint32_t	BasePage;
-	uint32_t	PageCount;
+	arcbios_ulong_t	BasePage;
+	arcbios_ulong_t	PageCount;
 };
 
 #if defined(sgimips)
@@ -320,43 +337,43 @@ struct arcbios_dsp_stat {
  * ARC firmware vector
  */
 struct arcbios_fv {
-	int32_t		Load;
-	int32_t		Invoke;
-	int32_t		Execute;
-	int32_t		Halt;
-	int32_t		PowerDown;
-	int32_t		Restart;
-	int32_t		Reboot;
-	int32_t		EnterInteractiveMode;
-	int32_t		ReturnFromMain;		/* not on sgimips */
-	int32_t		GetPeer;
-	int32_t		GetChild;
-	int32_t		GetParent;
-	int32_t		GetConfigurationData;
-	int32_t		AddChild;
-	int32_t		DeleteComponent;
-	int32_t		GetComponent;
-	int32_t		SaveConfiguration;
-	int32_t		GetSystemId;
-	int32_t		GetMemoryDescriptor;
-	int32_t		Signal;			/* not on sgimips */
-	int32_t		GetTime;
-	int32_t		GetRelativeTime;
-	int32_t		GetDirectoryEntry;
-	int32_t		Open;
-	int32_t		Close;
-	int32_t		Read;
-	int32_t		GetReadStatus;
-	int32_t		Write;
-	int32_t		Seek;
-	int32_t		Mount;
-	int32_t		GetEnvironmentVariable;
-	int32_t		SetEnvironmentVariable;
-	int32_t		GetFileInformation;
-	int32_t		SetFileInformation;
-	int32_t		FlushAllCaches;
-	int32_t		TestUnicode;		/* not on sgimips */
-	int32_t		GetDisplayStatus;	/* not on sgimips */
+	arcbios_long_t	Load;
+	arcbios_long_t	Invoke;
+	arcbios_long_t	Execute;
+	arcbios_long_t	Halt;
+	arcbios_long_t	PowerDown;
+	arcbios_long_t	Restart;
+	arcbios_long_t	Reboot;
+	arcbios_long_t	EnterInteractiveMode;
+	arcbios_long_t	ReturnFromMain;		/* not on sgimips */
+	arcbios_long_t	GetPeer;
+	arcbios_long_t	GetChild;
+	arcbios_long_t	GetParent;
+	arcbios_long_t	GetConfigurationData;
+	arcbios_long_t	AddChild;
+	arcbios_long_t	DeleteComponent;
+	arcbios_long_t	GetComponent;
+	arcbios_long_t	SaveConfiguration;
+	arcbios_long_t	GetSystemId;
+	arcbios_long_t	GetMemoryDescriptor;
+	arcbios_long_t	Signal;			/* not on sgimips */
+	arcbios_long_t	GetTime;
+	arcbios_long_t	GetRelativeTime;
+	arcbios_long_t	GetDirectoryEntry;
+	arcbios_long_t	Open;
+	arcbios_long_t	Close;
+	arcbios_long_t	Read;
+	arcbios_long_t	GetReadStatus;
+	arcbios_long_t	Write;
+	arcbios_long_t	Seek;
+	arcbios_long_t	Mount;
+	arcbios_long_t	GetEnvironmentVariable;
+	arcbios_long_t	SetEnvironmentVariable;
+	arcbios_long_t	GetFileInformation;
+	arcbios_long_t	SetFileInformation;
+	arcbios_long_t	FlushAllCaches;
+	arcbios_long_t	TestUnicode;		/* not on sgimips */
+	arcbios_long_t	GetDisplayStatus;	/* not on sgimips */
 };
 
 #if defined(_KERNEL) || defined(_STANDALONE)

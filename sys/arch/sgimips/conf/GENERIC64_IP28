@@ -1,0 +1,53 @@
+# $NetBSD$
+# Indigo2 R10000 (IP28): initial native serial, SCSI and Ethernet configuration.
+
+include "arch/sgimips/conf/std.sgimips"
+include "arch/sgimips/conf/std.sgimips64"
+
+ident "GENERIC64_IP28"
+maxusers 8
+makeoptions TEXTADDR="0xa800000020080000"
+makeoptions MIPS_SYM32="no"
+makeoptions MIPS_ELF32_WRAPPER="no"
+makeoptions CPUFLAGS="-march=mips4 -mtune=r10000"
+makeoptions DEBUG="-g"
+makeoptions COPY_SYMTAB=1
+
+options MIPS3
+options ARCBIOS64
+options ENABLE_MIPS4_CACHE_R10K
+options INCLUDE_CONFIG_FILE
+options DDB
+options DIAGNOSTIC
+options KTRACE
+options SYSCTL_INCLUDE_DESCR
+options SYSVMSG,SYSVSEM,SYSVSHM
+options INET,INET6
+include "conf/compat_netbsd15.config"
+include "conf/filesystems.config"
+options WAPBL
+options SCSIVERBOSE
+
+config netbsd root on ? type ?
+mainbus0 at root
+cpu0 at mainbus?
+imc0 at mainbus0 addr 0x1fa00000
+gio0 at imc0
+int0 at mainbus0
+ioc0 at mainbus0 addr 0x1fbd9800
+dsclock0 at mainbus0 addr 0x1fbe0000
+hpc0 at gio? addr 0x1fb80000
+hpc1 at gio? addr 0x1fb00000
+zsc0 at hpc0 offset ?
+zstty* at zsc0 channel ?
+sq0 at hpc0 offset ?
+wdsc* at hpc? offset ?
+scsibus* at scsi?
+sd* at scsibus? target ? lun ?
+cd* at scsibus? target ? lun ?
+
+pseudo-device bpfilter
+pseudo-device pty
+pseudo-device loop
+pseudo-device md
+pseudo-device ksyms
