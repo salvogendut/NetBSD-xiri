@@ -62,6 +62,9 @@ diskstrategy(void *devdata, int rw, daddr_t bn, size_t reqcnt, void *addr,
 	long error;
 	int64_t offset;
 	u_long count;
+#ifdef ARCBIOS64
+	struct arcbios_large_integer64 position;
+#endif
 
 	offset = bn;
 
@@ -83,7 +86,13 @@ diskstrategy(void *devdata, int rw, daddr_t bn, size_t reqcnt, void *addr,
 	 */
 	offset *= DEV_BSIZE;
 
+#ifdef ARCBIOS64
+	position.high = offset >> 32;
+	position.low = (uint32_t)offset;
+	error = arcbios_Seek(sc->sc_fd, &position, 0);
+#else
 	error = arcbios_Seek(sc->sc_fd, &offset, 0);
+#endif
 	if (error != ARCBIOS_ESUCCESS)
 		return EIO;
 	error = arcbios_Read(sc->sc_fd, addr, reqcnt, &count);

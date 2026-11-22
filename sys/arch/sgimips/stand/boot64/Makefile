@@ -3,11 +3,12 @@
 PROG=	ip30boot
 NOMAN=	# defined
 
-SRCS=	start.S boot.c bootinfo.c conf.c devopen.c putchar.c getchar.c \
+SRCS=	start64.S boot.c bootinfo.c conf.c devopen.c putchar.c getchar.c \
 	disk.c arcbios_calls.S
 
 
-CLEANFILES+=	boot.map
+FILES+=		ip28boot
+CLEANFILES+=	boot.map ip28boot ip28boot.map
 
 .include <bsd.init.mk>
 
@@ -16,11 +17,11 @@ S=	${.CURDIR}/../../../..
 
 BINMODE?=	444
 
-realall: ${PROG}
+realall: ${PROG} ip28boot
 
 .PATH:		${.CURDIR}/../common
 .PATH.S:	${S}/dev/arcbios
-AFLAGS+=	-D_LOCORE -D_KERNEL -mno-abicalls -mabi=64 -D_LP64
+AFLAGS+=	-D_LOCORE -D_KERNEL -mno-abicalls -mabi=64 -D_LP64 -DARCBIOS64
 CPPFLAGS+=	-nostdinc -D_STANDALONE -DNO_ABICALLS -I${.OBJDIR} -I${S}
 # compiler flags for smallest code size
 CFLAGS=		-ffreestanding -Os -Wall -Werror -mno-abicalls -msoft-float -G 1024 -mabi=64 -D_LP64
@@ -28,18 +29,19 @@ LDBUG=		-T $S/arch/mips/conf/stand.ldscript
 NETBSD_VERS!=	${HOST_SH} ${.CURDIR}/../../../../conf/osrelease.sh
 CPPFLAGS+=	-DNETBSD_VERS='"${NETBSD_VERS}"'
 
-CPPFLAGS+=	-Dsgimips
+CPPFLAGS+=	-Dsgimips -DARCBIOS64
 
 LDFLAGS+=       -m elf64btsmip
 LINKFORMAT+=    -m elf64btsmip
 
 .include "${S}/dev/arcbios/Makefile.inc"
 
-# We load the kernel at 420K in from the start of RAM to give the boot
-# loader plenty of breathing room.  Load the boot loader starting at
-# the second page of RAM.
+# IP28's firmware reserves the first three pages at physical 0x20000000.
+# Keep its bootstrap below the kernel address documented in README.IPn.
+# The existing IP30 address is unchanged and needs separate qualification.
 
 LOAD_ADDRESS_IP30?=	0xa800000020080000
+LOAD_ADDRESS_IP28?=	0xa800000020003000
 
 ### find out what to use for libkern
 KERN_AS=	library
@@ -56,6 +58,7 @@ LIBZ=		${ZLIB}
 ### find out what to use for libsa
 SA_AS=		library
 SAMISCMAKEFLAGS+=	SA_USE_LOADFILE=yes SA_USE_CREAD=yes \
+			SA_INCLUDE_NET=no \
 			LD="${LD} -m elf64btsmip" RANLIB="true"
 .include "${S}/lib/libsa/Makefile.inc"
 LIBSA=		${SALIB}
@@ -65,7 +68,7 @@ LIBS=		${LIBSA} ${LIBZ} ${LIBSA} ${LIBKERN}
 
 ip30boot: ${OBJS} ${LIBS}
 	${_MKTARGET_LINK}
-	${LD} -m elf64btsmip -Map boot.map -x -Ttext ${LOAD_ADDRESS_IP30} \
+	${LD} -N -m elf64btsmip -Map boot.map -x -Ttext ${LOAD_ADDRESS_IP30} \
 		${LDBUG} -e start -o ${.TARGET} ${OBJS} ${LIBS}
 	${SIZE} ${.TARGET}
 
@@ -77,3 +80,11 @@ cleanlibdir:
 
 .include <bsd.klinks.mk>
 .include <bsd.prog.mk>
+
+# bsd.prog.mk supplies OBJS, including the generated version object.
+ip28boot: ${OBJS} ${LIBS}
+	${_MKTARGET_LINK}
+	${LD} -N -m elf64btsmip -Map ${.TARGET}.map -x \
+		-Ttext ${LOAD_ADDRESS_IP28} ${LDBUG} -e start \
+		-o ${.TARGET} ${OBJS} ${LIBS}
+	${SIZE} ${.TARGET}

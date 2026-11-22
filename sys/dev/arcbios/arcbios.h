@@ -392,7 +392,16 @@ long	arcbios_Close(u_long);
 long	arcbios_Read(u_long, void *, u_long, u_long *);
 long	arcbios_GetReadStatus(u_long);
 long	arcbios_Write(u_long, void *, u_long, u_long *);
+#ifdef ARCBIOS64
+/* ARCS64 stores each 32-bit half of a seek position in a firmware long. */
+struct arcbios_large_integer64 {
+	int64_t high;
+	uint64_t low;
+};
+long	arcbios_Seek(u_long, struct arcbios_large_integer64 *, u_long);
+#else
 long	arcbios_Seek(u_long, int64_t *, u_long);
+#endif
 long	arcbios_Mount(char *, u_long);
 const char *
 	arcbios_GetEnvironmentVariable(const char *);

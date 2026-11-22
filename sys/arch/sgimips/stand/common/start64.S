@@ -83,39 +83,44 @@
 #include <mips/asm.h>
 #include <mips/cpuregs.h>
 
-#	.extern ARCBIOS, 4
-
+	.text
 	.globl	start
 start:
 	.set	noreorder
+	/* Preserve the N64 caller's stack, return address and global pointer. */
+	daddiu	sp, sp, -64
+	sd	ra, 56(sp)
+	sd	gp, 48(sp)
+	sd	a0, 0(sp)
+	sd	a1, 8(sp)
+	sd	a2, 16(sp)
 #ifdef __GP_SUPPORT__
 	dla	gp, _C_LABEL (_gp)
 #endif
-	daddi	sp, - (CALLFRAME_SIZ * 2)
-	sd	ra, CALLFRAME_RA * 2(sp)	# Save RA
-	sd	a0, 0(sp)			# save argc
-	sd	a1, 8(sp)			# save argv
-	sd	a2, 16(sp)			# save envp
-	dla	v0, 0xa800000000001000		# ARCBIOS_SPB
 	dla	a0, _C_LABEL (edata)		# clear BSS
-	ld	v0, 64(v0)			# FirmwareVector (64-bit offset)
 	move	a1, zero
-	sd	v0, _C_LABEL(ARCBIOS)		# save ARCBIOS
 	dla	a2, _C_LABEL (end)
 	jal	_C_LABEL(memset)		# memset(edata, 0, end - edata)
-	dsubu	a2, a2, a0
+	 dsubu	a2, a2, a0
+	dla	v0, 0xffffffffa0001000	# ARCS64 system parameter block
+	ld	v0, 64(v0)		# 64-bit FirmwareVector
+	sd	v0, _C_LABEL(ARCBIOS)
 	ld	a0, 0(sp)			# restore argc
 	ld	a1, 8(sp)			# restore argv
 	jal	_C_LABEL(main)			# main(argc, argv)
-	ld	a2, 16(sp)			# restore envp
-	ld	ra, CALLFRAME_RA * 2(sp)	# restore RA
-	j	ra				# return to PROM
-	daddi	sp, CALLFRAME_SIZ * 2		# BDslot: adjust stack
+	 ld	a2, 16(sp)			# restore envp
+	ld	gp, 48(sp)
+	ld	ra, 56(sp)
+	/* ARCS may enter a standalone program without a return continuation. */
+	j	_C_LABEL(arcbios_EnterInteractiveMode)
+	 daddiu	sp, sp, 64
 
 	.globl	_rtt
 _rtt:
-	j	ra				# XXXX return to PROM?
+	j	_C_LABEL(arcbios_EnterInteractiveMode)
+	 nop
 
 	.data
+	.align	3
 	.global	ARCBIOS
-ARCBIOS: .data	0
+ARCBIOS: .dword	0

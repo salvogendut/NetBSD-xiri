@@ -240,12 +240,21 @@ END(arcbios_5to8_args)
 #endif /* sgimips && _LP64 */
 #endif /* !_STANDALONE */
 
+/* The generated offsets describe ARCS32; ARCS64 doubles each vector slot. */
+#if defined(_STANDALONE) && defined(ARCBIOS64)
+#define AFV_LOAD		ld
+#define AFV_OFFSET(name)	(2 * __CONCAT(AFV_,name))
+#else
+#define AFV_LOAD		INT_L
+#define AFV_OFFSET(name)	__CONCAT(AFV_,name)
+#endif
+
 #define AFVDIRECT(name)						\
 	.globl	__CONCAT(arcbios_,name);			\
 LEAF(__CONCAT(arcbios_,name));					\
 	PTR_L	t9, _C_LABEL(ARCBIOS); 				\
 	 nop;							\
-	INT_L	t9, __CONCAT(AFV_,name)(t9);			\
+	AFV_LOAD t9, AFV_OFFSET(name)(t9);				\
 	 nop;							\
 	jr	t9;						\
 	 nop;							\

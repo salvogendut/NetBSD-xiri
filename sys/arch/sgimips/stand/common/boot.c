@@ -73,6 +73,9 @@
 #include <sys/boot_flag.h>
 
 #include <dev/arcbios/arcbios.h>
+#ifdef ARCBIOS64
+#include <mips/cpuregs.h>
+#endif
 
 #include "common.h"
 #include "bootinfo.h"
@@ -107,6 +110,66 @@ struct btinfo_symtab bi_syms;
 struct btinfo_bootpath bi_bpath;
 
 static uint8_t bootinfo[BOOTINFO_SIZE];
+
+#ifdef ARCBIOS64
+/* Firmware memory descriptors have 64-bit page numbers in ARCS64. */
+struct arcs64_memory {
+	uint32_t type;
+	uint64_t base_page;
+	uint64_t page_count;
+};
+
+static uint64_t
+boot_physical(u_long address)
+{
+	if (MIPS_XKPHYS_P(address))
+		return MIPS_XKPHYS_TO_PHYS(address);
+	if (MIPS_KSEG0_P(address) || MIPS_KSEG1_P(address))
+		return address & MIPS_PHYS_MASK;
+	return UINT64_MAX;
+}
+
+static int
+load_kernel(const char *file, u_long *marks)
+{
+	const struct arcs64_memory *mem = NULL;
+	u_long counted[MARK_MAX] = { 0 };
+	uint64_t first, last, cursor, begin, end;
+	int fd;
+
+	/* Reject a kernel linked for another machine before writing its RAM. */
+	fd = loadfile(file, counted, COUNT_KERNEL);
+	if (fd < 0)
+		return fd;
+	close(fd);
+	first = boot_physical(counted[MARK_START]);
+	last = boot_physical(counted[MARK_END] - 1);
+	if (first == UINT64_MAX || last == UINT64_MAX || last < first)
+		goto bad_address;
+	cursor = first;
+	/* Free descriptors can be adjacent; require coverage of the entire span. */
+	while ((mem = arcbios_GetMemoryDescriptor((void *)mem)) != NULL) {
+		if (mem->type != ARCBIOS_MEM_FreeContiguous &&
+		    mem->type != ARCBIOS_MEM_FreeMemory)
+			continue;
+		begin = mem->base_page << 12;
+		end = begin + (mem->page_count << 12);
+		if (begin <= cursor && cursor < end) {
+			if (last < end)
+				return loadfile(file, marks, LOAD_KERNEL);
+			cursor = end;
+		}
+	}
+bad_address:
+	printf("Kernel address range 0x%lx..0x%lx is outside usable firmware RAM.\n",
+	    counted[MARK_START], counted[MARK_END]);
+	printf("Use a kernel linked for this machine.\n");
+	errno = EFTYPE;
+	return -1;
+}
+#else
+#define load_kernel(file, marks) loadfile((file), (marks), LOAD_KERNEL)
+#endif
 
 /*
  * This gets arguments from the ARCS monitor, calls ARCS routines to open
@@ -170,7 +233,7 @@ main(int argc, char **argv)
 		else
 			kernel = "ip2x";
 		strcpy(ep + 1, kernel);
-		if ((loadfile(bootfile, marks, LOAD_KERNEL)) >= 0)
+		if (load_kernel(bootfile, marks) >= 0)
 			goto finish;
 	}
 
@@ -195,7 +258,8 @@ main(int argc, char **argv)
 	 * an equals sign.
 	 */
 
-	if (((strchr(argv[1], '=')) == NULL) && (argv[1][0] != '-'))
+	if (argc > 1 && argv[1] != NULL &&
+	    strchr(argv[1], '=') == NULL && argv[1][0] != '-')
 		kernel = argv[1];
 
 	if (kernel != NULL) {
@@ -205,11 +269,11 @@ main(int argc, char **argv)
 		 * the environment
 		 */
 		if (strchr(kernel, '('))
-			win = loadfile(kernel, marks, LOAD_KERNEL);
+			win = load_kernel(kernel, marks);
 		else {
 			strcpy(bootfile, bootpath);
 			strcat(bootfile, kernel);
-			win = loadfile(bootfile, marks, LOAD_KERNEL);
+			win = load_kernel(bootfile, marks);
 		}
 
 	} else {
@@ -218,7 +282,7 @@ main(int argc, char **argv)
 			strcpy(bootfile, bootpath);
 			strcat(bootfile, kernelnames[i]);
 			kernel = kernelnames[i];
-			win = loadfile(bootfile, marks, LOAD_KERNEL);
+			win = load_kernel(bootfile, marks);
 			if (win != -1)
 				break;
 			i++;
@@ -245,6 +309,9 @@ finish:
 		printf("nsym 0x%lx ssym 0x%lx esym 0x%lx\n", marks[MARK_NSYM],
 		       marks[MARK_SYM], marks[MARK_END]);
 	}
+#ifdef ARCBIOS64
+	arcbios_FlushAllCaches();
+#endif
 	(*entry)(argc, argv, BOOTINFO_MAGIC, bootinfo);
 
 	printf("Kernel returned!  Halting...\n");
