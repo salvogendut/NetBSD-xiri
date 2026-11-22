@@ -28,6 +28,8 @@
 #include <sys/cdefs.h>
 __KERNEL_RCSID(0, "$NetBSD$");
 
+#include "opt_impact.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
@@ -43,6 +45,10 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sgimips/gio/gioreg.h>
 #include <sgimips/gio/impactreg.h>
 #include <sgimips/gio/impactvar.h>
+
+#ifdef IMPACT_FRAME
+#include <sgimips/gio/newport_frame.h>
+#endif
 
 #define IMPACT_PRODUCT 0x10
 #define IMPACT_REG_SIZE 0x80000
@@ -322,10 +328,87 @@ impact_text_flush(struct rasops_info *ri, int x, int y, int w, int h)
 	impact_flush(sc, x, y, w, h);
 }
 
+#ifdef IMPACT_FRAME
+CTASSERT(NEWPORT_FRAME_WIDTH >= IMPACT_WIDTH);
+CTASSERT(NEWPORT_FRAME_HEIGHT == IMPACT_HEIGHT);
+CTASSERT(2 * NEWPORT_FRAME_TEXT_X + NEWPORT_FRAME_TEXT_WIDTH == IMPACT_WIDTH);
+CTASSERT(2 * NEWPORT_FRAME_TEXT_Y + NEWPORT_FRAME_TEXT_HEIGHT == IMPACT_HEIGHT);
+
+static bool
+impact_framed(struct rasops_info *ri)
+{
+	/* rasops requires a minimum of 20 columns and 10 rows. */
+	return !FONT_IS_ALPHA(ri->ri_font) &&
+	    20 * ri->ri_font->fontwidth <= NEWPORT_FRAME_TEXT_WIDTH &&
+	    10 * ri->ri_font->fontheight <= NEWPORT_FRAME_TEXT_HEIGHT;
+}
+
+static uint32_t
+impact_frame_colour(unsigned index)
+{
+	const uint8_t *rgb = newport_frame_cmap[index];
+
+	return ((uint32_t)rgb[0] << 16) | ((uint32_t)rgb[1] << 8) | rgb[2];
+}
+
+/* Paint scanout and both RAM images together, even before UVM or in DDB. */
+static void
+impact_frame_rect(struct impact_softc *sc, unsigned x, unsigned y,
+    unsigned w, unsigned h, uint32_t colour)
+{
+	while (h != 0) {
+		unsigned rows = MIN(h, 4);
+		int s = splhigh();
+		if (sc->sc_failed || !impact_fill(sc, x, y, w, rows, colour)) {
+			sc->sc_failed = true;
+			splx(s);
+			return;
+		}
+		for (unsigned row = 0; row < rows; row++) {
+			unsigned off = (y + row) * IMPACT_WIDTH + x;
+			for (unsigned col = 0; col < w; col++)
+				sc->sc_pixels[off + col] = colour;
+			if (sc->sc_previous != NULL)
+				memcpy(sc->sc_previous + off, sc->sc_pixels + off,
+				    w * sizeof(uint32_t));
+		}
+		splx(s);
+		y += rows;
+		h -= rows;
+	}
+}
+
+static void
+impact_frame_clear(struct rasops_info *ri, long attr)
+{
+	struct vcons_screen *scr = ri->ri_hw;
+	struct impact_softc *sc = scr->scr_cookie;
+
+	uint32_t bg = ri->ri_devcmap[((uint32_t)attr >> 16) & 0xff];
+
+	for (size_t i = 0; i < __arraycount(newport_frame_rects); i++) {
+		const struct newport_frame_rect *r = &newport_frame_rects[i];
+		if (r->x >= IMPACT_WIDTH)
+			continue;
+		impact_frame_rect(sc, r->x, r->y,
+		    MIN(r->width, IMPACT_WIDTH - r->x), r->height,
+		    impact_frame_colour(r->colour));
+	}
+	if (bg != impact_frame_colour(NEWPORT_FRAME_PANEL))
+		impact_frame_rect(sc, ri->ri_xorigin, ri->ri_yorigin,
+		    ri->ri_emuwidth, ri->ri_emuheight, bg);
+}
+#endif
+
 static void
 impact_putchar(void *v, int row, int col, u_int c, long attr)
 {
 	struct rasops_info *ri = v;
+#ifdef IMPACT_FRAME
+	/* Index zero supplies the panel background. ANSI index 16 is black. */
+	if (impact_framed(ri) && (((uint32_t)attr >> 24) & 0xff) == 0)
+		attr |= 16UL << 24;
+#endif
 	ri->ri_real_ops.putchar(v, row, col, c, attr);
 	impact_text_flush(ri, ri->ri_xorigin + col * ri->ri_font->fontwidth,
 	    ri->ri_yorigin + row * ri->ri_font->fontheight,
@@ -356,6 +439,12 @@ static void
 impact_eraserows(void *v, int row, int num, long attr)
 {
 	struct rasops_info *ri = v;
+#ifdef IMPACT_FRAME
+	if (row == 0 && num == ri->ri_rows && impact_framed(ri)) {
+		impact_frame_clear(ri, attr);
+		return;
+	}
+#endif
 	ri->ri_real_ops.eraserows(v, row, num, attr);
 	if (row == 0 && num == ri->ri_rows && (ri->ri_flg & RI_FULLCLEAR))
 		impact_text_flush(ri, 0, 0, IMPACT_WIDTH, IMPACT_HEIGHT);
@@ -393,6 +482,18 @@ static void
 impact_init_screen(struct genfb_softc *gen, struct vcons_screen *scr)
 {
 	struct rasops_info *ri = &scr->scr_ri;
+#ifdef IMPACT_FRAME
+	if (impact_framed(ri)) {
+		/* Keep physical geometry and stride for wsfb. Center the cell
+		 * grid in the artwork's panel, including after a font change. */
+		ri->ri_flg &= ~RI_CLEAR;
+		ri->ri_flg |= RI_FULLCLEAR;
+		rasops_reconfig(ri, NEWPORT_FRAME_TEXT_HEIGHT / ri->ri_font->fontheight,
+		    NEWPORT_FRAME_TEXT_WIDTH / ri->ri_font->fontwidth);
+		ri->ri_devcmap[0] = impact_frame_colour(NEWPORT_FRAME_PANEL);
+		ri->ri_devcmap[16] = 0;
+	}
+#endif
 	/* RAM reads are cheap, including scrolling and cursor inversion. */
 	scr->scr_flags &= ~VCONS_DONT_READ;
 	scr->scr_cookie = gen;
