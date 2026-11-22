@@ -51,6 +51,7 @@ __KERNEL_RCSID(0, "$NetBSD: gio.c,v 1.38 2021/08/07 16:19:04 thorpej Exp $");
 
 #include "locators.h"
 #include "newport.h"
+#include "impact.h"
 #include "grtwo.h"
 #include "light.h"
 #include "imc.h"
@@ -66,6 +67,10 @@ __KERNEL_RCSID(0, "$NetBSD: gio.c,v 1.38 2021/08/07 16:19:04 thorpej Exp $");
 
 #if (NLIGHT > 0)
 #include <sgimips/gio/lightvar.h>
+#endif
+
+#if (NIMPACT > 0)
+#include <sgimips/gio/impactvar.h>
 #endif
 
 #if (NIMC > 0)
@@ -132,6 +137,9 @@ static const struct gio_probe slot_bases[] = {
  * do not contain product identification words. 
  */
 static const struct gio_probe gfx_bases[] = {
+	/* IMPACT console probe; normal attachment uses its GIO product ID. */
+	{ -1, 0x1f000000, MACH_SGI_IP28, MACH_SGI_IP22_FULLHOUSE },
+
 	/* grtwo, and newport on IP22 */
 	{ -1, 0x1f000000, MACH_SGI_IP12, -1 },
 	{ -1, 0x1f000000, MACH_SGI_IP20, -1 },
@@ -385,6 +393,11 @@ gio_cnattach(void)
 		ga.ga_dmat = &sgimips_default_bus_dma_tag;
 		ga.ga_product = -1;
 		
+#if (NIMPACT > 0)
+		if (impact_cnattach(&ga) == 0)
+			return 0;
+#endif
+
 #if (NGRTWO > 0)
 		if (grtwo_cnattach(&ga) == 0)
 			return 0;

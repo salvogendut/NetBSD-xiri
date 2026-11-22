@@ -742,6 +742,8 @@ genfb_init_screen(void *cookie, struct vcons_screen *scr,
 	scp->sc_putchar = ri->ri_ops.putchar;
 	ri->ri_ops.putchar = genfb_putchar;
 #endif
+	if (scp->sc_ops.genfb_init_screen != NULL)
+		scp->sc_ops.genfb_init_screen(sc, scr);
 #ifdef GENFB_DISABLE_TEXT
 	if (scr == &scp->sc_console_screen && !DISABLESPLASH)
 		SCREEN_DISABLE_DRAWING(&scp->sc_console_screen);

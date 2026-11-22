@@ -66,6 +66,8 @@ struct genfb_ops {
 	int (*genfb_borrow)(void *, bus_addr_t, bus_space_handle_t *);
 	int (*genfb_enable_polling)(void *);
 	int (*genfb_disable_polling)(void *);
+	/* Optional backend text operations, installed before vcons wraps them. */
+	void (*genfb_init_screen)(struct genfb_softc *, struct vcons_screen *);
 };
 
 struct genfb_colormap_callback {

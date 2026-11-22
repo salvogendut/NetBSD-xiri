@@ -6,7 +6,7 @@ options MODULAR
 no config netbsd
 config netbsd root on sd0a type ffs
 
-# Firmware-initialized IMPACT; serial remains the early/debug console.
+# Firmware-initialized IMPACT; native graphical console with serial recovery.
 options WSEMUL_VT100
 impact* at gio? slot ? addr ?
 wsdisplay* at impact? console ?
