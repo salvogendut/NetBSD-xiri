@@ -36,7 +36,7 @@ file	arch/sgimips/gio/pci_gio.c	giopci
 # Other GIO boards..
 
 # IMPACT (HQ3): firmware mode, RAM framebuffer and programmed pixel transfers.
-defflag opt_impact.h IMPACT_FRAME
+defflag opt_impact.h IMPACT_FRAME IMPACT_DMA
 device impact: genfb, wsemuldisplaydev
 attach impact at gio
 file arch/sgimips/gio/impact.c impact needs-flag

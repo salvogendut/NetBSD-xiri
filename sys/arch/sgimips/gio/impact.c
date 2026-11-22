@@ -23,7 +23,7 @@
  * genfb and wsfb draw into ordinary RAM. One kernel thread owns the command
  * FIFO and uploads changed spans during normal operation. Early and polled
  * console text is uploaded synchronously, without scheduler dependencies.
- * Initial qualification is High IMPACT at 1280x1024, without 3D or DMA.
+ * IMPACT_DMA enables HQ3 host-to-board uploads for dense shadow changes.
  */
 #include <sys/cdefs.h>
 __KERNEL_RCSID(0, "$NetBSD$");
@@ -64,6 +64,11 @@ struct impact_softc {
 	bus_space_handle_t sc_ioh;
 	uint32_t *sc_pixels;
 	uint32_t *sc_previous;
+#ifdef IMPACT_DMA
+	bus_dma_tag_t sc_dmat;
+	bus_dmamap_t sc_upload_map;
+	void *sc_upload;
+#endif
 	bool sc_polling;
 	bool sc_failed;
 };
@@ -293,6 +298,161 @@ spans:
 	impact_flush(sc, x, y, IMPACT_SPAN, IMPACT_TILE_HEIGHT);
 }
 
+#ifdef IMPACT_DMA
+/* The HQ3 translation granule is independent of the kernel page size. */
+#define IMPACT_HQ_PAGE	4096
+#define IMPACT_BAND_BYTES (IMPACT_WIDTH * IMPACT_TILE_HEIGHT * sizeof(uint32_t))
+#define IMPACT_UPLOAD_BYTES (IMPACT_HQ_PAGE + IMPACT_BAND_BYTES)
+
+static bool
+impact_dma_alloc(struct impact_softc *sc)
+{
+	bus_dma_segment_t seg;
+	bus_dmamap_t map;
+	void *va;
+	int n;
+	const size_t size = IMPACT_UPLOAD_BYTES;
+
+	if (bus_dmamem_alloc(sc->sc_dmat, size, PAGE_SIZE, 0, &seg, 1, &n,
+	    BUS_DMA_NOWAIT))
+		return false;
+	if (bus_dmamem_map(sc->sc_dmat, &seg, n, size, &va, BUS_DMA_NOWAIT))
+		goto free;
+	if (bus_dmamap_create(sc->sc_dmat, size, 1, size, 0, BUS_DMA_NOWAIT,
+	    &map))
+		goto unmap;
+	if (bus_dmamap_load(sc->sc_dmat, map, va, size, NULL, BUS_DMA_NOWAIT))
+		goto destroy;
+	bus_addr_t addr = map->dm_segs[0].ds_addr;
+	if (map->dm_nsegs != 1 || addr > UINT32_MAX - size || (addr & (IMPACT_HQ_PAGE - 1)) ||
+	    gio_arb_config(GIO_SLOT_GFX, GIO_ARB_MST) != 0)
+		goto unload;
+	uint32_t *pt = va;
+	for (unsigned i = 0; i < IMPACT_BAND_BYTES / IMPACT_HQ_PAGE; i++)
+		pt[i] = (addr / IMPACT_HQ_PAGE) + 1 + i;
+	bus_dmamap_sync(sc->sc_dmat, map, 0, IMPACT_HQ_PAGE, BUS_DMASYNC_PREWRITE);
+	sc->sc_upload_map = map;
+	sc->sc_upload = va;
+	return true;
+
+unload:
+	bus_dmamap_unload(sc->sc_dmat, map);
+destroy:
+	bus_dmamap_destroy(sc->sc_dmat, map);
+unmap:
+	bus_dmamem_unmap(sc->sc_dmat, va, size);
+free:
+	bus_dmamem_free(sc->sc_dmat, &seg, n);
+	return false;
+}
+
+/* HQ3 FIFO header with one 32-bit host-interface command argument. */
+static void
+impact_hq(struct impact_softc *sc, unsigned cmd, uint32_t v)
+{
+	uint64_t packet = ((uint64_t)((cmd << 8) | 4) << 32) | v;
+	bus_space_write_8(sc->sc_iot, sc->sc_ioh, IMPACT_CFIFO, packet);
+}
+
+static bool
+impact_upload(struct impact_softc *sc, unsigned x, unsigned y, unsigned w)
+{
+	const size_t stride = w * sizeof(uint32_t);
+	const size_t size = stride * IMPACT_TILE_HEIGHT;
+	uint32_t *buf = (uint32_t *)((char *)sc->sc_upload + IMPACT_HQ_PAGE);
+	unsigned off = y * IMPACT_WIDTH + x;
+
+	/* Only the worker uses this buffer.  While splhigh holds on IP28,
+	 * neither console drawing nor X can change the shadow underneath us. */
+	for (unsigned r = 0; r < IMPACT_TILE_HEIGHT; r++)
+		memcpy(buf + r * w, sc->sc_pixels + off + r * IMPACT_WIDTH, stride);
+	if (memcmp(buf, buf + 1, size - sizeof(*buf)) == 0) {
+		if (!impact_fill(sc, x, y, w, IMPACT_TILE_HEIGHT, buf[0]))
+			return false;
+		goto submitted;
+	}
+	/* HQ3 expects ABGR bytes.  genfb's big-endian pixels have the red
+	 * and blue lanes reversed relative to this transfer format. */
+	for (size_t i = 0; i < size / sizeof(*buf); i++)
+		buf[i] = impact_rgb(buf[i]);
+	bus_dmamap_sync(sc->sc_dmat, sc->sc_upload_map, IMPACT_HQ_PAGE, size,
+	    BUS_DMASYNC_PREWRITE);
+	if (!impact_wait(sc, 0))
+		return false;
+	impact_cmd(sc, IMPACTSR_CMD_PP1FILLMODE,
+	    IMPACTSR_PP1FILLMODE(0x6300, 3), false);
+	impact_cmd(sc, IMPACTSR_CMD_FILLMODE, 5U << 22, false);
+	impact_hq(sc, IMPACT_HQ_FORMATTER, 0x600);	/* Host formatter, 32-bit pixels. */
+	impact_hq(sc, IMPACT_HQ_REIF_SCANWIDTH, stride);
+	impact_hq(sc, IMPACT_HQ_REIF_DMACTRL, 0xc);
+	impact_cmd(sc, IMPACTSR_CMD_XFRMODE, 0x80, false);
+	unsigned extent = IMPACTSR_YXCOORDS(w, IMPACT_TILE_HEIGHT);
+	impact_cmd(sc, IMPACTSR_CMD_XFRSIZE, extent, false);
+	impact_cmd(sc, IMPACTSR_CMD_XFRCOUNTERS, extent, false);
+	impact_block(sc, x, y, w, IMPACT_TILE_HEIGHT);
+	impact_cmd(sc, IMPACTSR_CMD_XFRCONTROL, 1, false);
+	/* Pool 0 maps consecutive host pages. The table uses a bus address,
+	 * not a kernel virtual address. The transfer is host to board only. */
+	impact_hq(sc, IMPACT_HQ_DMA_POOL0_TABLE, sc->sc_upload_map->dm_segs[0].ds_addr);
+	impact_hq(sc, IMPACT_HQ_DMA_PAGELIST, 0x80000000);
+	impact_hq(sc, IMPACT_HQ_DMA_STRIDE, stride);
+	impact_hq(sc, IMPACT_HQ_DMA_ROWOFF, 0);
+	impact_hq(sc, IMPACT_HQ_DMA_ROWSTART, 0);
+	impact_hq(sc, IMPACT_HQ_DMA_LINES, IMPACT_TILE_HEIGHT);
+	impact_hq(sc, IMPACT_HQ_DMA_LINEBYTES, stride);
+	impact_hq(sc, IMPACT_HQ_DMA_START, 0xb1);
+	bus_space_barrier(sc->sc_iot, sc->sc_ioh, IMPACT_CFIFO, 8,
+	    BUS_SPACE_BARRIER_WRITE);
+	for (unsigned i = 0; i < 10000; i++) {
+		/* Wait for the FIFO, host interface and raster interface. */
+		if (!(bus_space_read_4(sc->sc_iot, sc->sc_ioh, IMPACT_DMABUSY) &
+		    IMPACT_HQ_BUSY_UPLOAD)) {
+			impact_cmd(sc, IMPACTSR_CMD_XFRCONTROL, 0, false);
+			bus_dmamap_sync(sc->sc_dmat, sc->sc_upload_map,
+			    IMPACT_HQ_PAGE, size, BUS_DMASYNC_POSTWRITE);
+			goto submitted;
+		}
+		delay(1);
+	}
+	return false;
+
+submitted:
+	for (unsigned r = 0; r < IMPACT_TILE_HEIGHT; r++)
+		memcpy(sc->sc_previous + off + r * IMPACT_WIDTH,
+		    sc->sc_pixels + off + r * IMPACT_WIDTH, stride);
+	return true;
+}
+
+/* Group adjacent dirty tiles across eight scanlines. A single changed tile
+ * keeps the small-fill/PIO path. No Xorg or userspace ABI is needed. */
+static bool
+impact_dma_band(struct impact_softc *sc, unsigned y)
+{
+	uint32_t *p = sc->sc_pixels + y * IMPACT_WIDTH;
+	uint32_t *prev = sc->sc_previous + y * IMPACT_WIDTH;
+	unsigned left = IMPACT_WIDTH, right = 0, dirty = 0;
+	for (unsigned x = 0; x < IMPACT_WIDTH; x += IMPACT_SPAN) {
+		for (unsigned r = 0; r < IMPACT_TILE_HEIGHT; r++) {
+			unsigned pos = r * IMPACT_WIDTH + x;
+			if (memcmp(p + pos, prev + pos, IMPACT_SPAN * sizeof(*p)) != 0) {
+				left = MIN(left, x);
+				right = x + IMPACT_SPAN;
+				dirty += IMPACT_SPAN;
+				break;
+			}
+		}
+	}
+	if (dirty < 2 * IMPACT_SPAN || dirty * 2 < right - left)
+		return false;
+	int s = splhigh();
+	if (!impact_upload(sc, left, y, right - left))
+		sc->sc_failed = true;
+	splx(s);
+	return true;
+}
+
+#endif /* IMPACT_DMA */
+
 CTASSERT(IMPACT_WIDTH % IMPACT_SPAN == 0);
 CTASSERT(IMPACT_HEIGHT % IMPACT_TILE_HEIGHT == 0);
 
@@ -308,6 +468,10 @@ impact_update(void *cookie)
 			if (memcmp(sc->sc_pixels + off, sc->sc_previous + off,
 			    IMPACT_TILE_HEIGHT * IMPACT_WIDTH * sizeof(uint32_t)) == 0)
 				continue;
+#ifdef IMPACT_DMA
+			if (sc->sc_upload != NULL && impact_dma_band(sc, y))
+					continue;
+#endif
 			for (unsigned x = 0; x < IMPACT_WIDTH; x += IMPACT_SPAN)
 				impact_update_tile(sc, x, y);
 		}
@@ -643,6 +807,11 @@ impact_attach(device_t parent, device_t self, void *aux)
 	prop_dictionary_set_bool(props, "enable_shadowfb", false);
 	genfb_init(&sc->sc_gen);
 	error = genfb_attach(&sc->sc_gen, &ops);
+#ifdef IMPACT_DMA
+	sc->sc_dmat = ga->ga_dmat;
+	if (error == 0 && impact_dma_alloc(sc))
+		aprint_normal_dev(self, "HQ3 DMA shadow uploads enabled\n");
+#endif
 	if (error == 0)
 		error = kthread_create(PRI_NONE, KTHREAD_MPSAFE, NULL,
 		    impact_update, sc, NULL, "impactfb");

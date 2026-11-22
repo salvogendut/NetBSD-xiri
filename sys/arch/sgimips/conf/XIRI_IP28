@@ -9,6 +9,7 @@ config netbsd root on sd0a type ffs
 # Firmware-initialized IMPACT; native graphical console with serial recovery.
 options WSEMUL_VT100
 options IMPACT_FRAME
+options IMPACT_DMA
 impact* at gio? slot ? addr ?
 wsdisplay* at impact? console ?
 pckbc* at hpc0 offset ?
