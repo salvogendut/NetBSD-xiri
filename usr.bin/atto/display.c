@@ -5,11 +5,12 @@
 /* Reverse scan for start of logical line containing offset */
 point_t lnstart(buffer_t *bp, point_t off)
 {
-	char_t *p;
-	do
-		p = ptr(bp, --off);
-	while (bp->b_buf < p && *p != '\n');
-	return (bp->b_buf < p ? ++off : 0);
+	while (off > 0) {
+		if (*ptr(bp, off - 1) == '\n')
+			return off;
+		--off;
+	}
+	return 0;
 }
 
 /* Forward scan for start of logical line segment (corresponds to screen line)  containing 'finish' */
@@ -137,12 +138,30 @@ void display(window_t *wp, int flag)
 			break;
 		if (*p != '\r') {
 			nch = utf8_size(*p);
-			if ( nch > 1) {
+			if (nch > 1) {
 				wchar_t c;
-				/* reset if invalid multi-byte character */
-				if (mbtowc(&c, (char*)p, 6) < 0) mbtowc(NULL, NULL, 0); 
-				j += wcwidth(c) < 0 ? 1 : wcwidth(c);
-				display_utf8(bp, nch);
+				int w, l;
+
+				/* don't read past end of buffer */
+				l = pos(bp, bp->b_ebuf) - bp->b_epage;
+				if (nch > l)
+					nch = l;
+				if (mbtowc(&c, (char *)p, nch) < 0) {
+					/* reset if invalid multi-byte character */
+
+					mbtowc(NULL, NULL, 0);
+					w = -1;
+				} else {
+					w = wcwidth(c);
+				}
+				if (w < 0) {
+					/* invalid or non-printable */
+					addch('?');
+					j += 1;
+				} else {
+					j += w;
+					display_utf8(bp, nch);
+				}
 			} else if (isprint(*p) || *p == '\t' || *p == '\n') {
 				j += *p == '\t' ? 8-(j&7) : 1;
 				if (use_color) {

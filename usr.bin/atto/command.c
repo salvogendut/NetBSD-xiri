@@ -58,6 +58,8 @@ void left(void)
 
 void right(void)
 {
+	if (curbp->b_point >= pos(curbp, curbp->b_ebuf))
+		return;
 	int n = utf8_size(*ptr(curbp,curbp->b_point));
 	while ((curbp->b_point < pos(curbp, curbp->b_ebuf)) && n-- > 0)
 		++curbp->b_point;
@@ -92,10 +94,9 @@ void lnend(void)
 
 void wleft(void)
 {
-	char_t *p;
-	while (!isspace(*(p = ptr(curbp, curbp->b_point))) && curbp->b_buf < p)
+	while (curbp->b_point > 0 && !isspace(*ptr(curbp, curbp->b_point)))
 		--curbp->b_point;
-	while (isspace(*(p = ptr(curbp, curbp->b_point))) && curbp->b_buf < p)
+	while (curbp->b_point > 0 && isspace(*ptr(curbp, curbp->b_point)))
 		--curbp->b_point;
 }
 
@@ -118,10 +119,10 @@ void pgup(void)
 
 void wright(void)
 {
-	char_t *p;
-	while (!isspace(*(p = ptr(curbp, curbp->b_point))) && p < curbp->b_ebuf)
+	point_t end_p = pos(curbp, curbp->b_ebuf);
+	while (curbp->b_point < end_p && !isspace(*ptr(curbp, curbp->b_point)))
 		++curbp->b_point;
-	while (isspace(*(p = ptr(curbp, curbp->b_point))) && p < curbp->b_ebuf)
+	while (curbp->b_point < end_p && isspace(*ptr(curbp, curbp->b_point)))
 		++curbp->b_point;
 }
 
@@ -133,7 +134,7 @@ void insert(void)
 	curbp->b_point = movegap(curbp, curbp->b_point);
 
 	/* overwrite if mid line, not EOL or EOF, CR will insert as normal */
-	if ((curbp->b_flags & B_OVERWRITE) && *input != '\r' && *(ptr(curbp, curbp->b_point)) != '\n' && curbp->b_point < pos(curbp,curbp->b_ebuf) ) {
+	if ((curbp->b_flags & B_OVERWRITE) && *input != '\r' && curbp->b_point < pos(curbp,curbp->b_ebuf) && *(ptr(curbp, curbp->b_point)) != '\n') {
 		*(ptr(curbp, curbp->b_point)) = *input;
 		if (curbp->b_point < pos(curbp, curbp->b_ebuf))
 			++curbp->b_point;
@@ -194,7 +195,7 @@ void gotoline(void)
 
 void insertfile(void)
 {
-	if (getfilename("Insert file: ", temp, NAME_MAX))
+	if (getfilename("Insert file: ", temp, sizeof(temp)))
 		(void)insert_file(temp, TRUE);
 }
 
@@ -203,21 +204,24 @@ void readfile(void)
 	buffer_t *bp;
 	
 	temp[0] = '\0';
-	int result = getfilename("Find file: ", (char*)temp, NAME_MAX);
-	/* int result = getinput("Find file: ", (char*)temp, NAME_MAX, F_CLEAR); */
+	int result = getfilename("Find file: ", (char*)temp, sizeof(temp));
 
 	if (result) {
 		bp = find_buffer(temp, TRUE);
+		if (bp == NULL) {
+			msg("Failed to allocate buffer.");
+			return;
+		}
 		disassociate_b(curwp); /* we are leaving the old buffer for a new one */
 		curbp = bp;
 		associate_b2w(curbp, curwp);
 
 		/* load the file if not already loaded */
-		if (bp != NULL && bp->b_fname[0] == '\0') {
+		if (bp->b_fname[0] == '\0') {
 			if (!load_file(temp)) {
 				msg("New file %s", temp);
 			}
-			strlcpy(curbp->b_fname, temp, NAME_MAX);
+			strlcpy(curbp->b_fname, temp, sizeof(curbp->b_fname));
 		}
 	}
 }
@@ -235,10 +239,10 @@ void savebuffer(void)
 
 void writefile(void)
 {
-	strlcpy(temp, curbp->b_fname, NAME_MAX);
-	if (getinput("Write file: ", temp, NAME_MAX, F_NONE))
+	strlcpy(temp, curbp->b_fname, sizeof(temp));
+	if (getinput("Write file: ", temp, sizeof(temp), F_NONE))
 		if (save(temp) == TRUE)
-			strlcpy(curbp->b_fname, temp, NAME_MAX);
+			strlcpy(curbp->b_fname, temp, sizeof(curbp->b_fname));
 }
 
 void killbuffer(void)
@@ -259,7 +263,10 @@ void killbuffer(void)
 
 	if (bcount == 1) {
 		/* create a scratch buffer */
-		create_scratch();
+		if (create_scratch() == NULL) {
+			msg("Failed to allocate buffer.");
+			return;
+		}
 	}
 
 	next_buffer();
@@ -314,7 +321,8 @@ void copy_cut(int cut)
 		p = ptr(curbp, curbp->b_mark);
 		nscrap = curbp->b_point - curbp->b_mark;
 	}
-	if ((scrap = (char_t*) malloc(nscrap)) == NULL) {
+	if ((scrap = malloc(nscrap)) == NULL) {
+		nscrap = 0;
 		msg("No more memory available.");
 	} else {
 		(void) memcpy(scrap, p, nscrap * sizeof (char_t));

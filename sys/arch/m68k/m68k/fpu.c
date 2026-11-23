@@ -1,4 +1,4 @@
-/*	$NetBSD: fpu.c,v 1.6 2026/04/26 10:52:15 thorpej Exp $	*/
+/*	$NetBSD: fpu.c,v 1.8 2026/10/31 20:53:49 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996, 2026 The NetBSD Foundation, Inc.
@@ -37,7 +37,7 @@
 #include "opt_m68k_arch.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fpu.c,v 1.6 2026/04/26 10:52:15 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fpu.c,v 1.8 2026/10/31 20:53:49 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -87,6 +87,12 @@ fpu_init(void)
 	if (setjmp(&faultbuf)) {
 		nofault = NULL;
 		fputype = FPU_NONE;
+		/*
+		 * Set up the cached idle frame to mimic the 68881
+		 * for the benefit of cpu_setmcontext().
+		 */
+		fpu_idle_frame.fpf_version = 0x1f;
+		fpu_idle_frame.fpf_fsize = 0x18;
 		return;
 	}
 
@@ -136,7 +142,7 @@ fpu_init(void)
 		fputype = FPU_UNKNOWN;
 	}
 	if (fputype != FPU_UNKNOWN) {
-		m68k_make_fpu_idle_frame();
+		fpu_make_idle_frame();
 		vec_init_fp();
 	}
 #else
