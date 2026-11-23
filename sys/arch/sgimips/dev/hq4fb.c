@@ -16,6 +16,8 @@
  */
 
 /* NetBSD genfb console on a PROM-initialized Octane IMPACT widget. */
+#include "opt_impact.h"
+
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/device.h>
@@ -28,6 +30,10 @@
 
 #include "hq4_pio.h"
 #include <sgimips/gio/impactreg.h>
+
+#ifdef IMPACT_FRAME
+#include <sgimips/gio/newport_frame.h>
+#endif
 
 #define FB_BYTES (HQ4_WIDTH * HQ4_HEIGHT * sizeof(uint32_t))
 #define SPAN 32
@@ -133,6 +139,89 @@ hq4fb_mmap(void *v, void *vs, off_t off, int prot)
 	return mips_btop(pa);
 }
 
+#ifdef IMPACT_FRAME
+CTASSERT(NEWPORT_FRAME_WIDTH >= HQ4_WIDTH);
+CTASSERT(NEWPORT_FRAME_HEIGHT == HQ4_HEIGHT);
+CTASSERT(2 * NEWPORT_FRAME_TEXT_X + NEWPORT_FRAME_TEXT_WIDTH == HQ4_WIDTH);
+CTASSERT(2 * NEWPORT_FRAME_TEXT_Y + NEWPORT_FRAME_TEXT_HEIGHT == HQ4_HEIGHT);
+
+static uint32_t
+hq4fb_frame_colour(unsigned index)
+{
+	const uint8_t *rgb = newport_frame_cmap[index];
+
+	return ((uint32_t)rgb[0] << 16) | ((uint32_t)rgb[1] << 8) | rgb[2];
+}
+
+/* Draw into the ordinary genfb RAM that hq4fb_update uploads to scanout. */
+static void
+hq4fb_frame_rect(struct rasops_info *ri, unsigned x, unsigned y,
+    unsigned width, unsigned height, uint32_t colour)
+{
+	uint8_t *line = ri->ri_origbits + y * ri->ri_stride;
+
+	for (unsigned row = 0; row < height; row++, line += ri->ri_stride) {
+		uint32_t *p = (uint32_t *)line + x;
+		for (unsigned col = 0; col < width; col++)
+			p[col] = colour;
+	}
+}
+
+static void
+hq4fb_eraserows(void *v, int row, int num, long attr)
+{
+	struct rasops_info *ri = v;
+	const uint32_t bg = ri->ri_devcmap[((uint32_t)attr >> 16) & 0xff];
+
+	if (row != 0 || num != ri->ri_rows) {
+		ri->ri_real_ops.eraserows(v, row, num, attr);
+		return;
+	}
+	for (size_t i = 0; i < __arraycount(newport_frame_rects); i++) {
+		const struct newport_frame_rect *r = &newport_frame_rects[i];
+		if (r->x < HQ4_WIDTH)
+			hq4fb_frame_rect(ri, r->x, r->y,
+			    MIN(r->width, HQ4_WIDTH - r->x), r->height,
+			    hq4fb_frame_colour(r->colour));
+	}
+	if (bg != hq4fb_frame_colour(NEWPORT_FRAME_PANEL))
+		hq4fb_frame_rect(ri, ri->ri_xorigin, ri->ri_yorigin,
+		    ri->ri_emuwidth, ri->ri_emuheight, bg);
+}
+
+static void
+hq4fb_putchar(void *v, int row, int col, u_int c, long attr)
+{
+	struct rasops_info *ri = v;
+
+	/* Reserve colour zero for the panel, keeping black foregrounds black. */
+	if ((((uint32_t)attr >> 24) & 0xff) == 0)
+		attr |= 16UL << 24;
+	ri->ri_real_ops.putchar(v, row, col, c, attr);
+}
+
+static void
+hq4fb_init_screen(struct genfb_softc *gen, struct vcons_screen *scr)
+{
+	struct rasops_info *ri = &scr->scr_ri;
+	const unsigned rows = NEWPORT_FRAME_TEXT_HEIGHT / ri->ri_font->fontheight;
+	const unsigned cols = NEWPORT_FRAME_TEXT_WIDTH / ri->ri_font->fontwidth;
+
+	if (FONT_IS_ALPHA(ri->ri_font) || rows < 10 || cols < 20)
+		return;
+	/* Reconfigure only the centered cell grid; wsfb maps the full display. */
+	ri->ri_flg &= ~RI_CLEAR;
+	ri->ri_flg |= RI_FULLCLEAR;
+	rasops_reconfig(ri, rows, cols);
+	ri->ri_devcmap[0] = hq4fb_frame_colour(NEWPORT_FRAME_PANEL);
+	ri->ri_devcmap[16] = 0;
+	ri->ri_real_ops = ri->ri_ops;
+	ri->ri_ops.eraserows = hq4fb_eraserows;
+	ri->ri_ops.putchar = hq4fb_putchar;
+	scr->scr_flags &= ~VCONS_DONT_READ;
+}
+#endif
+
 static int
 hq4fb_finalize(device_t self)
 {
@@ -141,6 +230,9 @@ hq4fb_finalize(device_t self)
 	struct genfb_ops ops = {
 		.genfb_ioctl = hq4fb_ioctl,
 		.genfb_mmap = hq4fb_mmap,
+#ifdef IMPACT_FRAME
+		.genfb_init_screen = hq4fb_init_screen,
+#endif
 	};
 	int error;
 

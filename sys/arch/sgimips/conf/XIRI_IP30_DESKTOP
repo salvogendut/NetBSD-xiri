@@ -2,6 +2,7 @@
 include "arch/sgimips/conf/XIRI_IP30_HQ4_XORG"
 ident "XIRI_IP30_DESKTOP"
 maxusers 8
+options IMPACT_FRAME
 options MODULAR
 options SYSVMSG,SYSVSEM
 options INET,INET6
