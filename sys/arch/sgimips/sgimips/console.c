@@ -31,6 +31,7 @@
 __KERNEL_RCSID(0, "$NetBSD: console.c,v 1.46 2026/04/30 02:56:26 adrian Exp $");
 
 #include "opt_kgdb.h"
+#include "opt_xiri_ip30.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -86,6 +87,11 @@ consinit(void)
 {
 	const char *consdev;
 	
+#ifdef XIRI_IP30
+	/* The ARCS64 console is already attached; IOC3 follows in M3. */
+	return;
+#endif
+
 	/* Ask ARCS what it is using for console output. */
 	consdev = arcbios_GetEnvironmentVariable("ConsoleOut");
 

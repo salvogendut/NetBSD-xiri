@@ -127,7 +127,8 @@ RCSID("$NetBSD: mipsX_subr.S,v 1.122 2026/10/24 14:25:04 skrll Exp $")
 #include "opt_vmswap.h"
 #if defined(sgimips)
 #include "opt_arcbios64.h"
-#ifdef ARCBIOS64
+#include "opt_xiri_ip30.h"
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 #include <machine/arcs64.h>
 #endif
 #endif
@@ -158,7 +159,7 @@ RCSID("$NetBSD: mipsX_subr.S,v 1.122 2026/10/24 14:25:04 skrll Exp $")
  * A kernel running in XKPHYS must keep the KX bit set across that write or
  * its next kernel-data access becomes an unmapped 32-bit address.
  */
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 #define	DISABLE_INTERRUPTS_STATUS(reg) \
 	li	reg, MIPS_SR_KX; \
 	mtc0	reg, MIPS_COP_0_STATUS
@@ -352,7 +353,19 @@ RCSID("$NetBSD: mipsX_subr.S,v 1.122 2026/10/24 14:25:04 skrll Exp $")
 	.text
 
 
-#ifdef ARCBIOS64
+#ifdef XIRI_IP30_M2_SLOWFAULT_TEST
+/*
+ * A deliberately unmapped load.  Its first instruction is the expected
+ * EPC for the slow-fault checkpoint.
+ */
+LEAF(xiri_ip30_slowfault_load)
+	ld	v0, 0(a0)
+	jr	ra
+	 nop
+END(xiri_ip30_slowfault_load)
+#endif
+
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 /*
  * Publish mips3_slowfault for the copied exception vector.  The vector
  * cannot reach XKPHYS text with a 26-bit j or a compact lui/%lo sequence.
@@ -453,7 +466,7 @@ VECTOR(MIPSX(xtlb_miss), unknown)
 VECTOR(MIPSX(tlb_miss), unknown)
 	.set	noat
 	_MFC0	k0, MIPS_COP_0_BAD_VADDR	#00: k0=bad address
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #01: k1=hi of cpu_info cell
 	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #01a: k1=cpu_info_store
 #else
@@ -476,7 +489,7 @@ VECTOR(MIPSX(tlb_miss), unknown)
 	PTR_ADDU k1, 1 << PTR_SCALESHIFT	#04: fetch kernel segtab
 1:
 #endif
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	PTR_L	k1, CPU_INFO_PMAP_SEG0TAB(k1)	#05: k1=seg0tab
 #else
 	PTR_L	k1, %lo(CPUVAR(PMAP_SEG0TAB))(k1)#05: k1=seg0tab
@@ -547,7 +560,7 @@ MIPSX(tlb_miss_common):
 	tlbwr					#19: write to tlb
 	sll	$0, $0, 3			#1a: standard nop (ehb)
 #if (MIPS3 + MIPS64 + MIPS64R2) > 0
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #1b: k1=hi of cpu_info cell
 	REG_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #1b: k1=cpu_info_store
 	REG_L	k0, CPU_INFO_EV_TLBMISSES(k1)	#1c
@@ -597,7 +610,7 @@ VECTOR(MIPSX(xtlb_miss), unknown)
 	PTR_SRL k1, XSEGSHIFT+XSEGLENGTH+2	#03: clear valid bits
 	bnez	k1, MIPSX(nopagetable)		#04: not legal address
 	 PTR_SRA k0, XSEGSHIFT - PTR_SCALESHIFT	#05: k0=seg offset (almost)
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #06: k1=hi of cpu_info cell
 	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #07: k1=cpu_info_store
 	PTR_ADDIU k1, k1, CPU_INFO_PMAP_SEGTAB	#08: k1=kernel/user segtab array
@@ -648,7 +661,7 @@ _VECTOR_END(MIPSX(xtlb_miss))
  */
 VECTOR(MIPSX(cache), unknown)
 	PTR_LA	k0, _C_LABEL(MIPSX(cache_exception))	#00
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	dsll	k0, 8					#01: clear XKPHYS bits
 	dsrl	k0, 8					#02: keep physical address
 	li	k1, 0x9000				#03: XKPHYS uncached
@@ -660,7 +673,7 @@ VECTOR(MIPSX(cache), unknown)
 	li	k1, MIPS_KSEG1_START			#03
 	or	k0, k1					#04
 #endif
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL)	#05: k1=hi of cpu_info cell
 	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1)	#05: k1=cpu_info_store
 	jr	k0					#06
@@ -708,7 +721,7 @@ VECTOR(MIPSX(exception), unknown)
 						#  shifted left by 2 bits so
 						#  we dont have to shift.
 	PTR_L	k0, 0(k0)			#09: get the function address
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #0a: k1=hi of cpu_info cell
 	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #0a: k1=cpu_info_store
 	jr	k0				#0b: jump to the function
@@ -725,7 +738,7 @@ VECTOR(MIPSX(exception), unknown)
 #endif
 	.p2align 4
 MIPSX(nopagetable):
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k0, %hi(SGIMIPS_ARCS64_SLOWFAULT_CELL) #10: k0=hi of slowfault cell
 	PTR_L	k0, %lo(SGIMIPS_ARCS64_SLOWFAULT_CELL)(k0) #10: k0=mips3_slowfault
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #10: k1=hi of cpu_info cell
@@ -753,7 +766,7 @@ VECTOR(MIPSX(intr), unknown)
 	 nop					#04:  branch delay
 	j	MIPSX(kern_intr)		#05: nope, kernel intr
 1:
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	lui	k1, %hi(SGIMIPS_ARCS64_CPU_INFO_CELL) #06: k1=hi of cpu_info cell
 	PTR_L	k1, %lo(SGIMIPS_ARCS64_CPU_INFO_CELL)(k1) #06: k1=cpu_info_store
 	j	MIPSX(user_intr)		#07: user intr
@@ -787,6 +800,13 @@ MIPSX(slowfault):
 	bnez	k0, _C_LABEL(MIPSX(user_gen_exception))
 	 nop
 	.set	at
+#if defined(XIRI_IP30_M2_SLOWFAULT_TEST)
+	dmfc0	a0, MIPS_COP_0_EXC_PC
+	dmfc0	a1, MIPS_COP_0_BAD_VADDR
+	mfc0	a2, MIPS_COP_0_CAUSE
+	jal	_C_LABEL(xiri_ip30_slowfault_check)
+	 nop
+#endif
 /*
  * Fall through ...
  */

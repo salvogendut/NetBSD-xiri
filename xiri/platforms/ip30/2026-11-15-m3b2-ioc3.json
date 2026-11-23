@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3b2",
+  "status": "passed-polled-ioc3-console",
+  "scope": "XIRI_IP30_M3B2 validates the PROM-assigned IOC3 BAR0/Bridge window 2 pairing, installs polled IOC3 UART A as the kernel console, and prints direct and console-path markers. BAR/window programming, IOC3 interrupts, RTC/Ethernet/keyboard/mouse, and full IOC3 attachment are not implemented.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "26b5505cab89afda8f472a10e1912d7fa9413f79",
+  "source_status": [
+    "M sys/arch/sgimips/dev/files.dev",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3B2",
+    "?? sys/arch/sgimips/dev/ioc3early.c",
+    "?? xiri/platforms/ip30/2026-11-15-m3b2-ioc3.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/dev/ioc3early.c": "d86b1852714c26149742ddb133b005cca98c1bac09c8c8c3dd69dd05187e0bd2",
+    "sys/arch/sgimips/dev/files.dev": "6f01fd0d70481d6b3a136e7bd138817e4332bbe025d2059609278d697a00dd3e",
+    "sys/arch/sgimips/dev/bridgereg.h": "c9d76135459bac7491cdd5a2b3ba615293ee2bfd780a3b090140f0d415a6dd0c",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3B2": "760a8919bda62e575eb2dadeeaca6a96290ac62b70fc4b827cbc75032548ef5a",
+    "xiri/platforms/probe.py": "26e75ce800380d1a3ef6cc9f8b57ffa20cd1e76a986fee99bd2db91090eed037",
+    "xiri/platforms/README": "f987494030f88329ede00b5197af24398d9832241d47dd56661e4d29f4f47938",
+    "xiri/platforms/ip30/DESIGN": "3a03c18fd84087bf3a108e70df23631eede6ce6d019fa2e0b32e23df7eaa6f08",
+    "xiri/platforms/ip30/HANDOVER": "7aa8c3f091410abfc369ac90c90dfb717ddf97fd4d88b96c76bf5ce7dfd1eec9"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3B2",
+    "attachment": "ioc3early0 at mainbus0 addr 0x1f600000 (Bridge short window, PCI slot 2)",
+    "validation": "maps type-0 configuration at 0x1f022000 and reads IOC3 BAR0 at 0x10; reads Bridge device register 2 at 0x1f000214; requires non-zero, non-all-ones, aligned BAR0 whose PCI base bits match the window base and whose window has the memory bit set",
+    "observed_assignment": {
+      "ioc3_bar0": "0x500000",
+      "bridge_window2": "0x10011005",
+      "window_base": "0x005",
+      "memory_space": true
+    },
+    "uart": "polled 16550 UART A at slot-2 window offset 0x20178 (physical 0x1f620178); LSR bit 5 THRE and LSR bit 0 DR; 32-bit Bridge/PCI config and device-window reads",
+    "console": "direct UART marker before cn_tab, then installs ioc3early_cn and prints the console marker through kernel printf",
+    "markers": [
+      "XIRI_IP30_M3B2_IOC3_OK",
+      "XIRI_IP30_M3B2_IOC3_CONSOLE"
+    ],
+    "failure_markers": [
+      "XIRI_IP30_M3B2_IOC3_FAILED map",
+      "XIRI_IP30_M3B2_IOC3_FAILED bar/window"
+    ],
+    "success_checks": "BAR0/window2 base and memory-space agreement, direct UART marker, then kernel printf after cn_tab installation",
+    "not_programmed": "BAR0 and Bridge window 2 remain at the PROM assignment; no PCI interrupt mapping or IOC3 device driver"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3B2",
+    "netbsd_sha256": "0c106848763860888df2120b8bafd6ebdbdff1bab149df79f69d4e55f6d36961",
+    "netbsd_gdb_sha256": "0ad18f24495be2003afb7cf0940a6735caf453614d7731cc31a2fb79656b1ee9",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M3B2-build2.log",
+    "build_log_sha256": "e669289b0fb87ad43afc493c7382caf2336219972f9d400fa80fbc7c163d0861"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3b2-ioc3-20261115b",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B2/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3B2_IOC3_CONSOLE --kernel-entry --timeout 90 --output ../xiri/.work/octane-m3b2-ioc3-20261115b",
+    "expected_marker": "XIRI_IP30_M3B2_IOC3_CONSOLE",
+    "status": "passed",
+    "elapsed_seconds": 41.46,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "cccd473e0e54e2e4c61931b392ed39ba0e7a214ec22b80eca25d50548cd96da9",
+    "serial_sha256": "afc9c302118594fddf2dee3d695c7e2969374adc17dc4b6ba63001edf3410345",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203ec4f0",
+      "bss_start": "0xa8000000203e8290",
+      "bss_end": "0xa800000020401a00",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203e8660",
+      "stack_top": "0xa8000000203ec660"
+    },
+    "observations": [
+      "M2B HEART and M3 Bridge/PCI markers passed; this retained run stops before the clock and interrupt-delivery markers (see review_validation for the longer boot)",
+      "ioc3early0 at mainbus0 addr 0x1f600000: IOC3 BAR0 0x500000 window2 0x10011005 (window base 5, memory space)",
+      "direct UART marker XIRI_IP30_M3B2_IOC3_OK",
+      "kernel console marker XIRI_IP30_M3B2_IOC3_CONSOLE after cn_tab installation",
+      "the subsequent entropy warning is carried by IOC3, proving kernel printf uses the new console"
+    ],
+    "inputs": {
+      "netbsd": "0c106848763860888df2120b8bafd6ebdbdff1bab149df79f69d4e55f6d36961",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_O2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "84e76cce09d4077ce35af46c1b9e38690ca6b500066fa0eee9a63882137478e3",
+        "build_log_sha256": "adc961a54a0cb7214031dd8a33da2b46a615b9d59ddf98456f317a35e906ad93",
+        "note": "config does not include ioc3early; no guest boot was rerun",
+        "build_log": "../xiri/.work/netbsd-octane-build/XIRI_O2-m3b2-build.log"
+      },
+      "XIRI_INDY64": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "08db51687062b2d330b34b8b37b4e54951856a7cb9385c94a8ab5d63ba9a3fe7",
+        "build_log_sha256": "d4794eb8657dcdf342a32d8f71f2617a245b700a5221b09b43d9d6630ef37281",
+        "note": "config does not include ioc3early; no guest boot was rerun",
+        "build_log": "../xiri/.work/netbsd-octane-build/XIRI_INDY64-m3b2-build.log"
+      }
+    },
+    "latest_guest_runs": "M1/O2/Indy64 latest native guest runs remain the M2b-fix baselines; M3a, M3b1 and M3b2 guest runs are recorded in their respective manifests."
+  },
+  "not_proven": [
+    "BAR and Bridge window programming",
+    "IOC3 interrupt delivery and interrupt-driven serial",
+    "IOC3 RTC, Ethernet and keyboard/mouse",
+    "Bridge DMA and QLogic storage",
+    "Cache-error delivery",
+    "Physical Octane hardware",
+    "Full root boot and multi-user login"
+  ],
+  "next_milestone": "Attach an interrupt-capable IOC3 driver while retaining the polled console; then add Bridge/HEART interrupt mapping and the QLogic storage path.",
+  "review_validation": {
+    "date": "2026-11-15",
+    "status": "passed",
+    "scope": "Independent diskless boot of the unchanged M3B2 kernel; extends the check through the root-device prompt and exercises polled serial input with an invalid root name.",
+    "output_directory": "/tmp/xiri-review-m3b2-input-20261115",
+    "artifact_retention": "Temporary /tmp review artifacts; original retained milestone run remains unchanged. Use a fresh output directory to repeat the command.",
+    "command": "python3 /tmp/xiri-review-m3b2-input-probe.py --xiri /var/home/salvogendut/Dev/xiri --emulator /var/home/salvogendut/Dev/xiri/.work/platform-checks/native-20261115/emulator --machine octane --image /var/home/salvogendut/Dev/xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B2/netbsd --nvram /var/home/salvogendut/Dev/xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash /var/home/salvogendut/Dev/xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect 'root device: ' --kernel-entry --timeout 90 --output /tmp/xiri-review-m3b2-input-20261115",
+    "probe_changes": "Copy of xiri/platforms/probe.py with a root-prompt/input check and read-only Bridge status monitor commands; retained as probe-used.py in the output directory.",
+    "probe_sha256": "c075fa5eee99f75003fbfa755bb608c6e36bfff334f27b2614224f85b13b7a10",
+    "result_sha256": "aff7925405a51f9b490c5091ba0ea9a5be6c045c5e09762873c0bd1347fc45b5",
+    "serial_sha256": "76145fc587f79657facb36ac119654bb34e26671ec4b9f5e1dbfa65fb5a37172",
+    "netbsd_sha256": "0c106848763860888df2120b8bafd6ebdbdff1bab149df79f69d4e55f6d36961",
+    "elapsed_seconds": 38.97,
+    "observations": [
+      "Both direct IOC3 and kernel-console markers passed.",
+      "XIRI_IP30_M2B_CLOCK_OK heart_delta=0x1788c4 clockints=5 ticks=5",
+      "XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1",
+      "Native console echoed xiri_review, printed use one of: halt reboot, and returned to root device:.",
+      "Bridge interrupt status at 0x1f000104 was 0x00000000 after console output and input."
+    ],
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "hardware_tested": false
+  }
+}

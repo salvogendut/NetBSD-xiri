@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3a",
+  "status": "passed-xio-bridge-inventory",
+  "scope": "XIRI_IP30_M3A verifies the Crossbow port-15 link, maps the Bridge short window, and reads type-0 PCI configuration directly.  It identifies both QLogic ISP1040B controllers, the IOC3 and the RAD.  It does not attach pci(4), program BARs/windows, claim devices or implement IOC3 serial/interrupts.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "88651830f99ec4d6adde300b7f9c02c20c218651",
+  "source_status": [
+    "M sys/arch/sgimips/dev/files.dev",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3A",
+    "?? sys/arch/sgimips/dev/bridge.c",
+    "?? sys/arch/sgimips/dev/bridgereg.h",
+    "?? xiri/platforms/ip30/2026-11-15-m3a-bridge.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/dev/bridge.c": "878438bb0e0e008295270e61d2cb0a1d5939ba8cacf7a31448447224119e1ac9",
+    "sys/arch/sgimips/dev/bridgereg.h": "c9d76135459bac7491cdd5a2b3ba615293ee2bfd780a3b090140f0d415a6dd0c",
+    "sys/arch/sgimips/dev/files.dev": "3d9ff08ac784671e43d4134c0863c21c7dffedc04bb7ce927155e79b68885e80",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3A": "f1214f7be6f418b8b0effc1b8ef001b0921ac816ceae364943290526933926c0",
+    "sys/arch/sgimips/conf/files.sgimips": "d2681535af2b8ba5258bd3468055dfc9b18267dbb8579ff274b60e6494066855",
+    "sys/arch/sgimips/sgimips/machdep.c": "0d2362b0ec5f27c145624a7befd70e89543039de4b5d0b19193f48c0843114d0",
+    "sys/arch/sgimips/sgimips/console.c": "82c7d9ed65fc6d7c2b1bfcb600a678f34d435f3bd9aec8d355e0982bd0523125",
+    "xiri/platforms/probe.py": "26e75ce800380d1a3ef6cc9f8b57ffa20cd1e76a986fee99bd2db91090eed037",
+    "xiri/platforms/README": "24f017a3f5278109f02b4ca64aa88a6ea16cd4886b58dac61f9c835cebe377df",
+    "xiri/platforms/ip30/DESIGN": "bd348286f3c32de3b36db28cc60c32d15938fcf91b471957877052cfa3cc80ab",
+    "xiri/platforms/ip30/HANDOVER": "d4c660d669139792c3b22675597849b9bc5e22223b4f1ea9daefbcf6661ba37f"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3A",
+    "device": "xbridge0 at mainbus0 addr 0x1f000000",
+    "bridge_window": "0x1f000000 via KSEG1, 0x100000 bytes",
+    "bridge_id": "0x3c00206d (part 0xc002, manufacturer 0x036, rev 3)",
+    "xbow": {
+      "widget": 0,
+      "base": "0x10000000",
+      "id": "0x40000001",
+      "link15": "0x80000000 alive"
+    },
+    "config_access": "type-0 at 0x020000 + slot*0x1000 + function*0x100, direct 32-bit",
+    "pci_ids": {
+      "slot0": "1077:1020",
+      "slot1": "1077:1020",
+      "slot2": "10a9:0003 IOC3",
+      "slot3": "10a9:0005 RAD"
+    },
+    "not_implemented": [
+      "pci(4) attachment",
+      "BAR and Bridge window programming",
+      "IOC3 serial",
+      "Bridge/HEART PCI interrupt routing",
+      "DMA",
+      "storage"
+    ],
+    "bridge_intr_check": "Bridge interrupt status is captured before inventory and any new error bit (31:8) rejects the checkpoint",
+    "xbow_validation": "Xbow ID part 0x0000/manufacturer 0x0000 is validated; all-ones or dead link15 is rejected"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3A",
+    "netbsd_sha256": "4ee2f7129d7596debfa923e5a1d457bab27353d086417a1961c31401b6bdd0e2",
+    "netbsd_gdb_sha256": "ab0ab7d82199f64fddf5c94aa08171475b3360d648833961d6faf002543d1580",
+    "readelf_sha256": "cbadeca3d54964d1a78206893bce7c9a7ca7a3369d4da9c8ec85bb4f973d974e",
+    "size_sha256": "776304eb764fba176e8611618989d894928fba221bccdd0ac035dbaffa63bad4",
+    "entry_symbols_sha256": "ea7520e56630193599ca686ba07123a922c36018535dfcd5f18c21e5a2aea32e",
+    "linker_map_sha256": "dd1a7d418d0fd0faf87f6b0d18b590ab242373d21246a78cee41fd23cb4c36ea",
+    "build_log_sha256": "47dfa010072afc7cf0f3f12addc81555520d9163748a0f67cc222f04ea0b1a00"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3a-bridge-20261115d",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3A/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3_BRIDGE_OK --kernel-entry --timeout 90 --output ../xiri/.work/octane-m3a-bridge-20261115d",
+    "expected_marker": "XIRI_IP30_M3_BRIDGE_OK",
+    "status": "passed",
+    "elapsed_seconds": 38.39,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "51aad261be51367d12a515bb3f0fa737c7791d56a910fa331f4718d5ad7165a3",
+    "serial_sha256": "4c1744fc45e3d334ea9eacf8b5da759245dac95ff3087c4c7ef6e894ca096566",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203bf070",
+      "bss_start": "0xa8000000203bae10",
+      "bss_end": "0xa8000000203d4500",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203bb1e0",
+      "stack_top": "0xa8000000203bf1e0"
+    },
+    "observations": [
+      "xbridge0 id 0x3c00206d rev 3",
+      "Xbow id 0x40000001 validated, link15 0x80000000 alive",
+      "PCI slots 0/1 1077:1020, slot 2 10a9:0003, slot 3 10a9:0005",
+      "Bridge interrupt status before 0, after 0, new errors 0"
+    ],
+    "inputs": {
+      "netbsd": "4ee2f7129d7596debfa923e5a1d457bab27353d086417a1961c31401b6bdd0e2",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30": "1354adfbbb3e18998073e5266ec6a2ad8693f687a5978e8f67e44dff50b17fc1",
+      "XIRI_O2": "f5cde09a2d65b869d40642d1c4c2a22eccbc39b807e1b3638a34628cc3c3de61",
+      "XIRI_INDY64": "498d8e46d02a695688239d4c5aa9433a31bf28b7c62a688d73ffdeef9b541b47"
+    },
+    "latest_guest_runs": "../xiri/.work/octane-{entry,o2,indy64}-*-m2b-fix: M1 passed, O2 single-user/clean halt passed, Indy64 login/clean halt passed; M3a only adds an unused device definition to those configurations"
+  },
+  "not_proven": [
+    "pci(4) attachment and BAR/window programming",
+    "native IOC3 serial and interrupt delivery",
+    "Bridge/HEART PCI interrupt routing",
+    "Bridge DMA and QLogic storage",
+    "Cache-error delivery",
+    "Physical Octane hardware",
+    "Full root boot and multi-user login"
+  ],
+  "next_milestone": "M3b: attach pci(4) for bus 0, configure the Bridge windows/BARs, then implement native IOC3 serial and its interrupt path."
+}

@@ -1,0 +1,12 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M4A_PHYS: physical read-only root gate.  Keep crash dumps
+# disabled so the read-only filesystem cannot be reached through a dump path.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M4A"
+
+ident		"XIRI_IP30_M4A_PHYS"
+
+no config	netbsd
+config		netbsd root on sd0a type ffs dumps on none

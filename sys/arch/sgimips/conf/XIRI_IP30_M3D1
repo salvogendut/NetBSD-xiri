@@ -1,0 +1,14 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3D1: attach the two QLogic ISP1040 controllers behind the
+# Octane Bridge and verify their PCI interrupt routing.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3C1"
+
+ident		"XIRI_IP30_M3D1"
+
+options		XIRI_IP30_M3D1
+
+isp*		at pci? dev ? function ?
+scsibus*	at isp?

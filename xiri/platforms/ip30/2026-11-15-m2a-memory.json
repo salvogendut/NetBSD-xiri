@@ -1,0 +1,234 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M2a",
+  "status": "passed-memory-vector-bootstrap",
+  "scope": "XIRI_IP30_M2 continues past the M1 entry proof, reconciles the CCA 5 entry alias, installs low exception vectors, initialises ARCS64 memory descriptors, reaches pmap_bootstrap and the lwp0 uarea, and stops deliberately before autoconfiguration, HEART interrupts or timekeeping.  Separate test configurations prove a successful TLB refill and the no-page-table slow-fault path.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "c206baff5d943d9b8f246dd55a63a44268c56b8d",
+  "source_status": [
+    "M sys/arch/mips/mips/locore.S",
+    "M sys/arch/mips/mips/mipsX_subr.S",
+    "M sys/arch/mips/mips/mips_machdep.c",
+    "M sys/arch/sgimips/conf/XIRI_IP30",
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/include/xiri_ip30.h",
+    "M sys/arch/sgimips/sgimips/ip30_early.c",
+    "M sys/arch/sgimips/sgimips/machdep.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M2",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M2_TLB",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M2_SLOWFAULT",
+    "?? sys/arch/sgimips/include/ip30_arcs64.h",
+    "?? xiri/platforms/ip30/2026-11-15-m2a-memory.json"
+  ],
+  "source_files": {
+    "sys/arch/mips/mips/locore.S": "be7f0c61f23205170b65f2202c657c3bb68c702e75f76d2be0c097bc4e15d6b0",
+    "sys/arch/mips/mips/mipsX_subr.S": "a9af3ff08ab539803b2718dfe36e78141cc9fd85050b029ae17d4412194d9845",
+    "sys/arch/mips/mips/mips_machdep.c": "0d4e76e4a436c395370ae0f9ce330d5430be383b4a2c616a839e8d00a376b0c9",
+    "sys/arch/sgimips/conf/XIRI_IP30": "120b18db834be6df7582dfe0a92fefb816c213326452fe9ff5f08ccab1634000",
+    "sys/arch/sgimips/conf/XIRI_IP30_M2": "038112187ffab2177c8699f5ff13456c5e3fba40f2651a40891c87b7e3177333",
+    "sys/arch/sgimips/conf/XIRI_IP30_M2_TLB": "cdd0926ce6120335223f72a726bc81df233e90661bb54a9c14608daaf93b4bc2",
+    "sys/arch/sgimips/conf/XIRI_IP30_M2_SLOWFAULT": "d44b91b402f89c3f14cbea12bd1309bd37773ae14e3fb22b3b2955128986ab8c",
+    "sys/arch/sgimips/conf/files.sgimips": "925a46cb900186c4b595596c2cb52a4acb6312c7c9eb6af265e4d86133b5fd0b",
+    "sys/arch/sgimips/include/ip30_arcs64.h": "0f9f2c349f6aa3cd2c42b15f79994ff7bdfe6898bc496ab6aaf7042b925e33a3",
+    "sys/arch/sgimips/include/xiri_ip30.h": "922fdb49e59bf7e746e4dd1b2ad470b79557cc8adca046a89b4d5a9c5df27a7f",
+    "sys/arch/sgimips/sgimips/ip30_early.c": "13f4194baa0fcd81d6f042d7beddb23e913aa3a15d0c86a47146963c910346c5",
+    "sys/arch/sgimips/sgimips/machdep.c": "27508c485b6bdb29972cd864269d1d15bfabb869920d6dbbda5686c7bada945d",
+    "xiri/platforms/probe.py": "2728ec5adbd4bb1af1a2ff9c5077344b3ae72f9275c634f5500968b1b3cd8bb1",
+    "xiri/platforms/ip30/DESIGN": "33910523e0ea487e6ebc519c80d7c242254bf78d7324c329de327636d6cabcea",
+    "xiri/platforms/README": "6b9323ed98083932efabffe3ef85f450ad3d965c4817982a5d82fe35841b60ba",
+    "xiri/platforms/ip30/HANDOVER": "4799df02d8c768ab6aa97419f75e3f8452672bbfe77fc7daa7ff9bad9e2be3ec"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M2",
+    "m1_config_remains": "XIRI_IP30 defines XIRI_IP30_M1_STOP",
+    "cached_alias": {
+      "mips3_xkphys_cached": "0xa800000000000000",
+      "mips3_pg_cached": "0x28",
+      "cca": 5
+    },
+    "vector_cells": {
+      "cpu_info": {
+        "virtual": "0xffffffff80000ff0",
+        "physical": "0x0ff0",
+        "content": "&cpu_info_store"
+      },
+      "slowfault": {
+        "virtual": "0xffffffff80000ff8",
+        "physical": "0x0ff8",
+        "content": "mips3_slowfault"
+      },
+      "initialization": "written before mips_vector_init; both contents are printed in the checkpoint"
+    },
+    "firmware": {
+      "spb": "0xffffffffa0001000",
+      "services": [
+        18,
+        25,
+        27,
+        30
+      ],
+      "curlwp": "MIPS_CURLWP (t8) is saved and restored around every ARCS64 call because it is not an N64 ABI callee-saved register",
+      "reboot": "EnterInteractiveMode/Reboot/PowerDown use the 64-bit vector, so panic/halt no longer recurses through the 32-bit arcbios bridge"
+    },
+    "critical_sections": "Status-zero writes preserve KX on IP30; tlb_update_addr uses PTR_LA",
+    "slowfault_jump": "the copied vector loads 0xff8 and uses jr instead of a truncated 26-bit j; a test-only mips3_slowfault hook verifies EPC/BadVAddr/cause before UVM and emits a dedicated marker",
+    "cache_vector": "full-width XKPHYS cache_exception physical address is remapped to the uncached XKPHYS alias (0x9000...), not truncated KSEG1",
+    "memory_rounding": "end is computed from the original base plus length, rounded inward; empty ranges are skipped",
+    "vector_slots_bytes": {
+      "utlb_miss": "0x7c",
+      "xtlb_miss": "0x4c",
+      "cache": "0x3c",
+      "exception": "0x78",
+      "interrupt": "0x28",
+      "slot_limit": "0x80"
+    }
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M2",
+    "netbsd_sha256": "7540ebb910fc95a61dca03e57afdc31e51b7c1fd7c800d0ad44cb41918a7a26e",
+    "netbsd_gdb_sha256": "208b78cef4e6812218515daea628081ad27b0f294d6dc4324992a6308715cd21",
+    "readelf_sha256": "7c2b7df7a4af7306511b5b6d39cc540fba9fb56ae33f145234b966fd7888dd94",
+    "size_sha256": "c54dc49a08464111a11f909df5bf7212afc98cb581d8c79893f1148a563511a4",
+    "entry_symbols_sha256": "68f42ba4379f06859bb3d58da558666f52511e83f1146d2e894d24c7adffe5af",
+    "vectors_sha256": "6a622223f4bb085b6bc147bb857cbb92e63a3389374480aa6aa0fa8e3aff3c4d",
+    "linker_map_sha256": "8d50d1e1a391f25b1aa487769aa81160a8790d8a321e0c4cb3bc0b57edc722e0",
+    "build_log_sha256": "b097d5cfc9ca24705ccf038537fdd5d388251d1d6c24e0a77ae4f3b5df19d168"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m2a-20261115-final3",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M2/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M2_MEMORY_OK --kernel-entry --timeout 90 --output ../xiri/.work/octane-m2a-20261115-final3",
+    "expected_marker": "XIRI_IP30_M2_MEMORY_OK",
+    "status": "passed",
+    "elapsed_seconds": 37.89,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "54c6a3846d111502993cef0fa2b3a3a70b5cfc749b1345ede5079eecb351c14f",
+    "serial_sha256": "dc53bb1933681ab7488643daf9dd7283ff717ce034608e1a3608240f97c6eab2",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203bccf0",
+      "bss_start": "0xa8000000203b8a90",
+      "bss_end": "0xa8000000203d2100",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203b8e60",
+      "stack_top": "0xa8000000203bce60"
+    },
+    "memory": {
+      "machine": 30,
+      "ncpus": 1,
+      "physmem_pages_8k": 65534,
+      "arcsmem_pages_8k": 129,
+      "clusters": 4,
+      "ranges": [
+        "0x20004000+0x0000c000",
+        "0x20010000+0x003c2000 (kernel LoadedProgram, skipped)",
+        "0x203d4000+0x00b2c000",
+        "0x21000000+0x1f000000"
+      ],
+      "guard_absent": "0x20000000..0x20003fff is not free memory",
+      "cpu_info_cell": "0xa80000002031e640",
+      "slowfault_cell": "0xa800000020018b2c",
+      "tlbmisses": 0
+    },
+    "monitor": {
+      "pc": "xiri_ip30_halt",
+      "note": "Deliberate halt after the memory checkpoint; the monitor-induced stop is not a guest fault."
+    },
+    "inputs": {
+      "netbsd": "7540ebb910fc95a61dca03e57afdc31e51b7c1fd7c800d0ad44cb41918a7a26e",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "tlb_refill_test": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M2_TLB",
+    "output_directory": "../xiri/.work/octane-m2a-tlb-refill-20261115c",
+    "netbsd_sha256": "0d68f7ad47bf00dbd40a3618fd949787c7cdc1f0a2ddba6988de2b12e78f41bd",
+    "netbsd_gdb_sha256": "5318f33c0e575f8599f02f86e6c00a9ee16ab5a190c6e6aaa81b79483c238363",
+    "build_log_sha256": "91a22ffdf863572cc17e8c172ac47cb7f17092eb2fe611d1ed3b1cb326af23f5",
+    "status": "passed",
+    "elapsed_seconds": 37.84,
+    "result_sha256": "ce319d1670f9885d1dfdd653b65fc992df23fa44d89c4e388c848972717fca98",
+    "serial_sha256": "c12e2e8558b7d95c7b13ca37921caa3e5c03bf5c0fd7fb4cfbad3cf63bf8ea1a",
+    "observed": [
+      "mapped VA 0xc000000000000000 to PA 0x30000000 with PMAP_NOCACHE",
+      "invalidated the TLB entry and read the magic value 0x5849524933305442",
+      "ci_ev_tlbmisses.ev_count advanced from 0 to 1",
+      "XIRI_IP30_M2_TLB_REFILL_OK printed"
+    ]
+  },
+  "slowfault_test": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M2_SLOWFAULT",
+    "output_directory": "../xiri/.work/octane-m2a-slowfault-20261115c",
+    "netbsd_sha256": "0a9356842b251b733f9be34db2d684be6150877c0a03a2f10e1a460331f2996c",
+    "netbsd_gdb_sha256": "5f0aa3de1271e01917c49f5861b202b0a34e7756a1d3a63d8565dd9adb7b3d0a",
+    "build_log_sha256": "90d493d02369a572e23bdb5057f5c8f64b41023e2879b979aa914c3604cb1226",
+    "status": "passed",
+    "elapsed_seconds": 37.84,
+    "result_sha256": "1d32f193cf6d315953a568b244da3142ae9c0c2464118b33bd7f5c1b9d18b1cb",
+    "serial_sha256": "07eba2ec0cc1bcc1db75e1d296f8e171d6e6c020b8be3794c949c011640098d6",
+    "observed": [
+      "the successful refill test ran first, then XIRI_IP30_M2_SLOWFAULT_BEGIN",
+      "a dedicated assembly load from VA 0xffffffff7fffe000 took the slow-fault path",
+      "the test hook reported epc=0xa800000020018ba0 (expected match)",
+      "badvaddr=0xffffffff7fffe000 (expected match), cause=0x8 (TLB load/ifetch miss)",
+      "XIRI_IP30_M2_SLOWFAULT_OK printed before UVM handling and the kernel halted",
+      "no generic panic or boot-blocked result"
+    ]
+  },
+  "regressions": {
+    "m1_entry": {
+      "output_directory": "../xiri/.work/octane-entry-20261115-final3",
+      "image_sha256": "7e1b8f1f2584bda98270bb710f4aa309b5bac14c419254e3a7cf71e5b0f686ef",
+      "status": "passed",
+      "elapsed_seconds": 37.72,
+      "result_sha256": "e8898341371840bbf9a6f251871815fa6cf7f7189bc089144064bac8099e3500",
+      "serial_sha256": "3be42a70530067dc30c900d8004d00d60d7282dd6d3666a1b41369dcae99cdae",
+      "build_log_sha256": "b1db814d1342aac20259c4aa85da8b41ee78b135a7d2fa80ac27b33e2fc007c8"
+    },
+    "o2_single_user": {
+      "output_directory": "../xiri/.work/octane-o2-regression-20261115-final3",
+      "image_sha256": "1557cb4a9a22490bc8cfbc76df37714303200a050cc4d305596ce1c4634eb1c0",
+      "status": "passed",
+      "elapsed_seconds": 89.26,
+      "clean_shutdown": true,
+      "emulator_stopped": true,
+      "originals_unchanged": true,
+      "result_sha256": "4771d067500666ff3569512e185ffe0b58a7c95e9ed4c40bc40b8dde317b3aea",
+      "serial_sha256": "de6f3902daea0495f7c68ee4179e7d11546e8a0eb3e009b07348972d123e0eec",
+      "build_log_sha256": "78d8ce2d8009dd96f56a455be0fb8eb2b0726e0694a2c53f8fcfcaba787f0a51"
+    },
+    "indy64_single_user": {
+      "output_directory": "../xiri/.work/octane-indy64-regression-20261115-final3",
+      "image_sha256": "08d194a66e54bdae1c0d055586c7043788181a178ddeee6238ac2da362cd8a80",
+      "status": "passed",
+      "elapsed_seconds": 104.35,
+      "clean_shutdown": true,
+      "result_sha256": "b4263a5d212ddde793f9b8dc1a7b643520c4528f433f60d208e6df7fd37bd05f",
+      "serial_sha256": "ef9976013b75e1c741ae8c6ffd432649ad6c488c6d0e671162cb8e81df17d316",
+      "build_log_sha256": "4207d5a48495472901af4223078bd22e370aa4c98452a2061d2bf08c3a49dac4"
+    }
+  },
+  "not_proven": [
+    "Physical Octane hardware",
+    "JIT operation",
+    "Cache-error exception delivery (vector converted to uncached XKPHYS, not fault-injected)",
+    "HEART interrupt mask/pending/acknowledge/priority routing",
+    "Timer interrupts and timekeeping",
+    "Autoconfiguration, native IOC3 serial handoff, XIO/Bridge/PCI, storage, networking",
+    "Multi-user login"
+  ],
+  "next_milestone": "Add HEART interrupt mask/pending/acknowledge and a clock/timecounter, then continue to autoconfiguration and XIO/Bridge.  Keep the M1, M2a, TLB-refill and slow-fault checkpoints reproducible."
+}

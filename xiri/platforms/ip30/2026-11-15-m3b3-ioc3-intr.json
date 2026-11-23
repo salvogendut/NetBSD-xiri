@@ -1,0 +1,199 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3b3",
+  "status": "passed-interrupt-driven-ioc3-serial",
+  "scope": "XIRI_IP30_M3B3 routes IOC3 SuperIO on Bridge input 4 to HEART vector 16, enables UART A receive interrupts, and verifies masked deferral, handler delivery, source drain, polled fallback and absence of an interrupt storm. It preserves the polled console and checks external console input/output at the root-device prompt. Bridge DMA, storage and generic PCI interrupts are not implemented.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "0355c92153d60a57d564456a3d3cb8534b5aa62e",
+  "source_status": [
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/dev/bridge.c",
+    "M sys/arch/sgimips/dev/bridgereg.h",
+    "M sys/arch/sgimips/dev/heart.c",
+    "M sys/arch/sgimips/dev/ioc3early.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3B3",
+    "?? sys/arch/sgimips/dev/bridgevar.h",
+    "?? sys/arch/sgimips/dev/heartvar.h",
+    "?? xiri/platforms/ip30/2026-11-15-m3b3-ioc3-intr.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/conf/files.sgimips": "a8553a8a2866161e65de09194c3dfc5b0da7ad658da10bd5e7d0639f9856a9e0",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3B3": "e2bfaa73de8abca972c0963a1fea9e766a18dd7d1ed54bd1e8b700abdc1cc29c",
+    "sys/arch/sgimips/dev/bridge.c": "608b7d0eca204b72770f06fdbc749808eb2c367e1eb74714e2240527afad7cb7",
+    "sys/arch/sgimips/dev/bridgereg.h": "3d4f191eb46c59534b20d9340503be204e123d6190a499a0156f6bf80fbbc586",
+    "sys/arch/sgimips/dev/bridgevar.h": "ddcb2962650869b44237ad4616d9ebea0379593fc6109efbdf61133741405f4d",
+    "sys/arch/sgimips/dev/heart.c": "fb1fd9191a8d3c22a3f9ce49ca85e13408466552eb5c89212a91dfb3442387db",
+    "sys/arch/sgimips/dev/heartvar.h": "c9bb74debc98732d689d6c16e6824d28ee39cb6f41fd52439b746765c2c8eba2",
+    "sys/arch/sgimips/dev/ioc3early.c": "07e6ffbe1c2eb153b7a46495cc033d281acc3f2d005e3899c49f50c39a6c5cb8",
+    "xiri/platforms/probe.py": "f8636cef2a208ed5bc613df2839db2d62075b5bd3f0e58a37956efb9fcda5849",
+    "xiri/platforms/README": "5077553de40c0b9a082312d28ce6a1baaf6f28b27de6ca4dc8305e5d46d0bc2c",
+    "xiri/platforms/ip30/DESIGN": "3216f314e3f821575de5f2824bba06973139f92616ddb3fe1cbd3bbd1acf0ee2",
+    "xiri/platforms/ip30/HANDOVER": "53038cf22a929e5edae935bd8fdb6b5eaadeb74c533f56048a96623e2e908ddc"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3B3",
+    "option": "XIRI_IP30_M3B3; XIRI_IP30_M3B2 remains a polled-only rebuildable checkpoint",
+    "bridge_route": {
+      "pin": 4,
+      "source": "IOC3 SuperIO",
+      "destination_widget": 8,
+      "destination_packet_address": "0x80",
+      "heart_vector": 16,
+      "int_dest_upper": "0x00080000",
+      "int_dest_lower": "0x00000080",
+      "int_host4": 16,
+      "int_mode": "bit 4 set for falling-edge clear packet",
+      "int_enable": "bit 4 enabled after the HEART handler is established",
+      "api": "xbridge_intr_route(), xbridge_intr_enable(), xbridge_intr_status()"
+    },
+    "ioc3_receive": {
+      "uart": "UART A at slot-2 window offset 0x20178 (physical 0x1f620178)",
+      "ier": "0x01 receive-data enable",
+      "ioc3_int_enable_set": "bit 6 SERIAL_A (0x40)",
+      "handler": "drains LSR/RBR into a 256-byte ring and increments the interrupt count",
+      "console_reader": "cn_getc pops the ring and drains the UART directly under splhigh when the ring is empty",
+      "ownership": "handler and console reader share one ring; splhigh serialises their UART/ring access so bytes are not stolen"
+    },
+    "self_test": {
+      "hook": "heart_set_post_test(), after the M2b clock and interrupt-delivery checks",
+      "method": "temporary UART loopback and splvm masking",
+      "checks": [
+        "masked injection leaves handler count unchanged with Bridge pin 4 set",
+        "splx delivers vector 16 and the handler drains the byte",
+        "Bridge pin 4 and IOC3 SERIAL_A clear after drain",
+        "cn_getc returns the handler-delivered byte from the ring",
+        "a second injected byte is drained directly by cn_getc under splvm without a handler call",
+        "no additional interrupts, ring overruns or Bridge errors after 10 ms"
+      ]
+    },
+    "markers": [
+      "XIRI_IP30_M3B3_ROUTE_OK pin=4 vector=16",
+      "XIRI_IP30_M3B3_RX_OK masked=deferred delivered=1 drained=1 polled=1 storm=0",
+      "XIRI_IP30_M3B3_SERIAL_OK ticks=11 bridge_errors=0 overruns=0"
+    ],
+    "failure_markers": [
+      "XIRI_IP30_M3B3_FAILED route",
+      "XIRI_IP30_M3B3_FAILED establish",
+      "XIRI_IP30_M3B3_FAILED enable",
+      "XIRI_IP30_M3B3_FAILED timer",
+      "XIRI_IP30_M3B3_FAILED inject",
+      "XIRI_IP30_M3B3_FAILED masked",
+      "XIRI_IP30_M3B3_FAILED pending",
+      "XIRI_IP30_M3B3_FAILED delivered",
+      "XIRI_IP30_M3B3_FAILED storm",
+      "XIRI_IP30_M3B3_FAILED drain",
+      "XIRI_IP30_M3B3_FAILED console",
+      "XIRI_IP30_M3B3_FAILED polled_inject",
+      "XIRI_IP30_M3B3_FAILED polled",
+      "XIRI_IP30_M3B3_FAILED polled_drain",
+      "XIRI_IP30_M3B3_FAILED overrun",
+      "XIRI_IP30_M3B3_FAILED bridge"
+    ]
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3B3",
+    "netbsd_sha256": "b24835b1932f156e1b8a51f142c5876407c132a23da7c562e2526a851824778b",
+    "netbsd_gdb_sha256": "8dbf9d334bce876cc3c9dfd4ee3aa103b727c4b1b95114456bcf079651a449ab",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M3B3-build-final.log",
+    "build_log_sha256": "9d2faa09e8634abc5f6807b9d92352afbddb8d6b1c61f690a4dfbc71942dddb6"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3b3-ioc3-intr-final",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3B3/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --expect XIRI_IP30_M3B3_SERIAL_OK --console-input xiri_m3b3 --kernel-entry --timeout 90 --output ../xiri/.work/octane-m3b3-ioc3-intr-final",
+    "expected_marker": "XIRI_IP30_M3B3_SERIAL_OK",
+    "status": "passed",
+    "elapsed_seconds": 38.87,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "console_input": "xiri_m3b3",
+    "console_echo": true,
+    "console_reply": "use one of: halt reboot",
+    "result_sha256": "8ee8c7b904a20b1921bd2de53664cc4aee2573a2e1d3ac186138a28851a0873c",
+    "serial_sha256": "e04bd38c26461a42324633e3c2d985c6a99cdf3344d26d3b3207d4fc1f2cfbac",
+    "checkpoint": {
+      "entry": "0xa800000020010000",
+      "sp": "0xa8000000203ed4f0",
+      "bss_start": "0xa8000000203e9290",
+      "bss_end": "0xa800000020402a00",
+      "bss_witness": "0x0",
+      "stack_base": "0xa8000000203e9660",
+      "stack_top": "0xa8000000203ed660"
+    },
+    "observations": [
+      "IOC3 SuperIO routed through Bridge pin 4 to HEART vector 16",
+      "M2B HEART clock and interrupt-delivery markers passed before the M3B3 test",
+      "masked receive was deferred; unmasking delivered the handler",
+      "handler drain cleared Bridge pin 4 and IOC3 SERIAL_A",
+      "console reader retrieved the handler byte from the ring",
+      "polled console reader drained a second byte without invoking the handler",
+      "no interrupt storm, ring overrun or Bridge error after the test",
+      "external input xiri_m3b3 echoed at root device: and produced the halt/reboot rejection prompt"
+    ],
+    "inputs": {
+      "netbsd": "b24835b1932f156e1b8a51f142c5876407c132a23da7c562e2526a851824778b",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30_M3A": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "54957d69cb39b4f3ade82a5edcce381037a8d0d773e9e857b1317537cae77ccc",
+        "build_log_sha256": "4a617b740c9ef8a6c31685b4d7ed9ff0966973492d2e117c8006cf4fef0359a9"
+      },
+      "XIRI_IP30_M3B": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "dce352ddef934374f743425d79678edd4a6523029d3fb8a9084ce3c5ffdad2df",
+        "build_log_sha256": "1446257f95bf7590cf8d0c7b133fdbf9044c09f9f9a041554722cbb814b12fb6"
+      },
+      "XIRI_IP30_M3B2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "98dd5a41fbbb12e3a4fa0114ad83ff2a48cc33d8b16680b11d64f82c5de8dc43",
+        "build_log_sha256": "e690ce7ff7a49b66adcd5142a8ead106cbae5a7ba267a9bb4631c5485fee74a5"
+      },
+      "XIRI_O2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "89c732c3942fd8f6c5a8e8457ec24d44edc88b9f1caabdd0094c96bdcf8d3c65",
+        "build_log_sha256": "669af8561016d0f3496999c09e72b68dca8d2a0aba9ffb208195a8ce2df0bdec"
+      },
+      "XIRI_INDY64": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "bd6abbdc27a2fabdc9d0f5894c36a51a4ad43f06f048aabb9f4858fa0b0bf09e",
+        "build_log_sha256": "2ab771c06244a927d77565ead4fcc3866f64c9d4a9637d1c699a6bc13f7fd4a0"
+      }
+    },
+    "m3b2_guest": {
+      "output_directory": "../xiri/.work/octane-m3b2-regression-20261115b",
+      "status": "passed",
+      "elapsed_seconds": 38.79,
+      "expected_marker": "XIRI_IP30_M3B2_IOC3_CONSOLE",
+      "result_sha256": "ab565427af8f0eb0dc65b81c0d07c96de706b555d64bb2e1e47d5e025f715c20",
+      "serial_sha256": "b70b1c10534c0eb429180f750f6e432d09d1a5e24c82e7e468597c2aee6c049f",
+      "netbsd_sha256": "98dd5a41fbbb12e3a4fa0114ad83ff2a48cc33d8b16680b11d64f82c5de8dc43"
+    },
+    "latest_guest_runs": "M1/O2/Indy64 latest native guest runs remain the M2b-fix baselines; M3a, M3b1, M3b2 and M3b3 runs are recorded in their respective manifests."
+  },
+  "not_proven": [
+    "Bridge DMA and QLogic storage",
+    "IOC3 RTC, Ethernet and input devices",
+    "Generic PCI interrupt mapping",
+    "Cache-error delivery",
+    "Physical Octane hardware",
+    "Full root boot and multi-user login"
+  ],
+  "next_milestone": "Leave interrupt-driven serial in place and add the Bridge DMA/QLogic storage path."
+}

@@ -1,0 +1,14 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M4A: mount a read-only FFS root from the QLogic disk and run a
+# native single-user shell on the IOC3 console.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3D3"
+
+ident		"XIRI_IP30_M4A"
+
+options		XIRI_IP30_M4A
+
+no config	netbsd
+config		netbsd root on sd0a type ffs

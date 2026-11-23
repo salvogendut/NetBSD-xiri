@@ -1,0 +1,11 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3D2: generate a QLogic mailbox interrupt on both controllers
+# and verify delivery through Bridge, HEART and the real ISP handler.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3D1"
+
+ident		"XIRI_IP30_M3D2"
+
+options		XIRI_IP30_M3D2

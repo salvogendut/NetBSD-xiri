@@ -1,0 +1,1029 @@
+SGI Octane / IP30: implementation handover
+=========================================
+
+Prepared 2026-11-15.  Work on topic/sgimips-octane in
+https://github.com/salvogendut/NetBSD-xiri
+Tracking issue: https://github.com/salvogendut/NetBSD-xiri/issues/1
+Integration target: xiri.  This topic starts at NetBSD commit
+93a258077244ea6e6a1a43a9d2e8b8fa41aa6555.
+
+Objective and current boundary
+------------------------------
+
+Bring native NetBSD on a single-CPU SGI Octane to a serial multi-user login,
+using IRIS for initial development, followed by physical hardware validation.
+The first implementation task is an IP30 kernel entry and early-console proof.
+Graphics, SMP and IRIX applications follow the native platform milestones.
+
+What has actually run:
+
+* Octane: a standalone big-endian N64 ELF, using ARCS64 to print output,
+  inspect argv/environment, enumerate memory and return to the PROM.  This
+  retains the PROM stack and exception handlers.  It is NOT a NetBSD kernel.
+* O2: the retained NetBSD XIRI_O2 kernel attaches both Adaptec controllers,
+  finds sd0, mounts FFS read-only, runs uname/mount in a native single-user
+  shell, and halts cleanly.  Multi-user login was not tested in this run.
+* Both results use the IRIS interpreter.  Neither physical hardware nor JIT
+  operation is qualified by these results.  No Octane NetBSD login exists.
+
+The earlier Octane test tried the O2 kernel.  Its ELF32 wrapper was rejected
+with "Can't boot 32 bit ELF"; loading its ELF64 form faulted inside firmware
+before NetBSD entry.  GENERIC64_IP3x explicitly targets O2/IP32.  Existing
+MACH_SGI_IP30 cases do not implement the missing Octane board support.
+
+Repositories, provenance and working rules
+-----------------------------------------
+
+Paths below are relative to the NetBSD-xiri checkout unless noted otherwise.
+Read ../xiri/AGENTS.md and ../xiri/docs/FORKS.md before implementation.
+
+* NetBSD: this branch; native drivers belong under sys/, diagnostics and
+  handover material under xiri/platforms/.  Do not put drivers in xiri/.
+* ../iris: xiri contains db49ed4beb9b533a3669d6fcb5f12480e52dc16f,
+  "O2: preserve wide MACE PCI windows during CPU address translation".
+  It was pushed.  Upstream checked for that cycle was
+  83c8dddc00e16c2698984af19ebb2000c0ae4451, integrated in 444e35eb.
+* ../xiri: the separate lab/documentation repository uses main.  Consult
+  docs/ROADMAP.md, docs/results/2026-11-14-octane-platform.md and
+  lab/irix-o2/README.md.  November 15 follow-up lab notes were still local
+  changes at this handover; the evidence summary is also included here as
+  xiri/platforms/2026-11-15-results.json.
+* ../prismatic is available for later display work; it is not needed for
+  the initial serial-only Octane milestones.
+
+Inspect git status and git worktree list in each repository before changes.
+Preserve existing detached lab worktrees and their pinned artifacts.  Leave
+this topic open for implementation; merge it into xiri after the agreed
+milestones are reviewed and validated, not merely because this handover ends.
+Use topic/<name> for additional topics; xiri/<name> conflicts with xiri.
+
+At the next IRIS development cycle, fetch its official upstream/main, review
+new commits and follow the sibling fork workflow.  Keep the retained emulator
+as a reproduction baseline even if newer source is integrated.  Read IRIS's
+HACKING.md and debug.md before emulator changes or guest debugging.
+
+Kernel builds must be sequential, at most -j 2, with separate object/tools
+directories for each source tree and architecture.  Never repin a qualified
+kernel, emulator or CHD just because a new source commit exists.  Preserve
+separate IRIX 6.5.22 and 6.5.30 donors, profiles and qualification records;
+shared native-component promotion requires both release lines to be checked.
+
+Existing tools and retained evidence
+-----------------------------------
+
+Files on this branch:
+
+* arcs64-probe.c / arcs64-probe.ld: freestanding firmware diagnostic.
+* build-probe.sh: builds it with the existing NetBSD MIPS64 cross tools.
+* ../probe.py: bounded O2/Octane runner using ../xiri/scripts/xiri_lab.py
+  and its load_probe() helper.  Python alone is not the entire harness.
+* ../2026-11-15-results.json: source revisions, artifact hashes, scope and
+  three retained results.  Its source_files map describes the historical
+  snapshot; later documentation edits do not alter that old evidence.
+* handover-validation.json: fresh validation of the commands below.  The
+  rebuilt diagnostic matches the previous binary byte for byte, prints the
+  success marker and returns to PROM; input hashes and cleanup checks pass.
+
+Retained artifacts live under the sibling lab, not in Git:
+
+  ../xiri/.work/platform-checks/native-20261115/
+    emulator/                 iris, iris-ci, manifest.json
+    ip30-build/               diagnostic ELF, object and readelf report
+    octane-candidate/         passed diagnostic serial/config/result
+    octane-handover/          fresh handover verification and private state
+    octane-handover-build/    byte-identical diagnostic rebuild
+    o2-fixed/                passed diskless O2 serial/config/result
+    iris-pci-tests.log        14 passing MACE PCI tests
+    iris-cpu-tests.log        213 passing CPU executor tests
+  ../xiri/.work/o2-native-20261115-single-user/
+                              passed native shell and clean halt
+
+The emulator was compiled from 444e35eb plus the O2 correction; comments and
+documentation were finalized in db49ed4b after compilation.  Its manifest
+records that distinction.  Build: nightly-2026-10-28, default tlbvmap features,
+interpreter, release with LTO=false, codegen-units=16 and debug=0.
+
+Stable baseline SHA-256 values:
+  iris:    33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5
+  iris-ci: 6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe
+  probe:   193571d7c9dcc35328e06659f04f71c62ccc3c3ea2826389c8a4af211a85825b
+
+The Octane firmware inputs are:
+  ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin
+  ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin
+Their hashes, and those of the native kernel/disk inputs, are recorded in the
+retained result.json files.  These are local prerequisites, not downloadable
+assets in the GitHub branch.  Do not commit firmware, CHDs or vendor files.
+On another workstation obtain the user's authorized local fixtures first;
+record missing fixtures explicitly rather than fabricate a passing result.
+
+Reproduce the firmware milestone first
+-------------------------------------
+
+Run from the NetBSD repository.  Choose new output paths on every run:
+
+    sh xiri/platforms/ip30/build-probe.sh \
+      ../xiri/.work/netbsd64-build/tools/bin/mips64--netbsd- \
+      /tmp/xiri-ip30-handover-build
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine octane \
+      --image /tmp/xiri-ip30-handover-build/arcs64-probe \
+      --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin \
+      --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin \
+      --expect XIRI_IP30_ARCS64_OK --return-to-prom \
+      --output /tmp/xiri-ip30-handover-run
+
+The linker must select -m elf64btsmip: this cross linker's default is N32.
+The tested ELF entry/load address is 0xa800000020080000, corresponding to
+physical 0x20080000.  It is a diagnostic placement, NOT a decided kernel ABI.
+Inspect the ELF headers/program headers; do not substitute the O2 ELF32
+wrapper.  The current harness selects one R10000, 512 MB, no graphics and no
+disks.  Missing-SCSI firmware diagnostics are expected with this fixture.
+
+Require the success marker followed by the PROM prompt, result status passed,
+emulator_stopped=true and originals_unchanged=true.  Read serial.log as well
+as the JSON.  Firmware success alone cannot satisfy any kernel milestone.
+The harness needs local Unix/control sockets and the emulator's host runtime
+libraries.  Use the host/toolbox environment if the sandbox blocks these.
+The local toolbox is xiri-iris; retained binaries avoid an initial rebuild.
+
+Architecture decisions required before kernel changes
+----------------------------------------------------
+
+1. Firmware ABI.  Current sys/dev/arcbios/{arcbios.h,arcbios.c,
+   arcbios_calls.S,genassym.cf} implement 32-bit firmware layouts and an o32
+   call bridge, including for N64 kernels.  Add a distinct ARCS64 path selected
+   before parsing argv, descriptors or component pointers.  Preserve the
+   existing O2/Indy path.  Audit signatures, widths, alignment, return values,
+   generated assembly offsets, console, environment, tree walking and reboot.
+   Native N64 pointers alone do not make a 32-bit firmware vector compatible.
+
+2. Entry and addresses.  Audit sys/arch/sgimips/sgimips/machdep.c (mach_init
+   currently takes argv32), locore_machdep.S, sys/arch/mips/mips/locore*.S,
+   sys/arch/mips/conf/Makefile.mips, the sgimips linker/config files, and MIPS
+   pmap/physical-page bootstrap.  LP64 currently adds -msym32.  Choose and
+   document whether the kernel uses a full-width direct address or a wired
+   mapped virtual layout; then audit every affected assembly/symbol/address
+   conversion.  Simply changing TEXTADDR on the O2 kernel is insufficient.
+
+3. RAM and vectors.  IRIS models Octane RAM starting at physical 0x20000000.
+   The first 16 KiB are accessible at physical zero; CPU access to the
+   corresponding high 16 KiB is a bus error, with main RAM accessible from
+   0x20004000.  See ../iris/src/dev/heart_mem.rs and verify hardware evidence
+   before treating emulator behavior as a physical guarantee.  Reserve the
+   firmware/SPB/vector areas, kernel text/data/BSS, bootstrap stack and page
+   tables explicitly.  Honor descriptor types, not just total RAM size.
+   Audit low exception vectors, cache attributes/flushes, TLB setup, overflow
+   and holes, mips_page_physload(), pmap_bootstrap() and kernel-end conversion.
+
+4. Kernel ownership.  The standalone probe borrows PROM state.  A kernel
+   must initialize its own stack/BSS and CPU state and safely take ownership
+   of exceptions/interrupts.  Establish when firmware calls remain safe and
+   transition to an IOC3 console before relying on native interrupt service.
+   A deliberate early-entry checkpoint can stop before that takeover, but
+   must be reported as an entry proof, not a completed bootstrap.
+
+Observed ARCS64 interface facts for the retained firmware:
+  SPB:                 0xffffffffa0001000; signature 0x53435241
+  SPB vector offset:   64 bytes; vector entries/pointers are 64 bits
+  Version/revision:    16-bit fields; do not widen every field blindly
+  Memory descriptor:  32-bit type, base_page at offset 8, 64-bit page count
+  Service indices:     GetMemoryDescriptor=18, Write=27, GetEnvironment=30
+  Memory total:        0x20000 4-KiB pages (512 MB, including reserved types)
+The diagnostic has layout assertions.  Extend these for any additional ABI
+structures actually used by the kernel; do not infer them from host layout.
+
+Implementation milestones and acceptance
+---------------------------------------
+
+M0 -- Reproduce and record the baseline (first session).
+  Run the diagnostic above; retain source/binary hashes, exact command,
+  firmware hashes, configuration, full serial output and cleanup result.
+  Audit the source areas above and write the chosen address/firmware design.
+  If this baseline fails, diagnose the environment or regression before
+  layering kernel changes on top of an unknown failure.
+
+M1 -- Dedicated IP30 kernel entry and early console (first code change).
+  Introduce a separate minimal serial-only config, proposed name XIRI_IP30,
+  under sys/arch/sgimips/conf.  Keep CRIME/MACE/Newport devices out of it.
+  Add the necessary entry/address handling and ARCS64 early output path.
+  Acceptance: the Octane PROM loads the new NetBSD ELF64, reaches its real
+  entry on a kernel-owned stack with initialized BSS, and prints an explicit
+  kernel-entry checkpoint plus firmware/memory information.  Capture the
+  entry address and CP0/stack state and show that this is the kernel artifact,
+  not the standalone diagnostic.  Any intentional early halt is documented.
+
+M2 -- Memory bootstrap, HEART interrupts and timekeeping.
+  Implement the remaining memory ownership/VM work, HEART attachment and
+  interrupt mask/pending/acknowledge/priority routing.  Select a supported
+  clock/timecounter and document the relationship to CPU Count/Compare.
+  Acceptance: native exception handling works, RAM reservations are correct,
+  timer interrupts advance without a storm, allocation proceeds into normal
+  autoconfiguration, and repeated boots give consistent memory accounting.
+
+M3 -- XIO/Crossbow, Bridge and native IOC3 serial.
+  Add board bus attachments and PCI configuration/mapping, preserve full
+  address width, and implement endian-correct bus_space access.  Implement
+  IOC3 serial first (polled early access may be useful before full PCI attach),
+  then its interrupt path and the PROM-to-native console handoff.  Keep the
+  dependency ordering explicit if minimal polled serial is pulled into M1.
+  Acceptance: enumerate the expected PCI functions, identify IOC3 and QLogic,
+  and demonstrate native serial input/output and interrupt delivery without
+  relying on ARCS calls after takeover.
+
+M4 -- Bridge DMA, QLogic storage and native single-user root.
+  Reuse sys/dev/pci/isp_pci.c and sys/dev/ic/isp* for the ISP1040 where suitable;
+  implement board bus_dma translation, masks, cache synchronization and
+  interrupt routing rather than inventing a second generic SCSI driver.
+  Start with a disposable native NetBSD disk and read-only root.  If an
+  embedded native ramdisk helps separate CPU/VM/userland from storage, label
+  it as an intermediate checkpoint, not disk-root acceptance.
+  Acceptance: sd0 discovery, real FFS mount, native /bin/sh, uname/mount,
+  repeatable read/checksum checks, and clean halt.  Then validate writes,
+  synchronization, cold reboot persistence and filesystem consistency only
+  on private copies before enabling writable-root qualification.
+
+M5 -- Native serial multi-user login (this issue's primary boot target).
+  Complete RTC/time handling and native tty/getty startup using the actual
+  attached serial device name.  Use a native NetBSD userland matched to the
+  kernel's supported ABI; the existing O2 fixture uses an N64 kernel with
+  o32 userland, so its CHD is a candidate, not proof of Octane compatibility.
+  Acceptance: cold boot without manual single-user intervention, login
+  prompt, successful native login, uname/mount/date and a small filesystem
+  round trip, then clean shutdown and another successful boot.  A screenshot
+  of a prompt without a successful login does not complete this milestone.
+
+M6 -- Qualification and later expansion.
+  Qualify IOC3 networking, sustained storage/DMA, input and hardware behavior.
+  Record the physical machine's CPU, memory, PROM, graphics and PCI inventory
+  before hardware testing.  The local IRIX fixture describes a one-CPU
+  195-MHz R10000 Octane, 512 MB, Solid IMPACT; that is not a fresh hardware
+  inventory.  Track IMPACT/VPro framebuffer, wscons/theme support and native
+  Xorg separately.  Newport and O2 CRM are different devices.  SMP and IRIX
+  desktops are later work; retain separate 6.5.22/6.5.30 acceptance records.
+
+Source map for board implementation
+-----------------------------------
+
+NetBSD starting points:
+  sys/arch/sgimips/conf/{files.sgimips,std.sgimips64,GENERIC64_IP3x}
+  sys/arch/sgimips/sgimips/{machdep.c,mainbus.c,locore_machdep.S}
+  sys/arch/sgimips/include/ and sys/arch/mips/include/
+  sys/arch/mips/mips/{pmap_machdep.c,bus_dma.c,cache_r10k.c,locore*.S}
+  sys/dev/arcbios/; sys/dev/pci/isp_pci.c; sys/dev/ic/isp*
+Mainbus currently uses KSEG1 mappings; audit this before adding wide widgets.
+
+IRIS models and regression locations (references, not hardware authority):
+  ../iris/src/ip30.rs and ip30_machine.rs       board map and wiring
+  ../iris/src/dev/heart.rs and heart_mem.rs     controller, RAM and vectors
+  ../iris/src/dev/xbow.rs                      Crossbow
+  ../iris/src/dev/bridge.rs and bridge_tests.rs PCI, interrupts and DMA
+  ../iris/src/dev/ioc3/                        serial, Ethernet and byte bus
+  ../iris/docs/datasheets/octane/              Bridge/Crossbow specifications
+
+Historical OpenBSD/sgi Octane code is a candidate reference, not an audited
+or imported component here.  Locate a versioned source first and retain its
+license/attribution for any reused code.  Linux public ARCS interface headers
+were consulted for diagnostic widths/service numbers (links in ../README);
+no Linux implementation was copied.  The earlier GPL XFS decision does not
+license importing GPL platform code into NetBSD kernel files.  Use hardware
+interface facts and suitably licensed implementations; keep provenance clear.
+
+Build and test discipline
+-------------------------
+
+At handover time there was no working XIRI_IP30 kernel config/build.  M1 has
+since added it; see the checkpoint update at the end of this file.  The
+planned command below is retained as the handover-era record.  Adapt the
+proven O2 build command using NEW output directories, for example:
+
+    octane_build="$PWD/../xiri/.work/netbsd-octane-build"
+    ./build.sh -m sgimips -a mips64eb -U -u -j 2 \
+      -O "$octane_build/obj" -T "$octane_build/tools" \
+      -D "$octane_build/dest" \
+      -V MKX11=no -V 'HOST_CC=cc -std=gnu17' \
+      -V 'HOST_CFLAGS=-O2 -std=gnu17' \
+      kernel.gdb="$PWD/sys/arch/sgimips/conf/XIRI_IP30"
+
+This is a planned command, not a claim that the nonexistent config builds.
+Prepare the isolated cross tools first with build.sh's tools target using
+the same machine/architecture/output options.  Preserve ELF64 netbsd and
+netbsd.gdb, readelf headers/segments, linker map, config and complete logs.
+Do not give Octane netbsd.elf32 even if the common build emits one.  Extend
+the runner for kernel milestones: --return-to-prom is for the diagnostic,
+and its current --single-user option is O2-only.
+
+Regression policy by change:
+* Firmware/entry/pmap/cache changes: build relevant Indy and O2 configurations;
+  run their native boot/shell baselines as well as the new Octane checkpoint.
+* Bus/interrupt/DMA changes: test mapping boundaries, widths/byte lanes and
+  interrupt acknowledgement, then exercise the corresponding guest device.
+* Emulator changes: keep them in ../iris, with a failing-before device/CPU
+  regression and the affected test suite; rerun native guest baselines.
+* Shared native promotion: qualify both vendor release lines; current port
+  checkpoints alone cannot replace the last qualified desktop artifacts.
+
+The O2 native regression can be run from this repository:
+
+    python3 xiri/platforms/probe.py \
+      --xiri ../xiri \
+      --emulator ../xiri/.work/platform-checks/native-20261115/emulator \
+      --machine o2 \
+      --image ../xiri/.work/netbsd-o2-build/tftp/netbsd-XIRI_O2 \
+      --nvram ../xiri/.work/donors/irix-6.5.30f-original-media/nvram.bin \
+      --disk ../xiri/.work/images/xiri-netbsd-desktop-20261114-controls/netbsd-xiri.chd \
+      --expect 'Enter pathname of shell' --single-user \
+      --output ../xiri/.work/octane-handover-o2-regression
+
+Run against a stopped source CHD.  The runner creates a private reflink/copy
+and overlay; use disk-backed storage, not a large /tmp disk copy.  Check
+clean_shutdown, stopped processes and unchanged originals.  Existing logs
+retain the original executed probe; do not rewrite them after harness edits.
+
+Known O2 pitfall: db49ed4b fixed IRIS truncating the wide MACE PCI window at
+physical 0x280000000 into a low RAM alias.  Controller writes corrupted the
+TLB refill vectors, causing a later apparent reserved-instruction trap in
+memset.  This was separate from NetBSD's R10000 cache-mask fix 2a7184ec4c6.
+For a similar failure inspect vector corruption and full bus addresses before
+blaming the instruction at EPC.  Do not assume an Octane failure has the same
+cause, or mask it with an unverified kernel workaround.
+
+Every checkpoint should preserve source revisions/dirty state, build command,
+config and artifact hashes, emulator/toolchain/features, firmware hashes,
+serial and monitor logs, marker meaning, elapsed time, cleanup and unchanged
+input checks.  For failures capture PC/EPC, Cause, Status, BadVAddr, registers,
+relevant vectors and board state, plus symbolized disassembly around the fault.
+Classify it as loader, kernel, emulator or unresolved using evidence.  A
+timeout/panic/missing marker is a failed checkpoint, not partial boot success.
+
+Suggested first instruction to the next AI
+------------------------------------------
+
+Continue NetBSD-xiri topic/sgimips-octane toward native Octane serial login.
+Read this handover and the sibling Xiri fork instructions.  Reproduce M0
+using the retained emulator and private firmware state, then audit the N64
+entry, ARCS64 layouts and kernel address model.  Document the chosen design
+and implement the smallest M1 kernel entry/early-console change with a
+dedicated IP30 config.  Preserve Indy/O2 behavior and the existing qualified
+artifacts.  Stop at a reproducible kernel-entry checkpoint for the first
+review; provide the patch, exact build/boot commands, logs, test results,
+remaining blocker and next milestone.  Do not report Octane as booted to
+userland until the corresponding native acceptance checks actually pass.
+
+M1 checkpoint update (2026-11-15)
+---------------------------------
+
+The first implementation checkpoint is complete for review.  It is an
+entry proof, not a completed bootstrap.
+
+What now exists:
+
+* sys/arch/sgimips/conf/XIRI_IP30: serial-only IP30 kernel, linked at
+  cached XKPHYS 0xa800000020010000 (physical 0x20010000).  It builds
+  without -msym32 and emits no ELF32 wrapper.
+* sys/arch/sgimips/include/xiri_ip30.h and sgimips/ip30_early.c: guarded
+  IP30 entry helpers, ARCS64 SPB validation, 64-bit Write access, memory
+  descriptor summary, explicit BSS/stack/CP0 evidence and deliberate halt.
+* sys/arch/mips/mips/locore.S: IP30 preserves KX/UX while initialising
+  CP0, clears BSS, uses the reserved kernel stack, and skips the PROM-stack
+  heuristic.  Other MIPS ports are unchanged.
+* sys/arch/mips/conf/Makefile.mips: new MIPS_SYM32 and
+  MIPS_ELF32_WRAPPER make options, defaulting to the old behaviour.
+* sys/arch/sgimips/sgimips/machdep.c: mach_init calls the IP30 early path
+  before the legacy argv conversion, argument-count check or any 32-bit
+  ARCS structure is parsed.
+* xiri/platforms/ip30/DESIGN: firmware/address/memory design and the M2
+  source-audit blockers.
+* xiri/platforms/ip30/2026-11-15-m1-entry.json: exact commands, source and
+  artifact hashes, emulator/firmware/disk hashes and retained results.
+* xiri/platforms/probe.py: --kernel-entry stops after an Octane entry
+  marker, captures entry registers/CP0/SPB/kernel text without requiring a
+  return to the PROM, and rejects the run unless kernel.entry equals the
+  image ELF e_entry, kernel.sp lies inside the reserved boot stack and the
+  BSS witness is zero.
+
+Observed M1 result:
+
+* The Octane PROM loaded the NetBSD ELF64 and entered it at
+  0xa800000020010000.
+* The kernel reported sp=0xa8000000203bad70 inside its reserved stack
+  [0xa8000000203b6de0, 0xa8000000203bade0), CP0 Status=0xa0 (KX+UX),
+  PRID=0x927, a zero BSS witness, ARCS64 version 0x40 revision 0, vector
+  0xa800000000001800 and 0x20000 total pages.
+* It printed XIRI_IP30_KERNEL_ENTRY_OK and stopped in a nop/branch spin
+  loop.  Monitor stop found PC=0xa800000020014594, inside that loop.  The
+  early halt does not use the wait instruction.
+* result status passed, emulator_stopped=true, originals_unchanged=true.
+
+Regressions with the same source changes:
+
+* Rebuilt XIRI_O2: both AIC-7880 controllers, sd0, read-only FFS root,
+  native uname/mount, clean halt (passed).
+* Rebuilt XIRI_INDY64: cold boot to login, root shell, uname/mount,
+  shutdown and clean halt to PROM (passed).
+* GENERIC64_IP2x still fails to compile haud.c because the driver asserts
+  4 KiB pages; the lab's XIRI_INDY64 configuration already excludes haud.
+  This is pre-existing and not caused by these changes.
+
+Still not proven: physical hardware, JIT, native exception/TLB takeover,
+pmap, HEART interrupts/timer, IOC3 serial, XIO/Bridge/PCI, storage,
+networking and multi-user login.  The next milestone is M2: XKPHYS-aware
+memory bootstrap, low-alias exception vectors, HEART interrupt/timekeeping,
+cached-CCA reconciliation (the entry alias is CCA 5 while the LP64 default
+cached XKPHYS alias is CCA 3) and removal of the remaining KSEG0-only
+conversions before autoconfiguration.
+
+M2a checkpoint update (2026-11-15)
+----------------------------------
+
+M2a is the first M2 checkpoint: cache-alias reconciliation, ARCS64 memory
+setup and vector bootstrap, stopping before HEART interrupts or a timer.
+
+What now exists:
+
+* sys/arch/sgimips/conf/XIRI_IP30_M2: includes XIRI_IP30, removes
+  XIRI_IP30_M1_STOP and continues through ARCS64 and pmap bootstrap.  The
+  M1 config remains reproducible with an explicit stop.
+* sys/arch/sgimips/include/ip30_arcs64.h and sgimips/ip30_early.c:
+  ARCS64 environment, memory and console helpers.  Every firmware call
+  saves and restores MIPS_CURLWP (t8); this is not an N64 ABI callee-saved
+  register and firmware clobbers it.
+* ip30_arcs64_init() sets mach_type=IP30, ncpus=1, the identifiers and an
+  ARCS64 console before the generic mach_init paths use them.
+* mips_machdep_cache_config() sets both mips3_xkphys_cached and
+  mips3_pg_cached to CCA 5 for XIRI_IP30, matching the 0xa800... entry
+  alias rather than the generic CCA 3 default.
+* Exception vector CPUVAR accesses load &cpu_info_store from a cell at
+  physical 0xff0 (the unused tail of the exception block) because vector
+  code runs from the low SDRAM alias and cannot reach XKPHYS data with
+  compact lui/%lo addresses.  A second cell at 0xff8 holds
+  mips3_slowfault, reached with jr instead of a truncated 26-bit j; both
+  cells are initialized before vector installation.  The cache-error
+  vector uses an uncached XKPHYS alias rather than a truncated KSEG1
+  address.  tlb_update_addr now uses PTR_LA, and critical sections that
+  wrote Status=0 preserve KX on IP30.
+* mips_kernel_vaddr_to_paddr() makes mips_page_physload() handle XKPHYS
+  kernel bounds.  ARCS64 memory descriptors feed the existing cluster
+  logic; end addresses are computed from the original base plus length and
+  rounded inward, empty ranges are skipped, and the
+  0x20000000..0x20003fff guard and low firmware alias are not free memory.
+* Vector slots are now UTLB 0x7c, XTLB 0x4c, cache 0x3c, general exception
+  0x78 (0x7c in XIRI_IP30_M2_SLOWFAULT) and interrupt 0x28 bytes; all fit
+  their 0x80 slots.  Vector installation clears BEV without panic.
+
+Observed M2a result (final run in .work/octane-m2a-20261115-final3):
+
+* XIRI_M2_ARCS64_INIT, XIRI_M2_VECTOR_DONE, XIRI_M2_MEMORY_SCAN_DONE,
+  XIRI_M2_PMAP_DONE and XIRI_M2_UAREA_DONE appear in order.
+* xkphys_cached=0xa800000000000000 (CCA 5), pg_cached=0x28.
+* cpu_info_cell and slowfault_cell contain the expected kernel addresses.
+* physmem=65534 8-KiB pages, arcsmem=129 pages, four clusters:
+  0x20004000+0xc000, 0x20010000+0x3c2000 (kernel, skipped),
+  0x203d4000+0xb2c000 and 0x21000000+0x1f000000.
+* XIRI_IP30_M2_MEMORY_OK prints and the kernel halts deliberately in
+  xiri_ip30_halt().
+* XIRI_IP30_M2_TLB proves a successful TLB refill: the first access after
+  invalidating the mapping increments the refill counter from 0 to 1 and
+  returns the expected magic value.
+* XIRI_IP30_M2_SLOWFAULT deliberately accesses an unmapped kernel address
+  through a dedicated loader.  A test-only mips3_slowfault hook verifies the
+  original EPC, BadVAddr and cause before UVM handling, prints
+  XIRI_IP30_M2_SLOWFAULT_OK and halts.  It does not enter UVM before
+  uvm_init() or end in a generic boot-blocked panic.
+
+Regressions with the same source changes: M1 entry checkpoint passed again;
+rebuilt XIRI_O2 reached native single-user and clean halt; rebuilt
+XIRI_INDY64 booted the Indy disk to login, ran uname/mount and halted
+cleanly.
+
+Next: add HEART mask/pending/acknowledge and the clock/timecounter, then
+proceed to autoconfiguration and XIO/Bridge.
+
+
+M2b checkpoint update (2026-11-15)
+-----------------------------------
+
+XIRI_IP30_M2B continues past M2a into main() and autoconfiguration.
+
+* heart0 attaches at mainbus addr 0x0ff00000.  Its driver owns the 64-bit
+  HEART ISR/IMR set, maps ISR bits 0-15/16-31/32-49/50/51-63 to CPU
+  IP2..IP6, installs platform.intr_establish and masks/clears all vectors.
+* XIRI_IP30 uses a dedicated IPL map that masks IP2..IP6 at IPL_VM and
+  above; heart_intr_establish accepts vectors 0..63 at IPL_VM only.
+  heart_bus_reset() is a no-op so autoconfiguration cannot erase attached
+  device masks.  Event-counter names are persistent per handler.
+* The attach self-test verifies set, masked-pending, unmask and clear
+  semantics and prints XIRI_IP30_M2B_HEART_OK.
+* consinit() keeps the ARCS64 console on IP30 until IOC3 is implemented.
+* mips3_initclocks() supplies CP0 Count/Compare hardclock and the
+  mips3 timecounter.  A five-tick callout prints
+  XIRI_IP30_M2B_CLOCK_OK heart_delta=0xb3cee clockints=5 ticks=5, gated on
+  the HEART self-test.  It then installs a HEART vector-0 handler at
+  IPL_VM, verifies splvm() defers the pending ISR bit, and observes
+  delivery after splx: XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1.
+  Explicit HEART/CLOCK/INTR failure markers fail the probe.
+* The boot reaches `boot device: <unknown>` / `root device:` with no root
+  storage configured.  That is a checkpoint, not a full boot.
+* M1, O2 single-user and Indy64 single-user regressions still pass.
+
+Still unproven: cache-error delivery, physical hardware, IOC3 serial,
+XIO/Bridge/PCI, storage, root mount, networking and multi-user login.
+Next: native IOC3 serial and the M3 bus/PCI path; cache-error injection
+remains explicitly deferred.
+
+
+M3a checkpoint update (2026-11-15)
+-----------------------------------
+
+XIRI_IP30_M3A adds xbridge0 at mainbus addr 0x1f000000.  The Bridge short
+window is reachable through KSEG1; the driver verifies the Bridge ID
+(part 0xc002, manufacturer 0x036), validates the Crossbow ID and port-15
+link (rejecting all-ones), checks for new Bridge error bits, and reads
+type-0 PCI configuration directly at 0x020000 + slot*0x1000 + function*0x100.
+
+It identifies:
+  slot 0, 1: QLogic ISP1040B 1077:1020
+  slot 2:    IOC3 10a9:0003
+  slot 3:    RAD 10a9:0005
+and prints XIRI_IP30_M3_BRIDGE_OK.
+
+Observed: Bridge id 0x3c00206d rev 3, Xbow id 0x40000001, link15 status
+0x80000000, and Bridge interrupt status before/after both zero.  No
+pci(4) attachment, BAR/window programming, IOC3 serial,
+Bridge/HEART interrupt routing or DMA is implemented yet.
+
+Next: attach pci(4) for bus 0, implement IOC3 serial access and its
+interrupt path, then continue with Bridge DMA and QLogic storage.
+Hardware operation, cache-error delivery and full root boot remain
+unproven.
+
+
+M3b1 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3B adds pci0 at xbridge0 bus 0.  xbridge exposes a sgimips PCI
+chipset with direct type-0 configuration reads/writes through the Bridge
+short window, bus 0 devices 0..3 function 0.  PCI interrupt mapping
+returns -1 until the Bridge/HEART interrupt registers and device users are
+implemented.
+
+pci0 attaches and reports both QLogic ISP1040B controllers, the IOC3 and
+the RAD as "not configured".  PCI calls are guarded by NPCI so M3A still
+builds.  Success requires config_found() to attach a child and a post-PCI
+Bridge status check with no new error bits; the run reports status 0 and
+prints XIRI_IP30_M3B_PCI_OK.
+
+Not implemented: BAR/Bridge window programming, pci_intr_map, IOC3 serial,
+Bridge DMA and device drivers.  The PROM's IOC3 BAR0 and Bridge window 2
+remain in place for the next step.
+
+Next: program/validate the Bridge windows and BARs, implement IOC3 polled
+serial and its interrupt path, then continue with Bridge DMA/QLogic.
+
+
+M3b2 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3B2 includes XIRI_IP30_M3B and adds
+`ioc3early0 at mainbus0 addr 0x1f600000`, the Bridge short window for PCI
+slot 2.  ioc3early maps that window and the type-0 configuration aperture at
+0x1f022000.  It reads IOC3 BAR0 from configuration offset 0x10 and Bridge
+device register 2 at 0x1f000214, then validates that BAR0 is non-zero,
+non-all-ones and aligned, and that the window base and memory bit agree with
+it.  It does not program either register.
+
+The retained PROM assignment is BAR0 0x500000 and window2 0x10011005, so
+the slot-2 short window maps PCI base 0x500000.  UART A at offset 0x20178
+is therefore physical 0x1f620178.  The driver polls the 16550 LSR/THR,
+prints XIRI_IP30_M3B2_IOC3_OK directly through that UART before touching
+cn_tab, installs the UART as the console, and prints
+XIRI_IP30_M3B2_IOC3_CONSOLE through kernel printf.  The entropy warning
+after the console marker provides additional confirmation that ordinary
+kernel output uses IOC3.
+
+Two build corrections were required: PCI_BAR0 is the pcireg.h name for
+offset 0x10, and the configuration aperture must include the Bridge window
+base (0x1f000000 + 0x020000 + slot*0x1000), not the bare 0x022000 offset.
+The first retained run printed IOC3 BAR0 0x500000 and window2 0x10011005
+but failed because it still expected the documentation's 0x400000/base-4
+assignment; the corrected run derives the window base from BAR0.
+
+Retained run: ../xiri/.work/octane-m3b2-ioc3-20261115b, passed in 41.46 s,
+with the PCI checkpoint intact before ioc3early and both IOC3 markers in
+order.  XIRI_O2 and XIRI_INDY64 rebuilt successfully with the files.dev
+addition; they were not booted because neither config includes ioc3early.
+Evidence and hashes are in ip30/2026-11-15-m3b2-ioc3.json.
+
+An independent review boot of the same kernel reached the root-device
+prompt, echoed and rejected `xiri_review`, and returned to the prompt.
+The HEART clock and interrupt markers also passed, and Bridge interrupt
+status remained zero.  This additionally exercises polled serial input;
+the temporary review artifacts are recorded in the evidence manifest.
+
+Not implemented: BAR/window programming, IOC3 interrupts, RTC, Ethernet,
+keyboard/mouse, Bridge DMA and device drivers.  This is a polled console proof, not
+a full IOC3 attachment.
+
+Next: keep the polled console while adding an IOC3 interrupt-capable driver,
+Bridge/HEART interrupt mapping, and then the QLogic storage path.  Hardware
+operation, cache-error delivery and full root boot remain unproven.
+
+
+M3b3 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3B3 includes XIRI_IP30_M3B2 and adds `options XIRI_IP30_M3B3`.
+The option gates the interrupt path so the M3b2 polled-only console remains
+a rebuildable checkpoint.
+
+Bridge routing is exposed by `xbridge_intr_route()` and
+`xbridge_intr_enable()` in bridge.c.  IOC3 SuperIO is Bridge input 4; the
+destination is HEART widget 8 at packet address 0x80, `INT_HOST(4)` names
+HEART vector 16, and `INT_MODE` bit 4 is set for the falling-edge clear
+packet.  The Bridge pin is enabled only after `platform.intr_establish()`
+has installed vector 16 at IPL_VM.  IOC3 UART A gets IER receive enable and
+IOC3 `INT_ENABLE_SET` bit 6 (`SERIAL_A`).
+
+The handler drains 16550 LSR/RBR into a 256-byte ring and counts interrupts.
+`cn_getc` pops that ring and, when empty, drains the UART directly under
+splhigh; it uses the same queue for interrupt-delivered and polled bytes, so
+the handler and console reader cannot steal each other's input.  The ring
+counts overruns and the handler caps each drain at one ring capacity.
+
+A HEART post-test hook runs the M3b3 receive test after the M2b clock and
+interrupt-delivery checks, before the root-device prompt.  The test uses
+temporary UART loopback and splvm masking:
+
+* injected byte while masked: handler count 0, Bridge pin 4 set;
+* after splx: vector 16 handled, byte in the console ring, Bridge pin and
+  IOC3 SERIAL_A cleared;
+* cn_getc returns the handler's byte;
+* a second byte injected under splvm is drained and returned by cn_getc
+  without invoking the handler;
+* ten milliseconds later the interrupt count is unchanged, with no ring
+  overruns and no Bridge error bits.
+
+Observed on the retained run:
+
+  XIRI_IP30_M3B3_ROUTE_OK pin=4 vector=16
+  XIRI_IP30_M2B_CLOCK_OK heart_delta=0x1758a9 clockints=5 ticks=5
+  XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1
+  XIRI_IP30_M3B3_RX_OK masked=deferred delivered=1 drained=1 polled=1 storm=0
+  XIRI_IP30_M3B3_SERIAL_OK ticks=11 bridge_errors=0 overruns=0
+  boot device: <unknown>
+  root device: xiri_m3b3
+  use one of: halt reboot
+  root device:
+
+The typed input echoed and was rejected by the no-root-storage prompt,
+confirming external console input and output in addition to the loopback
+test.  XIRI_IP30_M3A, XIRI_IP30_M3B and XIRI_IP30_M3B2 rebuilt; the M3b2
+guest still passed its IOC3 console marker.  XIRI_O2 and XIRI_INDY64 rebuilt;
+they do not include ioc3early and were not booted.  Evidence and hashes
+are in ip30/2026-11-15-m3b3-ioc3-intr.json.
+
+Not implemented: Bridge DMA, QLogic storage, IOC3 RTC/Ethernet/input and
+generic PCI interrupt mapping.  Physical hardware, cache-error delivery and
+full root boot remain unproven.
+
+Next: leave serial as-is and add the Bridge DMA/QLogic storage path.
+
+
+M3c1 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3C1 includes XIRI_IP30_M3B and adds
+`com0 at mainbus0 addr 0x1f620178`.  A new sgimips com attachment
+(ioc3_com.c) uses the standard com(4) driver for IOC3 UART A:
+
+* comcnattach1 maps UART A at physical 0x1f620178 and installs the polled
+  com console as cn_tab.  The baud reference is derived from the IOC3
+  scratch predivider (22.1184 MHz / (predivider / 2), or the 1.8432 MHz
+  16x default), with 9600 baud as the initial line rate;
+* com_attach_subr creates the tty and, as this is the console, sets
+  cn_tab->cn_dev to makedev(com major, unit).  The run reports
+  XIRI_IP30_M3C1_TTY_OK major=36 unit=0 cn_dev=0x2400 after verifying the
+  cdevsw, minor number and tty t_dev;
+* mainbus probes com0 before heart0 and xbridge0, so the driver installs a
+  heart_set_post_test() hook instead of routing at attach.  The hook runs
+  after the M2b clock and interrupt-delivery checks, calls
+  xbridge_intr_route(4, 16), establishes comintr at IPL_VM,
+  enables IOC3 SERIAL_A and Bridge pin 4, then checks for Bridge errors;
+* the console remains polled for early boot and debugging.  The tty's
+  comparam path owns RX/TX interrupt enable once a userland process opens
+  the port.
+
+The UART probe uses physical com_lcr (3) and com_scratch (7), restores LCR,
+and checks the programmed divisor after com_attach_subr.  The built kernel's
+ioc3_com_uart_info disassembly carries register offsets 3, 7, 0 and 1, not
+the com(4) logical indices.
+
+Observed on the retained run:
+
+  com0 at mainbus0 addr 0x1f620178: ns16650, no ERS, 16-byte FIFO
+  com0: console
+  XIRI_IP30_M3C1_UART_OK lcr=0x3 predivider=6 frequency=7372800 divisor=48 rate=9600
+  XIRI_IP30_M3C1_TTY_OK major=36 unit=0 cn_dev=0x2400
+  XIRI_IP30_M2B_HEART_OK
+  XIRI_IP30_M2B_CLOCK_OK ...
+  XIRI_IP30_M2B_INTR_OK masked=deferred delivered=1
+  XIRI_IP30_M3C1_IRQ_OK pin=4 vector=16
+  XIRI_IP30_M3C1_READY tty=com major=36 unit=0
+  boot device: <unknown>
+  root device: xiri_m3c1
+  use one of: halt reboot
+  root device:
+
+The typed console input echoed and was rejected by the no-root-storage
+prompt, so polled com input and output work.  XIRI_IP30_M3A, M3B, M3B2 and
+M3B3 rebuilt; the M3b3 guest still passed.  XIRI_O2 and XIRI_INDY64 rebuilt;
+they were not booted.  Evidence and hashes are in
+ip30/2026-11-15-m3c1-com-tty.json.
+
+Not implemented: opening the com tty from userland, interrupt-driven
+transmit, Bridge DMA/QLogic storage, IOC3 RTC/Ethernet/input and physical
+Octane validation.  Full root boot and login remain unproven.
+
+Next: add Bridge DMA and the QLogic ISP1040 storage path so a root file
+system can be mounted, then open /dev/console and reach the login prompt.
+
+
+M3d1 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3D1 includes XIRI_IP30_M3C1 and attaches both QLogic ISP1040
+controllers behind the Bridge.
+
+For each of slots 0 and 1, xbridge_setup_qlogic() programs BAR1 to
+0x1f200000/0x1f400000, enables memory and bus master, and sets
+Bridge Device(0/1) window bases 0x1f2/0x1f4 with the memory bit.  The
+PCI memory tag for this config maps those BAR addresses to the same CPU
+short windows and uses the MIPS CHIP_WRONG_ENDIAN lane correction, which
+fixes the little-endian 8/16-bit register accesses.  The ISP NOP mailbox
+then succeeds; its `invalid NVRAM header` warning is expected without a
+QLogic NVRAM.
+
+PCI INTA on slots 0/1 maps to Bridge pins 0/1 and HEART vectors 18/19.
+xbridge_intr_establish() routes the pin, installs a counting wrapper
+around the ISP handler at IPL_VM, and enables the pin.  The stage-1 post
+test:
+
+* requires active isp0/isp1 devices and one active scsibus child under
+  each, so an implementation that skips isp_attach cannot pass;
+* checks the INT_HOST and INT_ENABLE routing registers for both pins;
+* masks at splvm, sets HEART ISR bit 18/19, and verifies the handler count
+  stays unchanged while the event remains pending;
+* unmasks without clearing the event and verifies the wrapper delivers
+  and acknowledges it exactly once;
+* waits another 10 ms to reject a storm and checks for no Bridge errors;
+* disestablishes pin 0, verifies the HEART callback and pending state are
+  gone, then re-establishes the saved ISP handler;
+* checks the A/B/C/D mapping for devices 0 and 1 (A/C device pin, B/D
+  flip bit 2).
+
+BAR/window programming failures now return before pci0 attachment.
+PCI INTB/INTC mapping follows IRIS: A/C use the device-number pin and
+B/D flip bit 2.
+
+Observed on the retained run:
+
+  XIRI_IP30_M3D1_BAR_OK bar0=0x1f200000 bar1=0x1f400000 window0=0x1f2 window1=0x1f4
+  isp0 at pci0 dev 0 function 0: QLogic 1020 Fast Wide SCSI HBA
+  isp0: interrupting at xbridge pin 0
+  isp0: invalid NVRAM header
+  isp1 at pci0 dev 1 function 0: QLogic 1020 Fast Wide SCSI HBA
+  isp1: interrupting at xbridge pin 1
+  isp1: invalid NVRAM header
+  scsibus0 at isp0: 16 targets, 8 luns per target
+  scsibus1 at isp1: 16 targets, 8 luns per target
+  XIRI_IP30_M3D1_IRQ_OK pin0=18 pin1=19 masked=deferred delivered=2 storm=0 teardown=1 mapping=1
+  XIRI_IP30_M3D1_READY isp=2 scsibus=2
+
+The plain Octane Bridge has no XBridge force-interrupt registers, so this
+run verifies the routing registers and HEART handler path rather than a
+synthetic Bridge pin transition.  The real QLogic interrupt, request and
+response ring DMA, disk discovery, root mount, /dev/console open and TTY
+RX/TX are stage 2.
+
+XIRI_IP30_M3A, M3B, M3B2, M3B3 and M3C1 rebuilt; M3b3 and M3c1 guest
+regressions passed.  XIRI_O2 and XIRI_INDY64 rebuilt.  Evidence and hashes
+are in ip30/2026-11-15-m3d1-qlogic-attach.json.
+
+Next: validate ISP mailbox/ring DMA, attach a disk, discover and read it,
+then mount root and exercise the native console tty.
+
+
+M3d2 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3D2 includes XIRI_IP30_M3D1 and generates a real mailbox
+interrupt on each ISP1040.  The M3d1 post test keeps the controller
+attachment, SCSI-child, mapping and route checks, but replaces the
+synthetic HEART event with a NO-OP mailbox command.
+
+For each ISP, the test acquires the driver mailbox, sets the NO-OP
+command/output mask/busy state, masks at splvm, writes NO-OP to mailbox 0
+and HCCR SET_HOST_INT, and waits for the HEART vector to become pending.
+It then unmasks without clearing the pending event.  The real
+`isp_pci_intr` handler runs through Bridge -> HEART, reads the completion
+and acknowledges it.  The test checks the ISP interrupt counter advanced,
+`mboxcmd_done` is set, mailbox 0 is MBOX_COMMAND_COMPLETE, HEART and
+Bridge pin pending are clear, no repeat occurs after 10 ms, and Bridge
+error bits remain zero.  The mailbox state is released after each
+controller.
+
+Observed:
+
+  XIRI_IP30_M3D2_IRQ_OK isp0=18 isp1=19 mailbox=2 ack=1 storm=0 teardown=1 mapping=1
+  XIRI_IP30_M3D2_READY isp=2 scsibus=2
+
+XIRI_IP30_M3C1 and XIRI_IP30_M3D1 guest regressions passed.  All earlier
+configurations and XIRI_O2/XIRI_INDY64 rebuilt.  No request/response ring,
+DMA, disk I/O, root mount or active tty is exercised yet.  Evidence and
+hashes are in ip30/2026-11-15-m3d2-qlogic-mailbox-irq.json.
+
+Next: initialize and validate the ISP request/response rings and DMA
+against a disposable disk image.
+
+
+M3d3 checkpoint update (2026-11-15)
+------------------------------------
+
+XIRI_IP30_M3D3 adds `sd* at scsibus?` and a disposable raw disk.  The
+Bridge/PCI DMA path needed two corrections:
+
+* pci_attach_hook sets pci_bus_dma_tag._wbase to 0x80000000 for IP30, so
+  physical RAM addresses become PCI direct-window addresses that the
+  Bridge routes to HEART; bus_dma.c now applies that offset only to
+  ds_addr and keeps the CPU physical address for _ds_vaddr cache
+  operations;
+* the QLogic Device(0/1) windows use DEV_SWAP_DIRECT (identity placement)
+  for the little-endian ISP request/response rings, while DIRECT_MAP
+  targets HEART widget 8.
+
+The M3d3 disk thread waits for sd0, checks INQUIRY identity
+`<SGI, IRIS EMUL DISK, 1.0>` and capacity 32768 x 512 bytes, then reads
+LBAs 2, 17, 113, 4097 and a 64-block span at LBA 128.  It compares each read
+against the deterministic image pattern, checks guard bytes around the
+32 KiB buffer and past the single-block transfers, requires the ISP
+interrupt count to advance, and then checks HEART/Bridge pending clear,
+no repeat after 10 ms and no Bridge errors.
+
+The disposable image is generated by
+xiri/platforms/ip30/mk-m3d3-disk.py:
+16 MiB, 32768 blocks.  Each sector starts with the full 32-bit LBA and
+its complement, then a payload keyed by the complete sector offset.  All
+32768 sector headers are unique.  The comparator is self-checked against
+LBA+1, LBA+256, sectors 113 versus 4097, and a single flipped byte.
+
+Observed:
+
+  sd0 at scsibus0 target 1 lun 0: <SGI, IRIS EMUL DISK, 1.0> disk fixed
+  sd0: 16384 KB, 33 cyl, 16 head, 62 sec, 512 bytes/sect x 32768 sectors
+  XIRI_IP30_M3D3_DISK_OK vendor=SGI product=IRIS_EMUL_DISK revision=1.0 blocks=32768 blksize=512
+  XIRI_IP30_M3D3_READ_OK single=4 multi=64 guards=0 dma=1 irq=1
+  XIRI_IP30_M3D3_READY interrupts=clear bridge_errors=0
+
+The retained monitor shows 23 QLogic commands and no DMA misses.
+A temporary kernel returning sector 113 for LBA 4097 failed with
+`XIRI_IP30_M3D3_FAILED data 4097 offset 2`, and a corrupted image failed
+with `XIRI_IP30_M3D3_FAILED data 2 offset 0`; neither printed READY.
+XIRI_IP30_M3C1 and XIRI_IP30_M3D2 guest regressions passed; the affected
+configurations rebuilt.  O2 single-user passed and Indy64 built (not
+booted).  Root mount/login, active tty and physical hardware remain
+unproven.  Evidence and hashes are in
+ip30/2026-11-15-m3d3-qlogic-dma-disk.json.
+
+Next: mount root read-only from the validated disk and exercise
+/dev/console and active tty RX/TX before login.
+
+M4a checkpoint update (2026-11-15)
+----------------------------------
+
+XIRI_IP30_M4A mounts sd0a read-only and reaches a native single-user shell
+on the IOC3 console.  The root image is the 8 GiB o32 NetBSD 11.99.9 Xiri
+Indy desktop image; /sbin/init is an ELF32 PIE with /libexec/ld.elf_so.
+The first boot mounted root but trapped in init at 0x2001a340.  That was
+the low half of mips3_user_return: the AST paths in mipsX_subr.S built the
+return address with lui/PTR_ADDIU and lost the XKPHYS upper bits.  Both
+paths now use PTR_LA ra, MIPSX(user_return).
+
+IOC3 TTY activity is counted in comintr() after its IIR read.  Optional
+com_softc.sc_rxintr/sc_txintr pointers feed com0 rxintr and txintr evcnt
+entries.  The final shell reports rxintr=8 and txintr=295, so input and
+output are interrupt-active rather than only polled.
+
+Observed:
+
+  root_device on / type ffs (read-only, local)
+  XIRI_IP30_M4A_SHELL_OK
+  XIRI_IP30_M4A_CONSOLE_CHAR_OK
+  XIRI_IP30_M4A_CONSOLE_WRITE
+  com0 rxintr      8    0
+  com0 txintr    295   15
+  unmounting done
+  Option?
+
+The probe checks the marker as a complete line, read-only ffs, a
+successful `test -c /dev/console`, a visible `/dev/console` write, and
+exact `com0 rxintr`/`com0 txintr` rows, then halts cleanly.  M3d3 and O2
+single-user regressions passed; Indy64 built.  Writable storage, login,
+multi-user startup and physical hardware are not proven.  Evidence and
+hashes are in ip30/2026-11-15-m4a-read-only-root.json.
+
+Next: exercise writable root or a separate writable data disk, then login
+and multi-user startup without weakening the read-only boot proof.
+
+M4b checkpoint update (2026-11-15)
+----------------------------------
+
+M4b copies the 8 GiB CHD once and boots XIRI_IP30_M4A twice against the
+same disk and persistent `disk.chd.diff.chd` overlay.  The first boot
+remounts root read-write, creates small, 64 KiB multi-page, renamed and
+truncated files under /m4b-persist, records SHA-256 and `ls -lnai`
+metadata, runs sync and halts cleanly.  The 64 KiB file uses a nonzero
+deterministic page/offset pattern, not zeros.  The second boot uses the
+same overlay, verifies `/sbin/fsck -fn /dev/sd0a` reports a clean
+filesystem, matches every hash and metadata record, and checks that the
+overlay and copied base are unchanged.  The image lacks
+`/usr/bin/truncate`, so truncation is exercised with a five-byte `dd`
+rewrite.  Input mutation now fails the run rather than only being
+recorded.
+
+Observed:
+
+  M4B_CREATE_OK
+  M4B_PAGES_OK
+  M4B_RENAME_OK
+  M4B_TRUNCATE_OK
+  M4B_SYNC_OK
+  ** File system is already clean
+  M4B_RENAME_OLD_ABSENT
+
+The base CHD is unchanged; both overlay hashes are identical after the
+second boot.  The negative suite covers zeroed, swapped and repeated
+pattern pages plus overlay, base and original-input mutations.  The M4a
+read-only baseline rerun passed with the original source disk.  Crash
+recovery and multi-user login remain separate.  Evidence and hashes are
+in ip30/2026-11-15-m4b-persistence.json.
+
+Next: define crash-recovery and multi-user login checkpoints without
+weakening the clean-persistence evidence.
+
+M4c checkpoint update (2026-11-16)
+----------------------------------
+
+The image's `/etc/ttys` defaults to Indy `ttyZ0`; Octane needs `ttyC0`.
+A one-time single-user prep boot enables ttyC0, disables ttyZ0, syncs and
+halts.  Two multi-user boots then complete `/etc/rc` (to `Starting cron`),
+show `login:` on `NetBSD/sgimips ... (ttyC0)`, and log in as root without
+a password.  The nonfatal modules/dhcpcd/xiri_famd failures are retained
+in the serial logs.
+
+Both boots verify `uid=0(root)`, a writable `/dev/sd0a on / type ffs
+(local)` root, exact `tty` output `/dev/ttyC0`, a successful
+`test -c /dev/console`, the visible console-write marker, and interactive
+stty/echo.  Each command's POSIX `$?` must be zero, so failed stty or
+console-test commands fail the probe.  The first creates
+`/m4c-persist/persist.txt` (SHA-256 `be6a140b...`,
+15 bytes), records metadata, syncs and halts.  The second login finds the
+same hash and metadata after reboot, then halts cleanly.  The base CHD is
+unchanged and the overlay persists.
+
+M4a and M4b were rerun in this output tree and passed.  Crash recovery and
+physical hardware remain separate.  Evidence is in
+ip30/2026-11-16-m4c-multi-user-login.json.
+
+Next: make crash recovery a separate checkpoint without weakening the
+clean-shutdown and multi-user evidence.
+
+M4d checkpoint update (2026-11-16)
+----------------------------------
+
+M4d uses a fresh disposable CHD and the ttyC0 prep.  A multi-user login
+creates `/m4d-persist/baseline.txt` (`M4D_BASELINE_V1`), records its hash
+and metadata, and syncs.  Additional text and 256 KiB writes are issued
+without another sync, then IRIS is stopped without a guest shutdown.
+
+The recovery boot is single-user.  `/sbin/fsck -fp /dev/sd0a` salvages
+free-block accounting, summary information and block bitmaps and marks
+the filesystem clean; `/sbin/fsck -fn` then reports it already clean.
+The synced baseline hash `5def9f34...` and metadata survive.  Unsynced
+writes are explicitly not required to survive.
+
+A subsequent multi-user boot reaches login, root logs in on `/dev/ttyC0`,
+the baseline still matches, and the guest halts cleanly.  The base CHD is
+unchanged; the same overlay contains the crash and recovery.  Physical
+hardware remains separate.  Evidence is in
+ip30/2026-11-16-m4d-crash-recovery.json.
+
+Next: physical Octane validation, without weakening the emulated recovery
+and prior login evidence.
+
+Physical handoff: ip30/PHYSICAL-HANDOFF and
+ip30/2026-11-16-physical-handoff.json.  The runbook pins the read-only
+M4a path, PROM/serial settings, stage kernels and stop points.  Physical
+power-loss testing remains a later checkpoint.

@@ -56,7 +56,8 @@
 #include "opt_multiprocessor.h"
 #if defined(sgimips)
 #include "opt_arcbios64.h"
-#ifdef ARCBIOS64
+#include "opt_xiri_ip30.h"
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 #include <machine/arcs64.h>
 #endif
 #endif
@@ -88,7 +89,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 	/* Known state: BEV, coprocessors disabled. */
 	/* Leaving TS | RE alone (for emips) */
 	and	k0, MIPS_SR_TS | MIPS3_SR_RE
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	/* We are executing in XKPHYS; keep 64-bit addressing enabled. */
 	or	k0, MIPS_SR_KX | MIPS_SR_UX
 #endif
@@ -109,7 +110,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
         mtc0    k0, MIPS_COP_0_STATUS
 #endif
 
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	/*
 	 * The ARCS64 PROM does not zero our BSS and the stack it provides is
 	 * not owned by the kernel.  Clear BSS and use the stack reserved in
@@ -130,7 +131,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 9:
 	PTR_LA	sp, _C_LABEL(sgimips_arcs64_bootstack)
 	PTR_ADDIU sp, sp, SGIMIPS_ARCS64_BOOTSTACK_SIZE
-#endif /* ARCBIOS64 */
+#endif
 
 #ifdef HPCMIPS_L1CACHE_DISABLE
 	mfc0	t0, MIPS_COP_0_CONFIG
@@ -166,7 +167,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 	/*
 	 * Initialize stack and call machine startup.
 	 */
-#ifndef ARCBIOS64
+#if !defined(ARCBIOS64) && !defined(XIRI_IP30)
 	PTR_LA	v1, start
 	slt	v0, v1, sp
 	bne	v0, zero, 1f
@@ -178,7 +179,7 @@ EXPORT_OBJECT(kernel_text)			# libkvm refers this
 1:
 	move	sp, v0
 2:
-#endif /* !ARCBIOS64 */
+#endif
 #ifdef __GP_SUPPORT__
 	PTR_LA	gp, _C_LABEL(_gp)
 #endif
@@ -982,7 +983,7 @@ END(stacktrace)
 
 	.section .stub, "ax"
 NESTED_NOPROFILE(tlb_update_addr, 0, ra)
-#ifdef ARCBIOS64
+#if defined(ARCBIOS64) || defined(XIRI_IP30)
 	PTR_LA	v0, _C_LABEL(mips_locore_jumpvec)+LJV_TLB_UPDATE_ADDR
 	PTR_L	t9, 0(v0)
 #else

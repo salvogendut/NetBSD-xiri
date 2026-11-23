@@ -115,6 +115,7 @@ __KERNEL_RCSID(0, "$NetBSD: com.c,v 1.391 2026/09/24 17:11:18 palle Exp $");
 #include <sys/kernel.h>
 #include <sys/syslog.h>
 #include <sys/device.h>
+#include <sys/evcnt.h>
 #include <sys/malloc.h>
 #include <sys/timepps.h>
 #include <sys/vnode.h>
@@ -2394,6 +2395,13 @@ comintr(void *arg)
 
 	com_mutex_enter(sc);
 	iir = CSR_READ_1(regsp, COM_REG_IIR);
+	if (sc->sc_rxintr != NULL &&
+	    ((iir & IIR_IMASK) == IIR_RXRDY ||
+	     (iir & IIR_IMASK) == IIR_RXTOUT ||
+	     (iir & IIR_IMASK) == IIR_RLS))
+		sc->sc_rxintr->ev_count++;
+	if (sc->sc_txintr != NULL && (iir & IIR_IMASK) == IIR_TXRDY)
+		sc->sc_txintr->ev_count++;
 
 	if (CSR_HAS_ERROR(regsp)) {
 		com_mutex_exit(sc);

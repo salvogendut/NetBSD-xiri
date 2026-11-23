@@ -14,6 +14,3 @@ __CTASSERT(offsetof(struct arcbios_component, Identifier) == 48);
 __CTASSERT(offsetof(struct arcbios_mem, BasePage) == 8);
 __CTASSERT(sizeof(struct arcbios_mem) == 24);
 __CTASSERT(offsetof(struct arcbios_fv, Write) == 27 * 8);
-
-char sgimips_arcs64_bootstack[SGIMIPS_ARCS64_BOOTSTACK_SIZE]
-    __attribute__((__aligned__(16)));

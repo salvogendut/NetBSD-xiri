@@ -36,6 +36,7 @@
 __KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.25 2015/02/18 16:47:59 macallan Exp $");
 
 #include "opt_pci.h"
+#include "opt_xiri_ip30.h"
 #include "pci.h"
 
 #include <sys/types.h>
@@ -49,6 +50,7 @@ __KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.25 2015/02/18 16:47:59 macallan Ex
 
 #include <sys/bus.h>
 #include <machine/intr.h>
+#include <machine/machtype.h>
 #include <machine/sysconf.h>
 
 #include <dev/pci/pcivar.h>
@@ -67,6 +69,10 @@ pci_attach_hook(device_t parent, device_t self, struct pcibus_attach_args *pba)
 	 * established in sgimips_bus_dma_init().
 	 */
 	pci_bus_dma_tag = sgimips_default_bus_dma_tag;	/* struct copy */
+#ifdef XIRI_IP30_M3D3
+	if (mach_type == MACH_SGI_IP30)
+		pci_bus_dma_tag._wbase = 0x80000000;
+#endif
 
 	/* XXX */
 

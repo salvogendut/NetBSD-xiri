@@ -1,0 +1,11 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3B3: route the IOC3 SuperIO interrupt through Bridge pin 4 to
+# HEART vector 16 and verify interrupt-driven and polled console input.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3B2"
+
+ident		"XIRI_IP30_M3B3"
+
+options		XIRI_IP30_M3B3

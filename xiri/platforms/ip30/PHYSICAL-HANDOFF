@@ -1,0 +1,218 @@
+SGI Octane / IP30 physical-hardware handoff
+==========================================
+
+Status: PENDING PHYSICAL HARDWARE
+Source revision pin: 1bee7e44579
+Branch: topic/sgimips-octane
+
+This handoff stops at the M4a read-only root proof.  Do not boot M4b,
+M4c or M4d on the physical machine, do not remount root read-write, and
+do not create or truncate files.  Physical power-loss testing is a later
+checkpoint.
+
+Serial console
+--------------
+
+Use IOC3's first serial port, the one selected by the PROM console
+variable.  Force the serial profile and disable autoload:
+
+    setenv -f console d
+    setenv AutoLoad No
+
+If the console was previously `g`, power-cycle after changing it so the
+PROM starts on serial.
+
+Line settings: 9600 baud, 8 data bits, no parity, 1 stop bit, no RTS/CTS
+and no XON/XOFF.  This is the IOC3 UART A console at kernel address
+0x1f620178; the driver reports rate=9600, lcr=0x3, predivider=6 and
+divisor=48.  Capture the raw serial stream to a file.  A null-modem cable
+is assumed where the host terminal is DTE.
+
+Pinned physical artifacts
+-------------------------
+
+Verify these hashes before placing any image on the TFTP/disk media.  The
+physical read-only gate uses the dedicated `XIRI_IP30_M4A_PHYS` build with
+`dumps on none`; do not substitute the emulator M4A kernel.
+
+  M4A-PHYS kernel netbsd:
+    ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M4A_PHYS/netbsd
+    6886f788361d53568561d0f3a1535177959353323cfd6c1dd44946fb72f8ef3b
+  M4A-PHYS netbsd.gdb:
+    4dfbd5fff1237f4b5adaf384a928b5030c36d423b00e28a1a3faa3f94057a18b
+  M4A-PHYS build log:
+    ../xiri/.work/netbsd-octane-build/XIRI_IP30_M4A_PHYS-build.log
+    41e33b457364e30368b57a7a3980bd2bccbb9cdb6298c222c20789c973f383fd
+  XIRI_IP30_M4A_PHYS config:
+    ab18d0c8850524c456211c94491f8b9ded0dbfa38f9f7427ed79a6611dbac819
+  M4A root CHD:
+    ../xiri/.work/m4a-root.chd
+    61f9b9883303470b68877083547d203bf3b177fe4ccb93136096ee9ed770611d
+
+The host-side extraction is, for example:
+
+    chdman extracthd -i ../xiri/.work/m4a-root.chd -o m4a-root.raw
+
+The root image is 8 GiB; its SGI label has root partition 0 starting at
+sector 8256 with 16703488 sectors.  The destination physical drive must
+be at least 8 GiB, but its actual capacity is whatever the drive reports:
+the guest's `sd0` line and `diskinfo` are expected to show the physical
+capacity, not necessarily 8192 MB.  The root partition itself remains the
+8 GiB image partition.  Write only to a known disposable SCSI disk at
+target 1; this is host-side preparation, not guest write testing.
+
+M3d3 is emulator-only
+---------------------
+
+The M3d3 diagnostic is not a physical-hardware artifact.  Its test requires
+exactly 32768 x 512-byte sectors and the inquiry identity
+`SGI / IRIS EMUL DISK / 1.0`; writing that image to a physical disk changes
+neither the disk's identity nor its capacity.  Do not use the M3d3 kernel
+or the 16 MiB test image on physical hardware until a separate physical
+diagnostic exists.  The retained M3d3 hashes are emulator evidence only:
+
+  ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D3/netbsd
+  9e8815edde05d0f9dae053ec71649e58f5d5a76bfef0aa05d796798c331e5a10
+  ../xiri/.work/m3d3-disk.raw
+  523aa1bd4c1e2795d15a7caa8a029d444d4a67454c7a8a9afe7f35f6c71a54cb
+
+Network boot
+------------
+
+Serve the selected kernel from a BOOTP/TFTP server.  Rename the pinned
+artifact according to the server's BOOTP filename, for example:
+
+    netbsd-XIRI_IP30_M4A_PHYS
+
+At the PROM Command Monitor, use:
+
+    setenv -f console d
+    setenv AutoLoad No
+    boot -f bootp():netbsd-XIRI_IP30_M4A_PHYS --s
+
+The `--s` is required for M4A: it selects single-user read-only root.  If
+the local PROM requires a server address in the bootp specifier, use its
+normal `bootp()<server>:<filename>` form; the filename must remain the
+same.
+
+Staged checks
+-------------
+
+Stop immediately on a missing marker, panic, exception, wrong console or
+unexpected reset.  Do not continue to a later stage after a failure.
+Terminal states and return-to-PROM actions differ by stage.
+
+  Stage  Image                              Expected marker
+  -----  ---------------------------------  ---------------------------------
+  M1     netbsd-XIRI_IP30                   XIRI_IP30_KERNEL_ENTRY_OK
+  M2a    netbsd-XIRI_IP30_M2                XIRI_IP30_M2_MEMORY_OK
+  M2b    netbsd-XIRI_IP30_M2B               XIRI_IP30_M2B_INTR_OK
+  M3a    netbsd-XIRI_IP30_M3A               XIRI_IP30_M3_BRIDGE_OK
+  M3b1   netbsd-XIRI_IP30_M3B               XIRI_IP30_M3B_PCI_OK
+  M3b2   netbsd-XIRI_IP30_M3B2              XIRI_IP30_M3B2_IOC3_CONSOLE
+  M3b3   netbsd-XIRI_IP30_M3B3              XIRI_IP30_M3B3_SERIAL_OK
+  M3c1   netbsd-XIRI_IP30_M3C1              XIRI_IP30_M3C1_READY
+  M3d1   netbsd-XIRI_IP30_M3D1              XIRI_IP30_M3D1_READY
+  M3d2   netbsd-XIRI_IP30_M3D2              XIRI_IP30_M3D2_READY
+  M3d3   EMULATOR-ONLY; DO NOT BOOT          (physical diagnostic unavailable)
+  M4a    netbsd-XIRI_IP30_M4A_PHYS --s       root on sd0a, read-only shell
+
+Pinned stage kernel hashes from the current build tree:
+
+  M1   1c3fda886864d6b7d4b9435ff5d5fa8e0da4ff82ec2eeb6869ab61fc53b7586a
+  M2a  7540ebb910fc95a61dca03e57afdc31e51b7c1fd7c800d0ad44cb41918a7a26e
+  M2b  eb57a5ef41012f7b344c59ea79c1c5d1def55189a48e150832a57c54e89df25e
+  M3a  2d17ca5ea9287aab7412d8f9292caca65f2c0b6dc3240b3978c8bc470d8002fc
+  M3b1 b45d42929329462f515b76fe618b093d2191088b9eb5ecfefc8be576bccc031a
+  M3b2 2bfdbc2c7987fb735e6dd467d51ea64789c7736e8482f05998dd9548faa57aa4
+  M3b3 2a03da8ae48c15d1439e3bc839b79fe3afe36ebf91f37090ba0c361aead25e6f
+  M3c1 d2412d03ed90ada7da1bcc6be09f5b0cf13a6ecc2bec82ff47fc03683d73a467
+  M3d1 ce63016d60db1f4621e38478c7dffd617697dea2cb0263e45599f6daa801c3e0
+  M3d2 ffd3afdd5a751a86a3e3cda857091ce5ac3e95836f0a77bc8fa11dbb7af38fbc
+  M4A  6886f788361d53568561d0f3a1535177959353323cfd6c1dd44946fb72f8ef3b
+
+Stage terminal states and return to PROM
+----------------------------------------
+
+  M1, M2a
+    These kernels deliberately spin in `xiri_ip30_halt()`.  They do not
+    return to the PROM and there is no console command that can resume the
+    PROM.  Reset from the front panel or power-cycle after recording the
+    marker.
+
+  M2b through M3d2
+    These checkpoints continue running after their test completes and
+    reach the `root device:` prompt (`use one of: halt reboot`).  At that
+    prompt type `halt` and wait for the PROM `Option?` menu; do not type
+    `reboot`.  If the prompt is not reached, reset.  No disk is required
+    for these staged checks.  M3d1/M3d2 exercise the QLogic controllers but
+    do not require an attached disk.
+
+  M3d3
+    Emulator-only.  Do not run this on physical hardware.  In the emulator
+    its disk-test thread ends with `kthread_exit()` while the kernel
+    continues to the `root device:` prompt; use `halt` there.  The 16 MiB
+    test disk is never a physical root disk.
+
+  M4a
+    Single-user read-only shell on the physical root disk.  Record the
+    boot and gate checks, then run `shutdown -h now` and wait for
+    `unmounting done` and the PROM `Option?` menu.  Do not remount root
+    read-write.  If shutdown does not return to the PROM, reset.
+
+Disk attachments by stage
+-------------------------
+
+  M1-M3c1   no disk required.
+  M3d1-M3d2 no disk required; QLogic controllers only.
+  M3d3      emulator-only 16 MiB diagnostic; never physical.
+  M4a       prepared 8 GiB-or-larger disposable disk at SCSI target 1;
+            root partition sd0a read-only.
+
+M4a read-only gate
+------------------
+
+At the shell prompt, record and check:
+
+    uname -a
+    /sbin/mount
+    ls -l /dev/console
+    tty
+    stty -a
+    vmstat -i
+    ls -l /dev/sd0a /dev/sd0b 2>/dev/null
+
+Required observations:
+
+  * `root on sd0a` (the physical config has `dumps on none`, so there is
+    no `dumps on` suffix)
+  * `Enter pathname of shell or RETURN for /bin/sh:`
+  * `root_device on / type ffs (read-only, local)`
+  * `/dev/console` is a character device
+  * interactive input echoes and commands produce output
+  * `com0 rxintr` and `com0 txintr` are present and advancing
+  * `sd0` reports the prepared physical drive's identity and capacity;
+    the root partition is the 8 GiB image partition
+
+Do not run `mount -u -w /`, `mkdir`, `touch`, `printf > file`, `truncate`,
+`mknod`, or any M4b/M4c/M4d command.  A clean `shutdown -h now` is allowed
+after recording the read-only result; otherwise reset from the PROM.  A
+write-capable or multi-user boot is not part of this handoff.
+
+Evidence to retain
+------------------
+
+  * physical machine serial, CPU, RAM, PROM version and `hinv`
+  * physical disk model, actual capacity and SCSI target assignment
+  * raw serial capture and PROM command transcript
+  * SHA-256 of the kernel, root image and TFTP file actually used
+  * stage marker, terminal state and elapsed time for each checked stage
+  * M4a read-only `mount`, console, TTY and interrupt evidence
+  * any failure verbatim; do not substitute an emulator result
+
+Physical hardware and physical power-loss recovery remain separate
+checkpoints.  The emulated M4b/M4c/M4d evidence is not a substitute for
+physical validation.  The physical M4a config was preflighted in the
+emulator at ../xiri/.work/octane-m4a-phys-readonly-20261116; that run
+confirms `root on sd0a` and the read-only shell, but is not physical
+hardware evidence.

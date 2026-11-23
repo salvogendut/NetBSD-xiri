@@ -1,0 +1,11 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3C1: attach IOC3 UART A through com(4), make it the polled
+# console and expose the native tty device for /dev/console.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3B"
+
+ident		"XIRI_IP30_M3C1"
+
+com0		at mainbus0 addr 0x1f620178

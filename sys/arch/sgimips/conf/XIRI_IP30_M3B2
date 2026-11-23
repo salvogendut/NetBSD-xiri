@@ -1,0 +1,11 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3B2: validate the IOC3 Bridge window/BAR and bring up the
+# polled IOC3 UART A console.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3B"
+
+ident		"XIRI_IP30_M3B2"
+
+ioc3early0	at mainbus0 addr 0x1f600000

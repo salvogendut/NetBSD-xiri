@@ -1,0 +1,10 @@
+#	$NetBSD$
+#
+# XIRI_IP30_M3B: attach PCI bus 0 behind the Octane Bridge.
+#
+
+include		"arch/sgimips/conf/XIRI_IP30_M3A"
+
+ident		"XIRI_IP30_M3B"
+
+pci0		at xbridge0 bus 0

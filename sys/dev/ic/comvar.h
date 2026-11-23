@@ -53,6 +53,7 @@
 #include <dev/ic/comreg.h>	/* for COM_NPORTS */
 
 struct com_regs;
+struct evcnt;
 
 int comcnattach(bus_space_tag_t, bus_addr_t, int, int, int, tcflag_t);
 int comcnattach1(struct com_regs *, int, int, int, tcflag_t);
@@ -160,6 +161,8 @@ struct com_softc {
 	u_int sc_overflows,
 	      sc_floods,
 	      sc_errors;
+	struct evcnt *sc_rxintr;
+	struct evcnt *sc_txintr;
 
 	int sc_hwflags,
 	    sc_swflags;

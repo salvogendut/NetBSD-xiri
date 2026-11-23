@@ -1,0 +1,229 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "milestone": "M3d3",
+  "status": "passed-qlogic-dma-disk-reads",
+  "scope": "XIRI_IP30_M3D3 translates PCI DMA through the Bridge, attaches a disposable 16 MiB disk as sd0, drives ISP request/response rings with real interrupts, discovers the expected identity/capacity, and compares several single-block and one 64-block multi-page read byte-for-byte. Root mount/login and active tty remain later stages.",
+  "tracking_issue": "https://github.com/salvogendut/NetBSD-xiri/issues/1",
+  "branch": "topic/sgimips-octane",
+  "source_revision": "6aaaf0c55fcc2d62f32800d358ed97f4a6f8f9b1",
+  "source_status": [
+    "M sys/arch/sgimips/conf/files.sgimips",
+    "M sys/arch/sgimips/dev/bridge.c",
+    "M sys/arch/sgimips/dev/bridgereg.h",
+    "M sys/arch/sgimips/pci/pci_machdep.c",
+    "M sys/arch/mips/mips/bus_dma.c",
+    "M xiri/platforms/README",
+    "M xiri/platforms/ip30/DESIGN",
+    "M xiri/platforms/ip30/HANDOVER",
+    "M xiri/platforms/probe.py",
+    "?? sys/arch/sgimips/conf/XIRI_IP30_M3D3",
+    "?? xiri/platforms/ip30/mk-m3d3-disk.py",
+    "?? xiri/platforms/ip30/2026-11-15-m3d3-qlogic-dma-disk.json"
+  ],
+  "source_files": {
+    "sys/arch/sgimips/conf/files.sgimips": "f4162ca84a9d726b512933eb395f1db7663d3539cfd0e413ff3994a86b7fd47f",
+    "sys/arch/sgimips/conf/XIRI_IP30_M3D3": "9fa2a78cdafc52014e7be406941b37778210cbffa587cb7b4d47dcae89370e01",
+    "sys/arch/sgimips/dev/bridge.c": "e7276bc7933e47b86719a6b1f8ff5eeea0dfa7c3fe0a9d0782fcde29349c0136",
+    "sys/arch/sgimips/dev/bridgereg.h": "9177d296a2dfe8eb7002f6bee2b3d2968f244a8f27e807bfdcd2a18af536d81a",
+    "sys/arch/sgimips/pci/pci_machdep.c": "b6f8c8ad7b7a44f70fecc8a9179f04f7c57d81f65b583a100662d46dd763612a",
+    "xiri/platforms/probe.py": "965a81f968467ba25a04c13fcb9c29cd332ab8c288ec2a42cf81e1a24b50d15d",
+    "xiri/platforms/ip30/mk-m3d3-disk.py": "a33aa0efa07bdbebb5140ad75b361aa62e8d851072d5105637c561494c3516ea",
+    "xiri/platforms/README": "3e97cf5c69f7b6a2e05662a0b7ed00e44a3b30c0e24fcdeaac3d9d447f493296",
+    "xiri/platforms/ip30/DESIGN": "08dadeb6ef43e33ce18b2b2405cc4243b4e37ebe2c5239bee2c69219533e4da8",
+    "xiri/platforms/ip30/HANDOVER": "a6361ec5b91f3df750aef8a45cd9b8d276134b9504d834cece159cf7e8eeee34",
+    "sys/arch/mips/mips/bus_dma.c": "fd18aa2b7da669ca620c781d62a9938c3a91d17a7001b8ed20f67dea6cde0620"
+  },
+  "design": "xiri/platforms/ip30/DESIGN",
+  "implementation": {
+    "config": "sys/arch/sgimips/conf/XIRI_IP30_M3D3",
+    "dma": "pci_bus_dma_tag._wbase = 0x80000000 for IP30; _bus_dmamap_load_buffer keeps the CPU physical address for _ds_vaddr cache operations and applies the window offset only to ds_addr; Bridge DIRECT_MAP targets HEART widget 8; QLogic Device(0/1) windows use DEV_SWAP_DIRECT identity placement",
+    "disk": "16 MiB raw image, SCSI target 1, sd0",
+    "test": "kernel thread waits for sd0, checks INQUIRY identity/capacity, issues READ(10) at LBAs 2,17,113,4097 and 64 blocks at 128, compares exact deterministic pattern and guards, requires ISP interrupts, checks HEART/Bridge clear and no storm/errors",
+    "disk_image": {
+      "path": "../xiri/.work/m3d3-disk.raw",
+      "blocks": 32768,
+      "block_size": 512,
+      "bytes": 16777216,
+      "sha256": "523aa1bd4c1e2795d15a7caa8a029d444d4a67454c7a8a9afe7f35f6c71a54cb",
+      "generator": "xiri/platforms/ip30/mk-m3d3-disk.py",
+      "pattern": "4-byte big-endian LBA header, 4-byte complement, then offset-keyed payload; all 32768 sector headers unique",
+      "unique_sectors": 32768,
+      "sector_headers": {
+        "lba113": "00000071",
+        "lba4097": "00001001"
+      }
+    },
+    "markers": [
+      "sd0 at scsibus0 target 1 lun 0: <SGI, IRIS EMUL DISK, 1.0> disk fixed",
+      "sd0: 16384 KB, 33 cyl, 16 head, 62 sec, 512 bytes/sect x 32768 sectors",
+      "XIRI_IP30_M3D3_DISK_OK vendor=SGI product=IRIS_EMUL_DISK revision=1.0 blocks=32768 blksize=512",
+      "XIRI_IP30_M3D3_READ_OK single=4 multi=64 guards=0 dma=1 irq=1",
+      "XIRI_IP30_M3D3_READY interrupts=clear bridge_errors=0"
+    ],
+    "failure_markers": [
+      "XIRI_IP30_M3D3_FAILED direct_map",
+      "XIRI_IP30_M3D3_FAILED thread",
+      "XIRI_IP30_M3D3_FAILED sd",
+      "XIRI_IP30_M3D3_FAILED capacity",
+      "XIRI_IP30_M3D3_FAILED identity",
+      "XIRI_IP30_M3D3_FAILED read",
+      "XIRI_IP30_M3D3_FAILED data",
+      "XIRI_IP30_M3D3_FAILED neg_lba",
+      "XIRI_IP30_M3D3_FAILED neg_sector",
+      "XIRI_IP30_M3D3_FAILED neg_data",
+      "XIRI_IP30_M3D3_FAILED overrun",
+      "XIRI_IP30_M3D3_FAILED guard",
+      "XIRI_IP30_M3D3_FAILED irq",
+      "XIRI_IP30_M3D3_FAILED interrupt",
+      "XIRI_IP30_M3D3_FAILED bridge"
+    ],
+    "stage1_note": "comparator self-checks LBA+1, LBA+256, sectors 113 versus 4097, and a flipped byte"
+  },
+  "build": {
+    "output_directory": "../xiri/.work/netbsd-octane-build",
+    "command": "./build.sh -m sgimips -a mips64eb -U -u -j 2 -O ../xiri/.work/netbsd-octane-build/obj -T ../xiri/.work/netbsd-octane-build/tools -D ../xiri/.work/netbsd-octane-build/dest -V MKX11=no -V 'HOST_CC=cc -std=gnu17' -V 'HOST_CFLAGS=-O2 -std=gnu17' kernel.gdb=$PWD/sys/arch/sgimips/conf/XIRI_IP30_M3D3",
+    "netbsd_sha256": "e86c16a409626fbae425bac5630b1b90124f132fb0f98f0c4cdde61e151fee24",
+    "netbsd_gdb_sha256": "c2013667ab7f64d92c724441c4b214b3551b59fbde70a7aaf299c4c0fccbfed1",
+    "build_log": "../xiri/.work/netbsd-octane-build/XIRI_IP30_M3D3-build.log",
+    "build_log_sha256": "23c061124a81488926920e5341d3388e3ade7ed856218ac3ff2c2a525c03492f"
+  },
+  "run": {
+    "output_directory": "../xiri/.work/octane-m3d3-disk-20261115",
+    "command": "python3 xiri/platforms/probe.py --xiri ../xiri --emulator ../xiri/.work/platform-checks/native-20261115/emulator --machine octane --image ../xiri/.work/netbsd-octane-build/obj/sys/arch/sgimips/compile/XIRI_IP30_M3D3/netbsd --nvram ../xiri/.work/platform-checks/octane-20261114/inputs/nvram.bin --flash ../xiri/.work/platform-checks/octane-20261114/inputs/flash.bin --disk ../xiri/.work/m3d3-disk.raw --expect XIRI_IP30_M3D3_READY --timeout 180 --output ../xiri/.work/octane-m3d3-disk-20261115",
+    "expected_marker": "XIRI_IP30_M3D3_READY",
+    "status": "passed",
+    "elapsed_seconds": 38.66,
+    "emulator_stopped": true,
+    "originals_unchanged": true,
+    "result_sha256": "b5c363cbeb23f1f7942ef3d362db5eea10a919ea447bd638a258728261486c89",
+    "serial_sha256": "ee3e3a11d9003e40205aba0a4aa7a078ebd86e3f37b03e974cf3c50d16a7f76e",
+    "observations": [
+      "sd0 discovered as SGI IRIS EMUL DISK 1.0 with 32768 512-byte blocks",
+      "23 QLogic commands completed with no DMA misses",
+      "single-block reads at LBAs 2,17,113,4097 matched",
+      "sectors 113 and 4097 reject each other",
+      "64-block multi-page read at LBA 128 matched",
+      "guard bytes remained intact",
+      "ISP interrupt count advanced",
+      "HEART and Bridge pending cleared",
+      "no repeated interrupt after 10 ms",
+      "no Bridge errors"
+    ],
+    "inputs": {
+      "netbsd": "e86c16a409626fbae425bac5630b1b90124f132fb0f98f0c4cdde61e151fee24",
+      "nvram.bin": "4a922474aea3361b8f1d03aefaceec9469487e07860a40cbe57ed7b2a8bb1308",
+      "flash.bin": "fbc0aa85365f560ba4d11b01a7d5aaba06b3d5be5bb1674da74ae1093e8dcc85",
+      "disk.raw": "523aa1bd4c1e2795d15a7caa8a029d444d4a67454c7a8a9afe7f35f6c71a54cb",
+      "iris": "33bc29f6d43018964bad19607a1981e235da924cec15abbd3c2674d60bd143c5",
+      "iris-ci": "6d3553c3aa1a9ef53c40d3f5da6fb871072afaab450a3a0fe7e53d8f37a990fe"
+    },
+    "attached_disk_sha256": "523aa1bd4c1e2795d15a7caa8a029d444d4a67454c7a8a9afe7f35f6c71a54cb",
+    "scsi_commands": 23,
+    "dma_misses": 0,
+    "emulator": "retained native-20261115 release, default tlbvmap features, interpreter, LTO=false, codegen-units=16, debug=0",
+    "hardware_tested": false,
+    "jit_tested": false
+  },
+  "regressions": {
+    "builds": {
+      "XIRI_IP30_M3A": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "2d17ca5ea9287aab7412d8f9292caca65f2c0b6dc3240b3978c8bc470d8002fc",
+        "build_log_sha256": "fb3aac62ed5c3b1f957e137bf49abb5ceb945719b7107c1460703c17a53ac086"
+      },
+      "XIRI_IP30_M3B": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "b45d42929329462f515b76fe618b093d2191088b9eb5ecfefc8be576bccc031a",
+        "build_log_sha256": "15aecb1a8c3e1458dc54591cbe89a4e349c1eba6a8a8896ad8537fe46db64430"
+      },
+      "XIRI_IP30_M3B2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "2bfdbc2c7987fb735e6dd467d51ea64789c7736e8482f05998dd9548faa57aa4",
+        "build_log_sha256": "1ee92c347def9ffcb387fb0bb171d67aa914a3f5275e79f502fe766438a8cab6"
+      },
+      "XIRI_IP30_M3B3": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "2a03da8ae48c15d1439e3bc839b79fe3afe36ebf91f37090ba0c361aead25e6f",
+        "build_log_sha256": "cacdef84de175261e95bb32e4b83f21b7ee394d56d7b88896ba437e343e74fdc"
+      },
+      "XIRI_IP30_M3C1": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "d2412d03ed90ada7da1bcc6be09f5b0cf13a6ecc2bec82ff47fc03683d73a467",
+        "build_log_sha256": "ee92cd5e81e47ec9eb51f69d93c49074aa40a668f0e6c6b38e08616e1192ef2a"
+      },
+      "XIRI_IP30_M3D1": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "ce63016d60db1f4621e38478c7dffd617697dea2cb0263e45599f6daa801c3e0",
+        "build_log_sha256": "17d37a292e8d2a1ffd065d15db6aa610fefd60ac89b021aa124f81d67421abb0"
+      },
+      "XIRI_IP30_M3D2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "ffd3afdd5a751a86a3e3cda857091ce5ac3e95836f0a77bc8fa11dbb7af38fbc",
+        "build_log_sha256": "398e1248cecb666d76c40e7a99e93fb8f1a02d21e71e0b061116745d92f3a213"
+      },
+      "XIRI_O2": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "c91daa42bf4366526e42b7cd6e040bb38c643c5adbf6f05c2bea371fb433bc84",
+        "build_log_sha256": "7091d131b1f0d2c28000f1642a5d156e57c9bf17682ef1cf871e7f4d8bed8792"
+      },
+      "XIRI_INDY64": {
+        "status": "passed-build-only",
+        "netbsd_sha256": "323b1c532667faaeb4cc37a94fee0b55a2c7201538fa35f4f9bfd162dbbd7963",
+        "build_log_sha256": "dcc8d540720086a8d59592af68934d5a8314762b279cd1c3fe0b7821476fe195"
+      }
+    },
+    "m3c1_guest": {
+      "output_directory": "../xiri/.work/octane-m3c1-regression-20261115d",
+      "status": "passed",
+      "elapsed_seconds": 39.15,
+      "expected_marker": "XIRI_IP30_M3C1_READY",
+      "result_sha256": "cb24d6b8a60cc1210cb5666321b9558e6877ee68990796da705962cc5bd48077",
+      "serial_sha256": "6af42aca3bd93c7d949f4d102b8a29afbb19e06d9c651180b71fa754897f2e7e"
+    },
+    "m3d2_guest": {
+      "output_directory": "../xiri/.work/octane-m3d2-regression-20261115",
+      "status": "passed",
+      "elapsed_seconds": 48.36,
+      "expected_marker": "XIRI_IP30_M3D2_READY",
+      "result_sha256": "80960e364c52d78315da9db2b4f706b7781475b755f61e501a8defe990ee8b15",
+      "serial_sha256": "32abd20091cf7bc753512a420377803c1b26bbe5ebc5e8f104246461ea6cc4f1"
+    },
+    "o2_single_user": {
+      "output_directory": "../xiri/.work/octane-o2-regression-20261115-m3d3",
+      "status": "passed",
+      "elapsed_seconds": 84.65,
+      "clean_shutdown": true,
+      "result_sha256": "8c27a7bfa42302103848ce33f7d8bdb70444285fedd89ce770ea14e200427e5b",
+      "serial_sha256": "2e1653915d8d59ffb29270d9b338b0be02ff96adb52d03792def430b50d6637b",
+      "netbsd_sha256": "c91daa42bf4366526e42b7cd6e040bb38c643c5adbf6f05c2bea371fb433bc84"
+    },
+    "indy64": "passed-build-only; not booted"
+  },
+  "not_proven": [
+    "Root filesystem mount",
+    "Writable storage and durability",
+    "Userland /dev/console open and active tty RX/TX",
+    "Physical Octane hardware"
+  ],
+  "next_milestone": "Mount root read-only from the validated disk, then exercise /dev/console and active tty RX/TX before login.",
+  "negative_validation": {
+    "wrong_sector": {
+      "output_directory": "../xiri/.work/octane-m3d3-neg-113",
+      "temporary_patch": "if (lba == 4097) lba = 113 in xbridge_read_blocks; reverted before final build",
+      "status": "boot-blocked",
+      "failure": "XIRI_IP30_M3D3_FAILED data 4097 offset 2",
+      "result_sha256": "0bd45144a65baaf0ac3b05091f7bb609f2413f988e527841dc5a5ff50f1515d9",
+      "serial_sha256": "d4802fe5a20c8de6867b150f8899614f2a8bf0327a4d559f1612523ea0f3833b"
+    },
+    "corrupt_image": {
+      "output_directory": "../xiri/.work/octane-m3d3-neg-corrupt",
+      "image": "../xiri/.work/m3d3-disk-corrupt.raw",
+      "image_sha256": "44d8a701d84b79c054823876647d89e12c0d9188b85229aad2a6bf1ce1e30546",
+      "status": "boot-blocked",
+      "failure": "XIRI_IP30_M3D3_FAILED data 2 offset 0",
+      "result_sha256": "5d4a1c1b7beb5d303d554fa74269ec9a6fc10c48fbc0698107d14b4e0ad59f3e",
+      "serial_sha256": "fe35779d672de835ea5a3f827bb8a1d2bf4baf663f48cbcaaa2c945a31cb22c8"
+    }
+  }
+}

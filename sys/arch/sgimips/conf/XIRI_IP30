@@ -1,0 +1,49 @@
+#	$NetBSD$
+#
+# XIRI_IP30: minimal Octane (IP30) entry and early-console checkpoint.
+#
+# This configuration is deliberately serial-only.  It does not attach CRIME,
+# MACE, Newport, PCI, storage or network devices.  The M1 checkpoint stops in
+# xiri_ip30_early() after proving ARCS64 entry, a kernel-owned stack, cleared
+# BSS and firmware memory enumeration.  See xiri/platforms/ip30/DESIGN.
+#
+
+include		"arch/sgimips/conf/std.sgimips"
+include		"arch/sgimips/conf/std.sgimips64"
+
+ident		"XIRI_IP30"
+
+options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
+options 	XIRI_IP30		# Octane early entry and ARCS64 proof
+options 	XIRI_IP30_M1_STOP	# stop at the M1 entry checkpoint
+
+# The kernel lives in cached XKPHYS at physical 0x20010000.  Octane RAM is
+# outside the KSEG0/KSEG1 direct map, so -msym32 and the 32-bit SGI wrapper
+# do not apply.
+makeoptions	TEXTADDR="0xa800000020010000"	# cached XKPHYS, phys 0x20010000
+makeoptions	MIPS_SYM32="no"
+makeoptions	MIPS_ELF32_WRAPPER="no"
+makeoptions	CPUFLAGS="-march=mips4 -mtune=r10000"
+makeoptions	DEBUG="-g"
+makeoptions	COPY_SYMTAB=1
+
+maxusers	2
+
+# CPU related options.  Keep MIPS3 as the supported ISA family, as the other
+# sgimips 64-bit configurations do, and compile for the Octane's R10000.
+options 	MIPS3
+options 	ENABLE_MIPS4_CACHE_R10K # enable R10000 cache ops
+
+# Compatibility options (std.sgimips64 enables COMPAT_NETBSD32).
+include 	"conf/compat_netbsd15.config"
+
+# Kernel root file system and dump configuration.
+include 	"conf/filesystems.config"
+config		netbsd root on ? type ?
+
+# Main bus and CPU
+mainbus0 	at root
+cpu0 		at mainbus?
+
+# ptyfs needs the pty pseudo-device even at this entry-only checkpoint.
+pseudo-device	pty

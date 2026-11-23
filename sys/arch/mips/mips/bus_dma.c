@@ -109,7 +109,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
     void *buf, bus_size_t buflen, struct vmspace *vm, int flags,
     int *segp, vaddr_t lastvaddr, bool first)
 {
-	paddr_t baddr, curaddr, lastaddr;
+	paddr_t baddr, curaddr, dmaaddr, lastaddr;
 	vaddr_t vaddr = (vaddr_t)buf;
 	bus_dma_segment_t *ds = &map->dm_segs[*segp];
 	bus_dma_segment_t * const eds = &map->dm_segs[map->_dm_segcnt];
@@ -141,7 +141,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
 		printf("dma: addr %#"PRIxPADDR" -> %#"PRIxPADDR"\n", curaddr,
 		    (curaddr - t->_bounce_alloc_lo) + t->_wbase);
 #endif
-		curaddr = (curaddr - t->_bounce_alloc_lo) + t->_wbase;
+		dmaaddr = (curaddr - t->_bounce_alloc_lo) + t->_wbase;
 
 		/*
 		 * Compute the segment size, and adjust counts.
@@ -158,9 +158,9 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
 		 * Make sure we don't cross any boundaries.
 		 */
 		if (map->_dm_boundary > 0) {
-			baddr = (curaddr + map->_dm_boundary) & bmask;
-			if (sgsize > baddr - curaddr) {
-				sgsize = baddr - curaddr;
+			baddr = (dmaaddr + map->_dm_boundary) & bmask;
+			if (sgsize > baddr - dmaaddr) {
+				sgsize = baddr - dmaaddr;
 			}
 		}
 
@@ -169,7 +169,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
 		 * the previous segment if possible.
 		 */
 		if (!first
-		    && curaddr == lastaddr
+		    && dmaaddr == lastaddr
 		    && (d_cache_coherent
 #ifndef __mips_o32
 			|| !MIPS_CACHE_VIRTUAL_ALIAS
@@ -177,12 +177,12 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
 			|| vaddr == lastvaddr)
 		    && (ds->ds_len + sgsize) <= map->dm_maxsegsz
 		    && (map->_dm_boundary == 0
-			|| ((ds->ds_addr ^ curaddr) & bmask) == 0)) {
+			|| ((ds->ds_addr ^ dmaaddr) & bmask) == 0)) {
 			ds->ds_len += sgsize;
 		} else {
 			if (!first && ++ds >= eds)
 				break;
-			ds->ds_addr = curaddr;
+			ds->ds_addr = dmaaddr;
 			ds->ds_len = sgsize;
 			ds->_ds_vaddr = (intptr_t)vaddr;
 			first = false;
@@ -210,7 +210,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map,
 			    "_ds_vaddr %#"PRIxREGISTER, ds->_ds_vaddr);
 		}
 
-		lastaddr = curaddr + sgsize;
+		lastaddr = dmaaddr + sgsize;
 		vaddr += sgsize;
 		buflen -= sgsize;
 		lastvaddr = vaddr;
