@@ -1,0 +1,5 @@
+# Opt-in PIO drawing test on an Octane IMPACT board.
+include "arch/sgimips/conf/XIRI_IP30_HQ4"
+ident "XIRI_IP30_HQ4_FILL"
+
+options IP30_HQ4_FILL

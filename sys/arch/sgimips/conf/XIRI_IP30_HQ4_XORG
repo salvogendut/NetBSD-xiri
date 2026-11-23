@@ -1,0 +1,14 @@
+# Octane native wscons input and Xorg/wsfb.
+include "arch/sgimips/conf/XIRI_IP30_HQ4_WSDISPLAY"
+ident "XIRI_IP30_HQ4_XORG"
+
+iockbc0 at mainbus0 addr 0x1f60009c
+pckbd* at iockbc? slot 0
+pms* at iockbc? slot 1
+wskbd* at pckbd? console ?
+wsmouse* at pms? mux 0
+pseudo-device wsmux
+options WSDISPLAY_COMPAT_USL
+options WSDISPLAY_COMPAT_RAWKBD
+options SYSVSHM
+cd* at scsibus? target ? lun ?

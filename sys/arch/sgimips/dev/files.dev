@@ -70,3 +70,18 @@ file 	arch/sgimips/dev/zs.c			zsc needs-flag
 file 	dev/ic/z8530sc.c			zsc
 
 file	arch/sgimips/dev/wskbdmap_sgi.c		zskbd
+
+# Octane XIO Solid/High IMPACT and onboard IOC3 PS/2.
+define ip30hq4bus {}
+device ip30gfxprobe: ip30hq4bus
+attach ip30gfxprobe at mainbus
+file arch/sgimips/dev/ip30gfxprobe.c ip30gfxprobe
+defflag opt_ip30gfx.h IP30_HQ4_FILL
+device hq4fb: genfb, wsemuldisplaydev
+attach hq4fb at ip30hq4bus
+file arch/sgimips/dev/hq4fb.c hq4fb needs-flag
+file arch/sgimips/dev/hq4_pio.c hq4fb | ip30_hq4_fill
+file arch/sgimips/dev/hq4_fill.c ip30_hq4_fill
+device iockbc: pckbport
+attach iockbc at mainbus
+file arch/sgimips/dev/iockbc.c iockbc

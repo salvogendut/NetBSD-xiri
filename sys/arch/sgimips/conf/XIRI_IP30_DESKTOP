@@ -1,0 +1,9 @@
+# Octane IMPACT with the loadable Xiri personality and local desktop services.
+include "arch/sgimips/conf/XIRI_IP30_HQ4_XORG"
+ident "XIRI_IP30_DESKTOP"
+maxusers 8
+options MODULAR
+options SYSVMSG,SYSVSEM
+options INET,INET6
+pseudo-device loop
+pseudo-device ksyms

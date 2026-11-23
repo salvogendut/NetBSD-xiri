@@ -1,0 +1,5 @@
+# Native Octane graphics discovery, using the existing serial console and root.
+include "arch/sgimips/conf/XIRI_IP30_M4A_PHYS"
+ident "XIRI_IP30_HQ4"
+
+ip30gfxprobe0 at mainbus0 addr 0x10000000

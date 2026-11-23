@@ -1,0 +1,9 @@
+# Opt-in Octane graphical console. IOC3 remains the multicons serial endpoint.
+include "arch/sgimips/conf/XIRI_IP30_HQ4"
+ident "XIRI_IP30_HQ4_WSDISPLAY"
+
+hq4fb* at ip30gfxprobe?
+wsdisplay* at hq4fb? console ?
+options WSDISPLAY_MULTICONS
+options WSEMUL_VT100
+options FONT_VT220L8x16
