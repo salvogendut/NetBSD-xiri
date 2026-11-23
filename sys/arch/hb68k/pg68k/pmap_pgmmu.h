@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_pgmmu.h,v 1.1 2026/07/19 01:48:24 thorpej Exp $	*/
+/*	$NetBSD: pmap_pgmmu.h,v 1.4 2026/11/16 22:56:32 thorpej Exp $	*/
 
 /*-     
  * Copyright (c) 2025, 2026 The NetBSD Foundation, Inc.
@@ -189,13 +189,13 @@ bool	pmap_pa_has_static_mapping(paddr_t, size_t, vm_prot_t,
 	    vaddr_t *, int *);
 bool	pmap_va_is_static_mapping(vaddr_t, size_t);
 
-/* Kernel debugger support functions. */
-struct pmap_db_write_text_context {
+/* Support for patching kernel text. */
+struct pmap_write_text_context {
 	unsigned int	pmeidx;
 	pm_entry_t	opme;
 };
-bool	pmap_db_write_text_enter(vaddr_t, struct pmap_db_write_text_context *);
-void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
+bool	pmap_write_text_enter(vaddr_t, struct pmap_write_text_context *);
+void	pmap_write_text_exit(struct pmap_write_text_context *);
 
 /*
  * Functions exported for compatibility with the Hibler pmap, where
@@ -206,7 +206,6 @@ void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
 
 paddr_t		vtophys(vaddr_t);
 
-extern char *	vmmap;
 extern void *	msgbufaddr;
 
 /* Kernel crash dump support. */
@@ -230,12 +229,6 @@ phys_ram_seg_t *	pmap_init_kcore_hdr(cpu_kcore_hdr_t *);
 #define	PMAP_BOOTSTRAP_PA_TO_VA(pa)	(pa)
 
 #endif /* _MODULE */
-
-/*
- * Some pmap(9) API macros should be defined here for module(7).
- * Luckily, all m68k pmap implementations behave this way. (see PR/54869)
- */
-#define	pmap_update(pmap)		__nothing
 
 #endif /* _KERNEL */
 

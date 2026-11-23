@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.163 2026/04/28 03:29:11 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.167 2026/11/14 22:40:16 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -55,22 +55,14 @@
 
 #include <machine/asm.h>
 
+#include <m68k/m68k/locore_data.s>
+
 /*
  * This is for kvm_mkdb, and should be the address of the beginning
  * of the kernel text segment (not necessarily the same as kernbase).
  */
 	.text
 GLOBAL(kernel_text)
-
-/*
- * Temporary stack for a variety of purposes.
- * Try and make this the first thing is the data segment so it
- * is page aligned.  Note that if we overflow here, we run into
- * our text segment.
- */
-	.data
-	.space	PAGE_SIZE
-ASGLOBAL(tmpstk)
 
 #include <x68k/x68k/vectors.s>
 
@@ -133,7 +125,7 @@ ASENTRY_NOPROFILE(start)
 #endif
 
 	ASRELOC(tmpstk, %a0)
-	movl	%a0,%sp			| give ourselves a temporary stack
+	INIT_KSP(%a0)			| give ourselves a temporary stack
 	RELOC(esym, %a0)
 #if 1
 	movl	%a4,%a0@		| store end of symbol table
@@ -299,13 +291,13 @@ Lmotommu2:
  * Should be running mapped from this point on
  */
 Lenab1:
-	lea	_ASM_LABEL(tmpstk),%sp	| temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 	jbsr	_C_LABEL(vec_init)	| initialize the vector table
 
 	/* phase 2 of pmap setup, returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(pmap_bootstrap2)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	cmpl	#MMU_68040,_C_LABEL(mmutype)	| 68040?
 	jeq	Ltbia040		| yes, cache already on
@@ -329,25 +321,22 @@ Lenab3:
  */
 
 ENTRY_NOPROFILE(spurintr)	/* level 0 */
+	_INTERRUPT_SAVEREG
 	addql	#1,_C_LABEL(intrcnt)+0
-	INTERRUPT_SAVEREG
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
+	_INTERRUPT_RESTOREREG
 	rte				| XXX mfpcure (x680x0 hardware bug)
 
 ENTRY_NOPROFILE(kbdtimer)
 	rte
 
 ENTRY_NOPROFILE(intiotrap)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	pea	%sp@(16-(FR_HW))	| XXX
 	jbsr	_C_LABEL(intio_intr)
 	addql	#4,%sp
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	rei
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev1intr)
 ENTRY_NOPROFILE(lev2intr)
@@ -355,8 +344,7 @@ ENTRY_NOPROFILE(lev3intr)
 ENTRY_NOPROFILE(lev4intr)
 ENTRY_NOPROFILE(lev5intr)
 ENTRY_NOPROFILE(lev6intr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 Lnotdma:
 	lea	_C_LABEL(intrcnt),%a0
 	movw	%sp@(22),%d0		| use vector offset
@@ -367,43 +355,42 @@ Lnotdma:
 	jbsr	_C_LABEL(intrhand)	| handle interrupt
 	addql	#4,%sp			| pop SR
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(timertrap)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG		| save scratch registers
+	INTERRUPT_ENTER
 	addql	#1,_C_LABEL(intrcnt)+32	| count hardclock interrupts
 	movl	%sp,%sp@-		| push pointer to clockframe
 	jbsr	_C_LABEL(hardclock)	| hardclock(&frame)
 	addql	#4,%sp
 	CPUINFO_INCREMENT(CI_NINTR)	| chalk up another interrupt
-	INTERRUPT_RESTOREREG		| restore scratch registers
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		| all done
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev7intr)
-	addql	#1,_C_LABEL(intr_depth)
 	addql	#1,_C_LABEL(intrcnt)+28
 	clrl	%sp@-
 	moveml	#0xFFFF,%sp@-		| save registers
 	movl	%usp,%a0		| and save
 	movl	%a0,%sp@(FR_SP)		|   the user stack pointer
+	_INTR_DEPTH_INCR
 	jbsr	_C_LABEL(nmihand)	| call handler
+	_INTR_DEPTH_DECR
 	movl	%sp@(FR_SP),%a0		| restore
 	movl	%a0,%usp		|   user SP
+	CHECK_ASTPENDING(%a0)		| check for AST
 	moveml	%sp@+,#0x7FFF		| and remaining registers
 	addql	#8,%sp			| pop SP and stack adjust
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		| all done
+	RTE_AST
 
 /*
  * floppy ejection trap
  */
 
 ENTRY_NOPROFILE(fdeject)
-	jra	_ASM_LABEL(rei)
+	movl	%a0,-(%sp)		| save %a0
+	CHECK_ASTPENDING(%a0)		| check for AST
+	movl	(%sp)+,%a0		| restore %a0
+	RTE_AST
 
 /*
  * Handle the nitty-gritty of rebooting the machine.

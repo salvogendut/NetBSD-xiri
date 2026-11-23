@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.50 2026/04/04 00:55:45 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.55 2026/11/14 23:08:26 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -53,31 +53,17 @@
 #include "ksyms.h"
 
 /*
- * Memory starts at 0x0000.0000, and we have linked the kernel
- * at 0x0000.2000 to ensure that VA==0 is unmapped once we turn
- * on the MMU.  We arrive here running VA==PA and with the MMU
- * disabled.
- *
- * This first 8KB of RAM at PA==0 won't go to waste, though; we
- * will use it for the kernel message buffer.
+ * Memory starts at 0x0000.0000.  We arrive here running VA==PA and
+ * with the MMU disabled.
  */
 
-/*
- * Temporary stack for a variety of purposes.
- * Try and make this the first thing is the data segment so it
- * is page aligned.  Note that if we overflow here, we run into
- * our text segment.
- */
-	.data
-	.space	PAGE_SIZE
-ASGLOBAL(tmpstk)
+#include <m68k/m68k/locore_data.s>
 
 /*
  * Macro to relocate a symbol, used before MMU is enabled.
  */
-#define	IMMEDIATE		#
 #define	_RELOC(var, ar)			\
-	movl	IMMEDIATE var,ar;	\
+	movl	__IMMEDIATE var,ar;	\
 	addl	%a5,ar
 
 #define	RELOC(var, ar)		_RELOC(_C_LABEL(var), ar)
@@ -120,7 +106,7 @@ ASENTRY_NOPROFILE(start)
 	 */
 
 	ASRELOC(tmpstk, %a0)
-	movl	%a0,%sp			| give ourselves a temporary stack
+	INIT_KSP(%a0)			| give ourselves a temporary stack
 
 	RELOC(edata,%a0)		| clear out BSS
 	movl	#_C_LABEL(end) - 4, %d0	| (must be <= 256 kB)
@@ -128,6 +114,25 @@ ASENTRY_NOPROFILE(start)
 	lsrl	#2,%d0
 1:	clrl	%a0@+
 	dbra	%d0,1b
+
+	/*
+	 * We've linked the kernel at 0x2000 so that the first
+	 * virtual page can remain unmapped.  We use those pages
+	 * of RAM for LWP0's u-area.
+	 */
+	RELOC(kernel_text,%a1)		| %a1 = phys address of kernel_text
+	subl	#USPACE,%a1		| %a1 -= USPACE
+	RELOC(lwp0upa,%a0)
+	movl	%a1,%a0@
+
+	/*
+	 * The first machine_bootmap[] entry maps our primary cpu_info
+	 * at a fixed VA.  Now that the kernel's loaded, we know what
+	 * the physical address is going to be; provide it now.
+	 */
+	RELOC(machine_bootmap,%a0)	| %a0 = phys addr of &machine_bootmap[0]
+	RELOC(cpu_info_primary,%a1)	| %a1 = phys addr of cpu_info
+	movl	%a1,%a0@(PMBM_PADDR)
 
 	/*
 	 * Qemu does not pass us the symbols, so leave esym alone.
@@ -173,13 +178,13 @@ ASENTRY_NOPROFILE(start)
  * Should be running mapped from this point on
  */
 Lmmuenabled:
-	lea	_ASM_LABEL(tmpstk),%sp	| re-load the temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 	jbsr	_C_LABEL(vec_init)	| initialize the vector table
 
 	/* phase 2 of pmap setup, returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(pmap_bootstrap2)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	movl	%d7,%sp@-		| push nextpa saved above
 	jbsr	_C_LABEL(machine_init)	| additional pre-main initialization

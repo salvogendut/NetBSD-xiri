@@ -1,4 +1,4 @@
-/*	$NetBSD: clock.c,v 1.69 2024/01/19 18:18:55 thorpej Exp $	*/
+/*	$NetBSD: clock.c,v 1.71 2026/11/14 19:02:13 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1982, 1990, 1993
@@ -83,7 +83,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.69 2024/01/19 18:18:55 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.71 2026/11/14 19:02:13 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -304,8 +304,6 @@ void
 clock_intr(struct clockframe cf)
 {
 
-	intr_depth++;
-
 	/* Read the clock interrupt register. */
 	intersil_clear();
 
@@ -329,6 +327,4 @@ clock_intr(struct clockframe cf)
 
 	/* Call common clock interrupt handler. */
 	hardclock(&cf);
-
-	intr_depth--;
 }

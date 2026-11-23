@@ -1,4 +1,4 @@
-/*	$NetBSD: tree.c,v 1.716 2026/07/15 05:35:09 rillig Exp $	*/
+/*	$NetBSD: tree.c,v 1.720 2026/11/18 05:31:50 rillig Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Jochen Pohl
@@ -37,7 +37,7 @@
 
 #include <sys/cdefs.h>
 #if defined(__RCSID)
-__RCSID("$NetBSD: tree.c,v 1.716 2026/07/15 05:35:09 rillig Exp $");
+__RCSID("$NetBSD: tree.c,v 1.720 2026/11/18 05:31:50 rillig Exp $");
 #endif
 
 #include <float.h>
@@ -276,13 +276,21 @@ ic_mult(const type_t *tp, integer_constraints a, integer_constraints b)
 static integer_constraints
 ic_div(const type_t *tp, integer_constraints a, integer_constraints b)
 {
+	integer_constraints c;
+
 	if (ic_maybe_signed_binary(tp, a, b)) {
-		if (b.smin >= 0)
-			return a;
+		if (b.smin > 0) {
+			// C99 and later require truncation toward zero.
+			c.smin = a.smin / b.smin;
+			c.smax = a.smax / b.smin;
+			c.umin = a.umin / b.smin;
+			c.umax = a.umax / b.smin;
+			c.bclr = 0;
+			return c;
+		}
 		return ic_any(tp);
 	}
 
-	integer_constraints c;
 	c.smin = INT64_MIN;
 	c.smax = INT64_MAX;
 	c.umin = a.umin / u64_max(b.umax, 1);
@@ -294,26 +302,31 @@ ic_div(const type_t *tp, integer_constraints a, integer_constraints b)
 static integer_constraints
 ic_mod(const type_t *tp, integer_constraints a, integer_constraints b)
 {
-	if (ic_maybe_signed_binary(tp, a, b)) {
-		uint64_t max_abs_b = u64_max(s64_abs(b.smin), s64_abs(b.smax));
-		if (max_abs_b >> 63 != 0 || max_abs_b == 0)
-			return a;
-
+	if (is_uinteger(tp->t_tspec)) {
 		integer_constraints c;
-		c.smin = s64_max(a.smin, -(int64_t)(max_abs_b - 1));
-		c.smax = s64_min(a.smax, (int64_t)(max_abs_b - 1));
 		c.umin = 0;
-		c.umax = UINT64_MAX;
-		c.bclr = 0;
+		c.umax = u64_min(a.umax, b.umax - 1);
+		c.bclr = ~u64_fill_right(c.umax);
+		c.smin = c.umax >> 63 == 0 ? 0 : INT64_MIN;
+		c.smax = c.umax >> 63 == 0 ? (int64_t)c.umax : INT64_MAX;
 		return c;
 	}
 
+	uint64_t a_max_abs = u64_max(s64_abs(a.smin), s64_abs(a.smax));
+	uint64_t b_max_abs = u64_max(s64_abs(b.smin), s64_abs(b.smax));
+	if (b_max_abs == 0)
+		return ic_any(tp);
+
 	integer_constraints c;
-	c.smin = INT64_MIN;
-	c.smax = INT64_MAX;
+	c.smax = u64_min(a_max_abs, b_max_abs - 1);
+	c.smin = -c.smax;
+	if (a.smin >= 0 && c.smin < 0)
+		c.smin = 0;
+	if (a.smax <= 0 && c.smax > 0)
+		c.smax = 0;
 	c.umin = 0;
-	c.umax = b.umax - 1;
-	c.bclr = ~u64_fill_right(c.umax);
+	c.umax = c.smin >= 0 ? (uint64_t)c.smax : UINT64_MAX;
+	c.bclr = c.smin >= 0 ? ~u64_fill_right(c.umax) : 0;
 	return c;
 }
 
@@ -515,7 +528,7 @@ ic_unsigned_range(uint64_t minimum, uint64_t maximum)
 	c.smax = maximum <= INT64_MAX ? (int64_t)maximum : INT64_MAX;
 	c.umin = minimum;
 	c.umax = maximum;
-	c.bclr = ~c.umax;
+	c.bclr = ~u64_fill_right(c.umax);
 	return c;
 }
 
@@ -528,7 +541,7 @@ ic_signed_range(int64_t minimum, int64_t maximum)
 	c.smax = maximum;
 	c.umin = minimum >= 0 ? (uint64_t)minimum : 0;
 	c.umax = minimum >= 0 ? (uint64_t)maximum : UINT64_MAX;
-	c.bclr = ~c.umax;
+	c.bclr = 0;
 	return c;
 }
 
@@ -3379,15 +3392,34 @@ check_assign_types_compatible(op_t op, const function_call *call, int arg,
 }
 
 static bool
-has_side_effect(const tnode_t *tn) /* NOLINT(misc-no-recursion) */
+has_side_effect(const tnode_t *tn)
 {
 	op_t op = tn->tn_op;
 
 	if (modtab[op].m_has_side_effect)
 		return true;
 
-	if (op == CVT && tn->tn_type->t_tspec == VOID)
-		return has_side_effect(tn->u.ops.left);
+	if (op == INDIR && tn->tn_type->t_volatile)
+		return true;
+
+	if (op == CVT && tn->tn_type->t_tspec == VOID) {
+		const tnode_t *ln = tn->u.ops.left;
+
+		if ((ln->tn_op == ADDR || ln->tn_op == LOAD)
+		    && ln->u.ops.left->tn_op == NAME
+		    && ln->u.ops.left->u.sym->s_scl == AUTO)
+			return true;
+
+		if (ln->tn_op == CON
+		    && ln->tn_type->t_tspec == INT
+		    && ln->u.value.u.integer == 0)
+			return true;
+
+		if (ln->tn_op == CVT)
+			return false;
+
+		return has_side_effect(ln);
+	}
 
 	if (op == LOGAND || op == LOGOR)
 		return has_side_effect(tn->u.ops.right);
@@ -3403,43 +3435,12 @@ has_side_effect(const tnode_t *tn) /* NOLINT(misc-no-recursion) */
 	return false;
 }
 
-static bool
-is_void_cast(const tnode_t *tn)
-{
-
-	return tn->tn_op == CVT && tn->tn_cast &&
-	    tn->tn_type->t_tspec == VOID;
-}
-
-static bool
-is_local_symbol(const tnode_t *tn)
-{
-
-	return tn->tn_op == LOAD &&
-	    tn->u.ops.left->tn_op == NAME &&
-	    tn->u.ops.left->u.sym->s_scl == AUTO;
-}
-
-static bool
-is_int_constant_zero(const tnode_t *tn)
-{
-
-	return tn->tn_op == CON &&
-	    tn->tn_type->t_tspec == INT &&
-	    tn->u.value.u.integer == 0;
-}
-
 static void
 check_null_effect(const tnode_t *tn)
 {
-
-	if (hflag &&
-	    !has_side_effect(tn) &&
-	    !(is_void_cast(tn) && is_local_symbol(tn->u.ops.left)) &&
-	    !(is_void_cast(tn) && is_int_constant_zero(tn->u.ops.left))) {
+	if (hflag && !has_side_effect(tn))
 		/* expression has null effect */
 		warning(129);
-	}
 }
 
 /*

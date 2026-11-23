@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.128 2026/03/30 03:32:22 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.131 2026/11/14 22:40:16 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1980, 1990, 1993
@@ -86,6 +86,8 @@
 #include <machine/asm.h>
 #include <machine/trap.h>
 
+#include <m68k/m68k/locore_data.s>
+
 | Remember this is a fun project!
 
 | This is for kvm_mkdb, and should be the address of the beginning
@@ -93,14 +95,10 @@
 	.text
 GLOBAL(kernel_text)
 
-| This is the entry point, as well as the end of the temporary stack
-| used during process switch (one 8K page ending at start)
-ASGLOBAL(tmpstk)
-ASGLOBAL(start)
-
 | First we need to set it up so we can access the sun MMU, and be otherwise
 | undisturbed.  Until otherwise noted, all code must be position independent
 | as the boot loader put us low in memory, but we are linked high.
+ASGLOBAL(start)
 	movw	#PSL_HIGHIPL,%sr	| no interrupts
 	moveq	#FC_CONTROL,%d0		| make movs access "control"
 	movc	%d0,%sfc		| space where the sun3 designers
@@ -142,10 +140,10 @@ L_high_code:
 | the backtrace algorithm used by KGDB terminates nicely.
 |
 | _bootstrap() returns lwp0 SP in %a0
-	lea	_ASM_LABEL(tmpstk),%sp
+	lea	_ASM_LABEL(tmpstk),%a0
+	INIT_KSP(%a0)
 	jsr	_C_LABEL(_bootstrap)	| See locore2.c
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	jra	_C_LABEL(main)		| main() (never returns)
 
@@ -171,10 +169,9 @@ L_high_code:
 	.align	2
 #endif
 GLOBAL(_isr_clock)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(clock_intr)
-	INTERRUPT_RESTOREREG
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 /*
  * Initialization is at the beginning of this file, because the

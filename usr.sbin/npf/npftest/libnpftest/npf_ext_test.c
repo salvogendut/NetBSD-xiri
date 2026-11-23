@@ -1,5 +1,36 @@
 
+/*-
+ * Copyright (c) 2026 The NetBSD Foundation, Inc.
+ * All rights reserved.
+ *
+ * This code is derived from software contributed to The NetBSD Foundation
+ * by Emmanuel Nyarko.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
+ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 
+/*
+ * NPF tests of extension.
+ */
 
 #ifdef _KERNEL
 #include <sys/types.h>
@@ -19,13 +50,11 @@ static const struct test_case {
 } test_cases[] = {
 	{
 		LOCAL_IP60,	15000,		LOCAL_IP70,	7000,
-		IFNAME_EXT,	PFIL_OUT,
-		AF_INET
+		IFNAME_EXT,	PFIL_OUT,	AF_INET
 	},
 	{
 		LOCAL_IP60,	15040,		LOCAL_IP70,	6000,
-		IFNAME_EXT,	PFIL_OUT,
-		AF_INET
+		IFNAME_EXT,	PFIL_OUT,	AF_INET
 	},
 
 };
@@ -96,30 +125,29 @@ run_raw_testcase(npf_cache_t *npc, unsigned i, bool verbose)
 		error = npf_rule_conclude(rl, &mi);
 	} else {
 		error = ENOENT;
-		return error;
 	}
 	npf_config_read_exit(npf, slock);
+
+	CHECK_TRUE(error == 0);
 
 	rp = npf_rule_getrproc(rl);
 	assert(rp != NULL);
 
 	error = npf_rproc_run(npc, rp, &mi, &decision);
 
-	if (error == 1) {
-		npf_rproc_release(rp);
-	}
+	npf_rproc_release(rp);
 
 	return error;
 }
 
 static void
-npf_get_normalize_params(npf_cache_t *npc, uint16_t *ip_ttl, uint8_t *ip_id, int *df, uint16_t *maxmss)
+npf_get_normalize_params(npf_cache_t *npc, uint16_t *ip_ttl, uint8_t *ip_id, int *ip_off, uint16_t *maxmss)
 {
     int wscale;
     struct ip *ip = npc->npc_ip.v4;
     *ip_id = ip->ip_id;
     *ip_ttl = ip->ip_ttl;
-    *df = ip->ip_off & IP_DF;
+    *ip_off = ntohs(ip->ip_off);
     npf_fetch_tcpopts(npc, maxmss, &wscale);
 }
 
@@ -133,7 +161,7 @@ npf_procedure_test(bool verbose)
 		struct mbuf *m;
 		uint16_t ip_ttl;
     	uint8_t ip_id;
-    	int df;
+    	int ip_off;
     	uint16_t maxmss;
 
 		if (npf_test_getif(t->ifname) == NULL) {
@@ -148,16 +176,15 @@ npf_procedure_test(bool verbose)
 		if (verbose) {
 			printf("%s: expected return in raw testcase 1, returned %d\n", __func__, ret);
 		}
-		CHECK_TRUE(ret == 1);
 
-		npf_get_normalize_params(npc, &ip_ttl, &ip_id, &df, &maxmss);
+		npf_get_normalize_params(npc, &ip_ttl, &ip_id, &ip_off, &maxmss);
 		maxmss = ntohs(maxmss);
 
 		if (verbose) {
 			printf("Normalization:\texpected 164 ttl but got %u\n", ip_ttl);
 			printf("Normalization:\texpected 1321 maxmss but got %u\n", maxmss);
 		}
-		CHECK_TRUE((df & IP_DF) == 0);
+		CHECK_TRUE((ip_off & IP_DF) == 0);
     	CHECK_TRUE(maxmss == 1321);
 		CHECK_TRUE(ip_ttl == 164);
 		put_cached_pkt(npc);

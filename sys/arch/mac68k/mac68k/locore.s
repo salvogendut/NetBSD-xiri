@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.210 2026/06/13 15:28:08 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.213 2026/11/14 22:40:15 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -88,6 +88,8 @@
 #include <machine/asm.h>
 #include <machine/trap.h>
 
+#include <m68k/m68k/locore_data.s>
+
 /*
  * This is for kvm_mkdb, and should be the address of the beginning
  * of the kernel text segment (not necessarily the same as kernbase).
@@ -127,7 +129,8 @@ BSS(esym,4)
 
 ASENTRY_NOPROFILE(start)
 	movw	#PSL_HIGHIPL,%sr	| no interrupts.  ever.
-	lea	_ASM_LABEL(tmpstk),%sp	| give ourselves a temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| give ourselves a temporary stack
+	INIT_KSP(%a0)
 
 	movl	#CACHE_OFF,%d0
 	movc	%d0,%cacr		| clear and disable on-chip cache(s)
@@ -421,12 +424,12 @@ LnokillTT:
  * Should be running mapped from this point on
  */
 Lloaddone:
-	lea	_ASM_LABEL(tmpstk),%sp	| temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 
 	/* phase 2 of pmap setup, returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(pmap_bootstrap2)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 /* flush TLB and turn on caches */
 	cmpl	#MMU_68040,_C_LABEL(mmutype) | 68040/060?
@@ -497,17 +500,15 @@ GLOBAL(m68k_fault_addr)
  */
 
 ENTRY_NOPROFILE(spurintr)
+	INTERRUPT_ENTER
 	addql	#1,_C_LABEL(intrcnt)+0
-	INTERRUPT_SAVEREG
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(intrhand)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(intr_dispatch)	| call dispatch routine
-	INTERRUPT_RESTOREREG
-	jra	_ASM_LABEL(rei)		| all done
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev7intr)
 	addql	#1,_C_LABEL(intrcnt)+16
@@ -518,9 +519,10 @@ ENTRY_NOPROFILE(lev7intr)
 	jbsr	_C_LABEL(nmihand)	| call handler
 	movl	%sp@(FR_SP),%a0		| restore
 	movl	%a0,%usp		|   %USP
+	CHECK_ASTPENDING(%a0)		| check for AST
 	moveml	%sp@+,#0x7FFF		| and remaining registers
 	addql	#8,%sp			| pop SSP and align word
-	jra	_ASM_LABEL(rei)
+	RTE_AST
 
 /* 
  * We could tweak rtclock_intr and gain 12 cycles on the 020 and 030 by
@@ -542,9 +544,9 @@ ENTRY_NOPROFILE(rtclock_intr)
 	addql	#4,%sp			| pop param
 	jbsr	_C_LABEL(mrg_VBLQueue)	| give programs in the VBLqueue a chance
 	addql	#1,_C_LABEL(intrcnt)+32	| record a clock interrupt
-	INTERRUPT_SAVEREG
+	_INTERRUPT_SAVEREG
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
+	_INTERRUPT_RESTOREREG
 	movw	%d2,%sr			| restore SPL
 	movl	%sp@+,%d2		| restore %d2
 	rts				| go back from whence we came
@@ -959,12 +961,6 @@ get_pte_fail10:
  * Misc. global variables.
  */
 	.data
-GLOBAL(sanity_check)
-	.long	0x18621862	| this is our stack overflow checker.
-
-	.space	4 * PAGE_SIZE
-	.align	4
-ASGLOBAL(tmpstk)
 
 GLOBAL(machineid)
 	.long	0		| default to 320

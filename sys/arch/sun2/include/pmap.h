@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.32 2026/07/06 15:50:07 thorpej Exp $	*/
+/*	$NetBSD: pmap.h,v 1.34 2026/11/16 22:56:33 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -97,21 +97,15 @@ pmap_remove_all(struct pmap *pmap)
 
 void pmap_procwr(struct proc *, vaddr_t, size_t);
 
-/* Kernel debugger support functions. */
-struct pmap_db_write_text_context {
+/* Support for patching kernel text. */
+struct pmap_write_text_context {
 	vaddr_t		pgva;
 	int		opte;
 };
-bool	pmap_db_write_text_enter(vaddr_t, struct pmap_db_write_text_context *);
-void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
+bool	pmap_write_text_enter(vaddr_t, struct pmap_write_text_context *);
+void	pmap_write_text_exit(struct pmap_write_text_context *);
 
 #endif /* _MODULE */
-
-/*
- * Some pmap(9) API macros should be defined here for module(7).
- * Luckily, all m68k pmap implementations behave this way. (see PR/54869)
- */
-#define	pmap_update(pmap)	__nothing	/* nothing (yet) */
 
 #endif	/* _KERNEL */
 

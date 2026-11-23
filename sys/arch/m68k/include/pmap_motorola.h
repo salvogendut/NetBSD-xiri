@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_motorola.h,v 1.64 2026/07/06 14:33:55 thorpej Exp $	*/
+/*	$NetBSD: pmap_motorola.h,v 1.67 2026/11/16 22:56:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1991, 1993
@@ -243,7 +243,6 @@ extern vaddr_t		virtual_avail, virtual_end;
 extern u_int		protostfree;
 #endif
 
-extern char		*vmmap;		/* map for mem, dumps, etc. */
 extern void		*CADDR1, *CADDR2;
 extern void		*msgbufaddr;
 
@@ -297,14 +296,14 @@ bool	pmap_pa_has_static_mapping(paddr_t, size_t, vm_prot_t,
 	    vaddr_t *, int *);
 bool	pmap_va_is_static_mapping(vaddr_t va, size_t);
 
-/* Kernel debugger support functions. */
-struct pmap_db_write_text_context {
+/* Support for patching kernel text. */
+struct pmap_write_text_context {
 	vaddr_t			pgva;
 	volatile pt_entry_t *	ptep;
 	pt_entry_t		opte;
 };
-bool	pmap_db_write_text_enter(vaddr_t, struct pmap_db_write_text_context *);
-void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
+bool	pmap_write_text_enter(vaddr_t, struct pmap_write_text_context *);
+void	pmap_write_text_exit(struct pmap_write_text_context *);
 
 /*
  * pmap_bootstrap1() may need to relocate global references, and perform
@@ -354,12 +353,6 @@ void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
 #endif
 
 #endif /* ! _MODULE */
-
-/*
- * Some pmap(9) API macros should be defined here for module(7).
- * Luckily, all m68k pmap implementations behave this way. (see PR/54869)
- */
-#define	pmap_update(pmap)		__nothing	/* nothing (yet) */
 
 #endif /* _KERNEL */
 

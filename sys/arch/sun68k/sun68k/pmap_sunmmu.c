@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_sunmmu.c,v 1.5 2026/09/01 18:01:25 andvar Exp $	*/
+/*	$NetBSD: pmap_sunmmu.c,v 1.9 2026/11/16 22:56:33 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -119,7 +119,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap_sunmmu.c,v 1.5 2026/09/01 18:01:25 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap_sunmmu.c,v 1.9 2026/11/16 22:56:33 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -299,20 +299,10 @@ static vaddr_t hole_start, hole_size;
 
 /* This is where we map a PMEG without a context. */
 static vaddr_t temp_seg_va;
-
-/*
- * Location to store virtual addresses
- * to be used in copy/zero operations.
- */
-vaddr_t tmp_vpages[2] = {
-#if IS_SUN2
-	PAGE_SIZE * 8,
-	PAGE_SIZE * 9
-#else
-	SUN3_MONSHORTSEG,
-	SUN3_MONSHORTSEG + PAGE_SIZE
+#ifdef DIAGNOSTIC
+static int temp_seg_inuse;
 #endif
-};
+
 int tmp_vpages_inuse;
 
 static int pmap_version = 1;
@@ -1593,7 +1583,7 @@ pmap_common_init(pmap_t pmap)
  * after the "start/end" globals are set.
  * This function must NOT leave context zero.
  */
-paddr_t
+paddr_t __attribute__((no_instrument_function))
 pmap_bootstrap(vaddr_t nextva)
 {
 	vaddr_t va, eva;
@@ -1747,6 +1737,8 @@ pmap_bootstrap(vaddr_t nextva)
 	 * but clear out all but the last PTE inside it.
 	 * Note we use this for tmp_vpages.
 	 */
+	cpu_info_primary.ci_tmpva_src = SUN3_MONSHORTSEG;
+	cpu_info_primary.ci_tmpva_dst = SUN3_MONSHORTSEG + PAGE_SIZE;
 	va  = SUN3_MONSHORTSEG;
 	eva = SUN3_MONSHORTPAGE;
 	sme = get_segmap(va);
@@ -1800,8 +1792,10 @@ pmap_bootstrap(vaddr_t nextva)
 	 * short-segment concept, so we reserve virtual pages eight
 	 * and nine for this.
 	 */
+	cpu_info_primary.ci_tmpva_src = va;
 	set_pte(va, PG_INVAL);
 	va += PAGE_SIZE;
+	cpu_info_primary.ci_tmpva_dst = va;
 	set_pte(va, PG_INVAL);
 	va += PAGE_SIZE;
 
@@ -1973,8 +1967,13 @@ pmap_kernel_init(pmap_t pmap)
  */
 
 /*
- * Support functions for vm_page_bootstrap().
+ * Process any deferred pmap operations.
  */
+void
+pmap_update(pmap_t pmap __unused)
+{
+	/* this implementation does not defer any operations */
+}
 
 /*
  * How much virtual space does this kernel have?
@@ -2197,6 +2196,7 @@ pmap_enter_kernel(vaddr_t pgva, int new_pte, bool wired)
 	 * thing we have to handle here is possibly allocating additional
 	 * PMEGs and inserting them into the appropriate contexts.
 	 */
+	kernel_context_enter();
 
 	/*
 	 * In detail:
@@ -2210,7 +2210,6 @@ pmap_enter_kernel(vaddr_t pgva, int new_pte, bool wired)
 	 *		use pv_stuff, for change, pmap_remove() possibly.
 	 * (e) change/add pte
 	 */
-	kernel_context_enter();
 
 #ifdef	DIAGNOSTIC
 	if ((pgva < virtual_avail) || (pgva >= DVMA_MAP_END))
@@ -3816,17 +3815,20 @@ pmap_copy_page(paddr_t src, paddr_t dst)
 	tmp_vpages_inuse++;
 #endif
 
+	vaddr_t srcva = curcpu()->ci_tmpva_src;
+	vaddr_t dstva = curcpu()->ci_tmpva_dst;
+
 	kernel_context_enter();
 
 	/* PG_PERM is short for (PG_VALID|PG_WRITE|PG_SYSTEM|PG_NC) */
 	/* All mappings to vmp_vpages are non-cached, so no flush. */
 	pte = PG_PERM | PA_PGNUM(src);
-	set_pte(tmp_vpages[0], pte);
+	set_pte(srcva, pte);
 	pte = PG_PERM | PA_PGNUM(dst);
-	set_pte(tmp_vpages[1], pte);
-	copypage((char *) tmp_vpages[0], (char *) tmp_vpages[1]);
-	set_pte(tmp_vpages[0], PG_INVAL);
-	set_pte(tmp_vpages[1], PG_INVAL);
+	set_pte(dstva, pte);
+	copypage((char *) srcva, (char *) dstva);
+	set_pte(srcva, PG_INVAL);
+	set_pte(dstva, PG_INVAL);
 
 	kernel_context_exit();
 
@@ -3862,14 +3864,16 @@ pmap_zero_page(paddr_t pa)
 	tmp_vpages_inuse++;
 #endif
 
+	vaddr_t dstva = curcpu()->ci_tmpva_dst;
+
 	kernel_context_enter();
 
 	/* PG_PERM is short for (PG_VALID|PG_WRITE|PG_SYSTEM|PG_NC) */
 	/* All mappings to vmp_vpages are non-cached, so no flush. */
 	pte = PG_PERM | PA_PGNUM(pa);
-	set_pte(tmp_vpages[0], pte);
-	zeropage((char *) tmp_vpages[0]);
-	set_pte(tmp_vpages[0], PG_INVAL);
+	set_pte(dstva, pte);
+	zeropage((char *) dstva);
+	set_pte(dstva, PG_INVAL);
 
 	kernel_context_exit();
 
@@ -4054,16 +4058,16 @@ pmap_procwr(struct proc *p, vaddr_t va, size_t len)
 #endif
 }
 
-#if defined(DDB) || defined(KGDB)
+#if defined(DDB) || defined(KGDB) || defined(M68K_FPCOPROC)
 /*
- *	Routine:	pmap_db_write_text_enter
+ *	Routine:	pmap_write_text_enter
  *
  *	Function:
  *		Temporarily map a page of kernel text read-write for the
  *		kernel debugger.
  */
 bool
-pmap_db_write_text_enter(vaddr_t pgva, struct pmap_db_write_text_context *ctx)
+pmap_write_text_enter(vaddr_t pgva, struct pmap_write_text_context *ctx)
 {
 	int oldpte, tmppte;
 
@@ -4094,19 +4098,19 @@ pmap_db_write_text_enter(vaddr_t pgva, struct pmap_db_write_text_context *ctx)
 }
 
 /*
- *	Routine:	pmap_db_write_text_exit
+ *	Routine:	pmap_write_text_exit
  *
  *	Function:
- *		Undo the effects of pmap_db_write_text_enter().
+ *		Undo the effects of pmap_write_text_enter().
  */
 void
-pmap_db_write_text_exit(struct pmap_db_write_text_context *ctx)
+pmap_write_text_exit(struct pmap_write_text_context *ctx)
 {
 	kernel_context_enter();
 	set_pte(ctx->pgva, ctx->opte);
 	kernel_context_exit();
 }
-#endif /* DDB || KGDB */
+#endif /* DDB || KGDB || M68K_FPCOPROC */
 
 #ifdef	PMAP_DEBUG
 /* Things to call from the debugger. */

@@ -1,4 +1,4 @@
-/* $NetBSD: locore.s,v 1.115 2026/04/28 03:29:09 thorpej Exp $ */
+/* $NetBSD: locore.s,v 1.119 2026/11/14 22:40:15 thorpej Exp $ */
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -54,6 +54,8 @@
 
 #include "ksyms.h"
 
+#include <m68k/m68k/locore_data.s>
+
 #define	PRINT(msg) \
 	pea	9f		; \
 	jbsr	_C_LABEL(printf); \
@@ -62,16 +64,6 @@
      9:	.asciz	msg		; \
 	.text
 #undef	PRINT
-
-/*
- * Temporary stack for a variety of purposes.
- * Try and make this the first thing is the data segment so it
- * is page aligned.  Note that if we overflow here, we run into
- * our text segment.
- */
-	.data
-	.space	PAGE_SIZE
-ASGLOBAL(tmpstk)
 
 /*
  * Macro to relocate a symbol, used before MMU is enabled.
@@ -101,7 +93,7 @@ ASENTRY_NOPROFILE(start)
 	movw	#PSL_HIGHIPL,%sr	| no interrupts
 	movl	#0,%a5			| RAM starts at 0
 	ASRELOC(tmpstk,%a0)
-	movl	%a0,%sp			| give ourselves a temporary stack
+	INIT_KSP(%a0)			| give ourselves a temporary stack
 
 	RELOC(edata,%a0)		| clear out BSS
 	movl	#_C_LABEL(end)-4,%d0	| (must be <= 256 kB)
@@ -235,13 +227,13 @@ Lstart3:
  * Should be running mapped from this point on
  */
 Lmmuenabled:
-	lea	_ASM_LABEL(tmpstk),%sp	| re-load temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 	jbsr	_C_LABEL(vec_init)	| initialize vector table
 
 	/* phase 2 of pmap setup, returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(pmap_bootstrap2)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	movl	%d7,%sp@-		| push nextpa saved above
 	jbsr	_C_LABEL(machine_init)	| additional pre-main initialization
@@ -261,33 +253,26 @@ ENTRY_NOPROFILE(lev7intr)		/* Level 7: NMI */
 	jbsr	_C_LABEL(nmihand)	| call handler
 	movl	%sp@(FR_SP),%a0		| restore
 	movl	%a0,%usp		|   user SP
+	CHECK_ASTPENDING(%a0)		| check for AST
 	moveml	%sp@+,#0x7FFF		| and remaining registers
 	addql	#8,%sp			| pop SP and stack adjust
-	jra	_ASM_LABEL(rei)		| all done
+	RTE_AST
 
 #if 1	/* XXX wild timer -- how can I disable/enable the interrupt? */
 ENTRY_NOPROFILE(lev5intr)
-	addql	#1,_C_LABEL(intr_depth)
 	btst	#7,OBIO_CLOCK		| check whether system clock
-	beq	2f
+	beq	_C_LABEL(intrstub_autovec) | XP device has also lev5 intr
 	movb	#1,OBIO_CLOCK		| clear the interrupt
 	tstl	_C_LABEL(clock_enable)	| is hardclock() available?
 	jeq	1f
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	lea	%sp@(0),%a1		| %a1 = &clockframe
 	movl	%a1,%sp@-
 	jbsr	_C_LABEL(hardclock)	| hardclock(&frame)
 	addql	#4,%sp
 	addql	#1,_C_LABEL(m68k_intr_evcnt)+CLOCK_INTRCNT
-	INTERRUPT_RESTOREREG
-1:
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		| all done
-2:
-					| XP device has also lev5 intr,
-					| routing to autovec
-	subql	#1,_C_LABEL(intr_depth)
-	jbra	_C_LABEL(intrstub_autovec)
+	INTERRUPT_EXIT
+1:	rte
 #endif
 
 /*

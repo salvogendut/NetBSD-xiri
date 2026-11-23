@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.94 2026/04/28 03:29:09 thorpej Exp $	*/
+/*	$NetBSD: machdep.c,v 1.96 2026/11/15 15:16:23 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.94 2026/04/28 03:29:09 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.96 2026/11/15 15:16:23 thorpej Exp $");
 
 #include "opt_bufcache.h"
 #include "opt_ddb.h"
@@ -111,10 +111,23 @@ void	nmihand(struct frame);
 
 int	delay_divisor;		/* delay constant */
 
-extern void sicinit(void*);
+extern void sicinit(void);
+extern vaddr_t sicbase;
+extern vaddr_t zsbase;
 
 struct pmap_bootmap machine_bootmap[] = {
-	/* XXX */
+#ifdef __HAVE_NEW_PMAP_68K
+	{ .pmbm_vaddr_ptr = &sicbase,
+	  .pmbm_paddr = 0x44000000,
+	  .pmbm_size  = PAGE_SIZE,
+	  .pmbm_flags = PMBM_F_CI },
+
+	{ .pmbm_vaddr_ptr = &zsbase,
+	  .pmbm_paddr = 0x58000000,
+	  .pmbm_size  = PAGE_SIZE,
+	  .pmbm_flags = PMBM_F_CI },
+#endif /* __HAVE_NEW_PMAP_68K */
+
 	{ .pmbm_vaddr = -1 },
 };
 
@@ -134,10 +147,13 @@ machine_init(paddr_t nextpa)
 	/*
 	 * map and init interrupt controller
 	 */
+#ifndef __HAVE_NEW_PMAP_68K
 	physaccess((void*)virtual_avail, (void*)0x44000000,
 	    PAGE_SIZE, PG_RW|PG_CI);
-	sicinit((void*)virtual_avail);
+	sicbase = virtual_avail;
 	virtual_avail += PAGE_SIZE;
+#endif /* ! __HAVE_NEW_PMAP_68K */
+	sicinit();
 }
 
 int
@@ -173,10 +189,13 @@ consinit(void)
 	/*
 	 * Initialize the console before we print anything out.
 	 */
+#ifndef __HAVE_NEW_PMAP_68K
 	physaccess((void*)virtual_avail,
 	    (void*)0x58000000, PAGE_SIZE, PG_RW|PG_CI);
-	zs_cnattach((void*)virtual_avail);
+	zsbase = virtual_avail;
 	virtual_avail += PAGE_SIZE;
+#endif /* ! __HAVE_NEW_PMAP_68K */
+	zs_cnattach();
 
 #ifdef KGDB
         kgdb_dev = 1;
@@ -287,6 +306,7 @@ dumpsys(void)
 	int pg;			/* page being dumped */
 	vm_offset_t maddr;	/* PA being dumped */
 	int error;		/* error code from (*dump)() */
+	vaddr_t vmmap = curcpu()->ci_tmpva_vmmap;
 
 	/* Don't put dump messages in msgbuf. */
 	msgbufmapped = 0;
@@ -317,11 +337,11 @@ dumpsys(void)
 		if (pg && (pg % NPGMB) == 0)
 			printf("%d ", pg / NPGMB);
 #undef NPGMB
-		pmap_enter(pmap_kernel(), (vm_offset_t)vmmap, maddr,
+		pmap_enter(pmap_kernel(), vmmap, maddr,
 		    VM_PROT_READ, VM_PROT_READ|PMAP_WIRED);
 		pmap_update(pmap_kernel());
 
-		error = (*dump)(dumpdev, blkno, vmmap, PAGE_SIZE);
+		error = (*dump)(dumpdev, blkno, (void *)vmmap, PAGE_SIZE);
 		switch (error) {
 		case 0:
 			maddr += PAGE_SIZE;

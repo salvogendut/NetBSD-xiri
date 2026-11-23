@@ -1,4 +1,4 @@
-/*	$NetBSD: msg_129.c,v 1.11 2025/09/17 19:25:23 rillig Exp $	*/
+/*	$NetBSD: msg_129.c,v 1.13 2026/11/14 14:02:30 rillig Exp $	*/
 # 3 "msg_129.c"
 
 // Test for message: expression has null effect [129]
@@ -110,27 +110,36 @@ operator_comma(void)
 }
 
 void
-legitimate_use_cases(int arg)
+legitimate_use_cases(int void_name_arg, int void_addr_arg, const char *ptr)
 {
-	int local = 3;
+	int void_name_local = 3;
+	int void_addr_local = 4;
 
 	/*
-	 * This expression is commonly used to mark the parameter as
+	 * These expressions are commonly used to mark a parameter as
 	 * deliberately unused.
 	 */
-	(void)arg;
+	(void)void_name_arg;
+	(void)&void_addr_arg;
 
 	/*
-	 * This expression is commonly used to mark the local variable as
+	 * These expressions are commonly used to mark a local variable as
 	 * deliberately unused.  This situation occurs when the local
 	 * variable is only used in some but not all compile-time selectable
 	 * variants of the code, such as in debugging mode, and writing down
 	 * the exact conditions would complicate the code unnecessarily.
 	 */
-	(void)local;
+	(void)void_name_local;
+	(void)&void_addr_local;
 
 	/* This is a shorthand notation for a do-nothing command. */
 	(void)0;
+
+	/* These variants are unusual enough to warrant a warning. */
+	/* expect+1: warning: expression has null effect [129] */
+	(void)0U;
+	/* expect+1: warning: expression has null effect [129] */
+	(void)0L;
 
 	/*
 	 * At the point where lint checks for expressions having a null
@@ -159,6 +168,8 @@ legitimate_use_cases(int arg)
 	/* Double casts are unusual enough to warrant a warning. */
 	/* expect+1: warning: expression has null effect [129] */
 	(void)(void)0;
+
+	*(const volatile char *)ptr;
 }
 
 int

@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.218 2026/03/29 03:24:56 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.222 2026/11/14 22:40:15 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1980, 1990, 1993
@@ -99,6 +99,8 @@
 #include "audio.h"
 #include "ksyms.h"
 
+#include <m68k/m68k/locore_data.s>
+
 #define MMUADDR(ar)	movl	_C_LABEL(MMUbase),ar
 #define CLKADDR(ar)	movl	_C_LABEL(CLKbase),ar
 
@@ -117,16 +119,6 @@ GLOBAL(kernel_text)
  * a VA for it and map it later.
  */
 	.fill	PAGE_SIZE/4,4,0
-
-/*
- * Temporary stack for a variety of purposes.
- * Try and make this the first thing is the data segment so it
- * is page aligned.  Note that if we overflow here, we run into
- * our text segment.
- */
-	.data
-	.space	PAGE_SIZE
-ASGLOBAL(tmpstk)
 
 /*
  * Macro to relocate a symbol, used before MMU is enabled.
@@ -166,7 +158,7 @@ BSS(esym,4)
 ASENTRY_NOPROFILE(start)
 	movw	#PSL_HIGHIPL,%sr	| no interrupts
 	ASRELOC(tmpstk, %a0)
-	movl	%a0,%sp			| give ourselves a temporary stack
+	INIT_KSP(%a0)			| give ourselves a temporary stack
 	RELOC(esym, %a0)
 	movl	%a4,%a0@		| store end of symbol table
 	RELOC(lowram, %a0)
@@ -493,13 +485,13 @@ Lmmutramp_end:
  * Should be running mapped from this point on
  */
 Lmmuenabled:
-	lea	_ASM_LABEL(tmpstk),%sp	| re-load the temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 	jbsr	_C_LABEL(vec_init)	| initialize the vector table
 
 	/* phase 2 of pmap setup, returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(pmap_bootstrap2)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	movl	%d7,%sp@-		| push nextpa saved above
 	jbsr	_C_LABEL(machine_init)	| additional pre-main initialization
@@ -529,8 +521,7 @@ Lmmuenabled:
 	movel	%d1,EVCNT_COUNTER(ipl)
 
 ENTRY_NOPROFILE(lev6intr)	/* level 6: clock */
-	addql	#1,_C_LABEL(intr_depth)	| entering interrupt
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	CLKADDR(%a0)
 	movb	%a0@(CLKSR),%d0		| read clock status
 Lclkagain:
@@ -597,9 +588,7 @@ Lrecheck:
 					    |  in case the audio device
 					    |  generated the interrupt
 #endif
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)	| exiting from interrupt
-	jra	_ASM_LABEL(rei)		| all done
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev7intr)	/* level 7: parity errors, reset key */
 	clrl	%sp@-
@@ -610,9 +599,10 @@ ENTRY_NOPROFILE(lev7intr)	/* level 7: parity errors, reset key */
 	jbsr	_C_LABEL(nmihand)	| call handler
 	movl	%sp@(FR_SP),%a0		| restore
 	movl	%a0,%usp		|   user SP
+	CHECK_ASTPENDING(%a0)		| check for AST
 	moveml	%sp@+,#0x7FFF		| and remaining registers
 	addql	#8,%sp			| pop SP and stack adjust
-	jra	_ASM_LABEL(rei)		| all done
+	RTE_AST
 
 ENTRY(ecacheon)
 	tstl	_C_LABEL(ectype)

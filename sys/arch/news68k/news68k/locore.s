@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.118 2026/04/28 03:29:10 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.123 2026/11/14 22:40:15 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -57,15 +57,7 @@
 
 #include "ksyms.h"
 
-/*
- * Temporary stack for a variety of purposes.
- * Try and make this the first thing is the data segment so it
- * is page aligned.  Note that if we overflow here, we run into
- * our text segment.
- */
-	.data
-	.space	PAGE_SIZE
-ASGLOBAL(tmpstk)
+#include <m68k/m68k/locore_data.s>
 
 ASLOCAL(monitor)
 	.long	0
@@ -120,15 +112,24 @@ ASENTRY_NOPROFILE(start)
 	movw	#PSL_HIGHIPL,%sr	| no interrupts
 
 	movl	#0x0, %a5		| RAM starts at 0 (%a5)
-	movl	#0x0, %a6		| clear %fp to terminate debug trace
+
+	ASRELOC(tmpstk,%a0)
+	INIT_KSP(%a0)			| give ourselves a temporary stack
+
+	/*
+	 * We've linked the kernel at 0x2000 so that the first
+	 * virtual page can remain unmapped.  We use those pages
+	 * of RAM for LWP0's u-area.
+	 */
+	RELOC(kernel_text,%a1)		| %a1 = phys address of kernel_text
+	subl	#USPACE,%a1		| %a1 -= USPACE
+	RELOC(lwp0upa,%a0)
+	movl	%a1,%a0@
 
 	RELOC(bootdev,%a0)
 	movl	%d6, %a0@		| save bootdev
 	RELOC(boothowto,%a0)
 	movl	%d7, %a0@		| save boothowto
-
-	ASRELOC(tmpstk,%a0)
-	movl	%a0,%sp			| give ourselves a temporary stack
 
 	movc %vbr,%a0
 	movl %a0@(188),_ASM_LABEL(monitor)| save trap #15 to return PROM monitor
@@ -348,13 +349,13 @@ Lstart2:
  * Should be running mapped from this point on
  */
 Lmmuenabled:
-	lea	_ASM_LABEL(tmpstk),%sp	| re-load temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 	jbsr	_C_LABEL(vec_init)	| initialize vector table
 
 	/* phase 2 of pmap setup, returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(pmap_bootstrap2)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	movl	%d7,%sp@-		| push nextpa saved above
 	jbsr	_C_LABEL(machine_init)	| additional pre-main initialization
@@ -366,47 +367,36 @@ Lmmuenabled:
  */
 
 ENTRY_NOPROFILE(lev1intr)		/* Level 1: AST interrupt */
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	CPUINFO_INCREMENT(CI_NINTR)
 	addql	#1,_C_LABEL(m68k_intr_evcnt)+AST_INTRCNT
 	movl	_C_LABEL(ctrl_ast),%a0
 	clrb	%a0@			| disable AST interrupt
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		| handle AST
+	_INTR_DEPTH_DECR
+	_INTERRUPT_RESTOREREG
+	jra	_ASM_LABEL(rte_ast)	| handle AST
 
 #ifdef notyet
 ENTRY_NOPROFILE(_softintr)		/* Level 2: software interrupt */
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(softintr_dispatch)
-	INTERRUPT_RESTOREREG
-	rte
+	INTERRUPT_EXIT
 #endif
 
 ENTRY_NOPROFILE(lev3intr)		/* Level 3: fd, lpt, vme etc. */
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(intrhand_lev3)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	rte
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev4intr)		/* Level 4: scsi, le, vme etc. */
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(intrhand_lev4)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	rte
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(_isr_clock)		/* Level 6: clock (see clock_hb.c) */
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(clock_intr)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	rte
+	INTERRUPT_EXIT
 
 #if 0
 ENTRY_NOPROFILE(lev7intr)		/* Level 7: NMI */

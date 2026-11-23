@@ -1,4 +1,4 @@
-/*	$NetBSD: mmu_subr.s,v 1.6 2026/03/26 11:53:51 thorpej Exp $	*/
+/*	$NetBSD: mmu_subr.s,v 1.8 2026/11/20 17:20:47 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2023, 2025 The NetBSD Foundation, Inc.
@@ -118,14 +118,14 @@ ENTRY_NOPROFILE(mmu_load_urp51)
 	movl	%sp@(4),%d0		| get root table PA argument
 	lea	_C_LABEL(protorp),%a0	| CRP prototype
 	movl	%d0,%a0@(4)		| set new root table PA
-	pflusha				| flush ATC
+	pflush	#FC_USERD,#4		| flush USER ATC entries
 	pmove	%a0@,%crp		| load CRP register
 #ifdef __HAVE_M68K_DYNAMIC_CACR
 	movl	_C_LABEL(cacr_cache_clr),%d0
 #else
 	movl	#CACHE_CLR,%d0
 #endif
-	movc	%d0,%cacr		| invalidate caches
+	movc	%d0,%cacr		| invalidate on-chip caches
 	rts
 
 #ifdef M68030
@@ -192,16 +192,11 @@ ENTRY_NOPROFILE(mmu_load_tt40)
 #if defined(M68K_MMU_HP)
 ENTRY_NOPROFILE(mmu_load_urp20hp)
 	movl	#CACHE_CLR,%d0
-	movc	%d0,%cacr		| invalidate caches
-	movl	_C_LABEL(MMUbase),%a0
-	movl	%a0@(MMUTBINVAL),%d1	| invalidate TLB
-	tstl	_C_LABEL(ectype)	| have an external VAC?
-	jle	1f			| no, skip
-	andl	#~MMU_CEN,%a0@(MMUCMD)	| toggle cache enable
-	orl	#MMU_CEN,%a0@(MMUCMD)	| to clear data cache
-1:	movl	%sp@(4),%d0		| get root table PA argument
+	movc	%d0,%cacr		| invalidate on-chip caches
+	movl	%sp@(4),%d0		| get root table PA argument
 	moveq	#PGSHIFT,%d1
 	lsrl	%d1,%d0			| convert to page frame number
+	movl	_C_LABEL(MMUbase),%a0
 	movl	%d0,%a0@(MMUUSTP)	| load to USTP register
 	rts
 #endif /* M68K_MMU_HP */
