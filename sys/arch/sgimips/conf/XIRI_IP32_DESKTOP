@@ -1,0 +1,12 @@
+# O2 R10000 Xiri desktop with a framed CRIME/GBE console.
+include "arch/sgimips/conf/GENERIC64_IP3x"
+ident "XIRI_IP32_DESKTOP"
+makeoptions DEBUG="-g"
+makeoptions COPY_SYMTAB=1
+options CRMFB_FRAME
+options FONT_VT220L8x16
+no options WS_KERNEL_FG
+options WS_KERNEL_FG=WSCOL_WHITE
+options MODULAR
+no config netbsd
+config netbsd root on sd0a type ffs

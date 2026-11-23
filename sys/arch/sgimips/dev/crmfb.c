@@ -62,6 +62,9 @@ __KERNEL_RCSID(0, "$NetBSD: crmfb.c,v 1.50 2023/12/20 15:29:07 thorpej Exp $");
 #include <arch/sgimips/dev/crmfbreg.h>
 
 #include "opt_crmfb.h"
+#ifdef CRMFB_FRAME
+#include <sgimips/gio/newport_frame.h>
+#endif
 
 #ifdef CRMFB_DEBUG
 #define DPRINTF printf
@@ -147,6 +150,9 @@ struct crmfb_softc {
 	int			sc_height;
 	int			sc_depth;
 	int			sc_console_depth;
+#ifdef CRMFB_FRAME
+	bool			sc_framed;
+#endif
 	int			sc_tiles_x, sc_tiles_y;
 	uint32_t		sc_fbsize;
 	int			sc_mte_direction;
@@ -187,6 +193,9 @@ static int	crmfb_wait_dma_idle(struct crmfb_softc *);
 
 /* setup video hw in given colour depth */
 static int	crmfb_setup_video(struct crmfb_softc *, int);
+#ifdef CRMFB_FRAME
+static void	crmfb_paint_frame(struct crmfb_softc *);
+#endif
 static void	crmfb_setup_palette(struct crmfb_softc *);
 
 static void crmfb_fill_rect(struct crmfb_softc *, int, int, int, int, uint32_t);
@@ -253,6 +262,7 @@ crmfb_attach(device_t parent, device_t self, void *opaque)
 	unsigned long v;
 	long defattr;
 	const char *consdev;
+	bool console;
 	const char *modestr;
 	struct videomode mode, *pmode;
 	int rv, i;
@@ -315,6 +325,16 @@ crmfb_attach(device_t parent, device_t self, void *opaque)
 	if (pmode != NULL && crmfb_set_mode(sc, pmode))
 		aprint_normal_dev(sc->sc_dev, "using %dx%d\n",
 		    sc->sc_width, sc->sc_height);
+
+	consdev = arcbios_GetEnvironmentVariable("ConsoleOut");
+	console = consdev != NULL && strcmp(consdev, "video()") == 0;
+#ifdef CRMFB_FRAME
+	sc->sc_framed = console &&
+	    sc->sc_width == 2 * NEWPORT_FRAME_TEXT_X + NEWPORT_FRAME_TEXT_WIDTH &&
+	    sc->sc_height == NEWPORT_FRAME_HEIGHT;
+	if (sc->sc_framed)
+		sc->sc_console_depth = 32;
+#endif
 
 	/*
 	 * first determine how many tiles we need
@@ -400,11 +420,15 @@ crmfb_attach(device_t parent, device_t self, void *opaque)
 	crmfb_defaultscreen.modecookie = NULL;
 
 	crmfb_setup_palette(sc);
-	crmfb_fill_rect(sc, 0, 0, sc->sc_width, sc->sc_height,
-	    ri->ri_devcmap[(defattr >> 16) & 0xff]);
+#ifdef CRMFB_FRAME
+	if (sc->sc_framed)
+		crmfb_paint_frame(sc);
+	else
+#endif
+		crmfb_fill_rect(sc, 0, 0, sc->sc_width, sc->sc_height,
+		    ri->ri_devcmap[(defattr >> 16) & 0xff]);
 
-	consdev = arcbios_GetEnvironmentVariable("ConsoleOut");
-	if (consdev != NULL && strcmp(consdev, "video()") == 0) {
+	if (console) {
 		wsdisplay_cnattach(&crmfb_defaultscreen, ri, 0, 0, defattr);
 		vcons_replay_msgbuf(&crmfb_console_screen);
 		aa.console = 1;
@@ -481,6 +505,10 @@ crmfb_ioctl(void *v, void *vs, u_long cmd, void *data, int flag, struct lwp *l)
 			if (nmode == WSDISPLAYIO_MODE_EMUL) {
 				crmfb_setup_video(sc, sc->sc_console_depth);
 				crmfb_setup_palette(sc);
+#ifdef CRMFB_FRAME
+				if (sc->sc_framed)
+					crmfb_paint_frame(sc);
+#endif
 				vcons_redraw_screen(vd->active);
 			} else {
 				crmfb_setup_video(sc, 32);
@@ -601,6 +629,29 @@ crmfb_mmap(void *v, void *vs, off_t offset, int prot)
 	return -1;
 }
 
+#ifdef CRMFB_FRAME
+static uint32_t
+crmfb_frame_colour(unsigned index)
+{
+	const uint8_t *rgb = newport_frame_cmap[index];
+
+	return ((uint32_t)rgb[0] << 24) | ((uint32_t)rgb[1] << 16) |
+	    ((uint32_t)rgb[2] << 8);
+}
+
+static void
+crmfb_paint_frame(struct crmfb_softc *sc)
+{
+	for (size_t i = 0; i < __arraycount(newport_frame_rects); i++) {
+		const struct newport_frame_rect *r = &newport_frame_rects[i];
+		if (r->x < sc->sc_width)
+			crmfb_fill_rect(sc, r->x, r->y,
+			    MIN(r->width, sc->sc_width - r->x), r->height,
+			    crmfb_frame_colour(r->colour));
+	}
+}
+#endif
+
 static void
 crmfb_init_screen(void *c, struct vcons_screen *scr, int existing,
     long *defattr)
@@ -640,10 +691,25 @@ crmfb_init_screen(void *c, struct vcons_screen *scr, int existing,
 
 	ri->ri_bits = NULL;
 
-	rasops_init(ri, 0, 0);
+#ifdef CRMFB_FRAME
+	if (sc->sc_framed) {
+		/* The artwork's cell grid uses a fixed bitmap console font. */
+		scr->scr_flags &= ~VCONS_LOADFONT;
+		ri->ri_flg &= ~(RI_FULLCLEAR | RI_ENABLE_ALPHA | RI_PREFER_ALPHA);
+		ri->ri_rpos = 24;
+		ri->ri_bpos = 8;
+		rasops_init(ri, 0, ri->ri_width / 8);
+		rasops_reconfig(ri, NEWPORT_FRAME_TEXT_HEIGHT / ri->ri_font->fontheight,
+		    NEWPORT_FRAME_TEXT_WIDTH / ri->ri_font->fontwidth);
+		ri->ri_devcmap[0] = crmfb_frame_colour(NEWPORT_FRAME_PANEL);
+	} else
+#endif
+	{
+		rasops_init(ri, 0, 0);
+		rasops_reconfig(ri, ri->ri_height / ri->ri_font->fontheight,
+		    ri->ri_width / ri->ri_font->fontwidth);
+	}
 	ri->ri_caps = WSSCREEN_WSCOLORS | WSSCREEN_RESIZE;
-	rasops_reconfig(ri, ri->ri_height / ri->ri_font->fontheight,
-	    ri->ri_width / ri->ri_font->fontwidth);
 	ri->ri_hw = scr;
 
 	ri->ri_ops.cursor    = crmfb_cursor;
@@ -1202,6 +1268,11 @@ crmfb_setup_palette(struct crmfb_softc *sc)
 		    (sc->sc_de_mode & ~DE_MODE_TYPE_MASK) | DE_MODE_TYPE_RGB;
 	}
 
+#ifdef CRMFB_FRAME
+	if (sc->sc_framed)
+		return;	/* The framed console uses bitmap glyphs. */
+#endif
+
 	/* draw 16 character cells in 32bit RGBA for alpha blending */
 	crmfb_make_room(sc, 3);
 	crmfb_dst_mode(sc,
@@ -1395,7 +1466,7 @@ crmfb_eraserows(void *cookie, int row, int nrows, long fillattr)
 	struct vcons_screen *scr = ri->ri_hw;
 	int32_t x, y, width, height, bg;
 
-	if ((row == 0) && (nrows == ri->ri_rows)) {
+	if ((ri->ri_flg & RI_FULLCLEAR) && row == 0 && nrows == ri->ri_rows) {
 		x = y = 0;
 		width = ri->ri_width;
 		height = ri->ri_height;
@@ -1460,6 +1531,10 @@ crmfb_putchar(void *cookie, int row, int col, u_int c, long attr)
 
 	bg = ri->ri_devcmap[(attr >> 16) & 0xff];
 	fg = ri->ri_devcmap[(attr >> 24) & 0xff];
+#ifdef CRMFB_FRAME
+	if (sc->sc_framed && ((attr >> 24) & 0xff) == 0)
+		fg = 0;
+#endif
 	uc = c - font->firstchar;
 	fd = (uint8_t *)font->data + uc * ri->ri_fontscale;
 	if (c == 0x20) {
@@ -1493,7 +1568,7 @@ crmfb_putchar(void *cookie, int row, int col, u_int c, long attr)
 				    CRIME_DE_X_VERTEX_0, (x << 16) | y);
 				bus_space_write_4(sc->sc_iot, sc->sc_reh,
 				    CRIME_DE_X_VERTEX_1 | CRIME_DE_START,
-				    ((x + wi) << 16) | y);
+				    ((x + wi - 1) << 16) | y);
 				y++;
 				fd8++;
 			}
@@ -1509,7 +1584,7 @@ crmfb_putchar(void *cookie, int row, int col, u_int c, long attr)
 				    CRIME_DE_X_VERTEX_0, (x << 16) | y);
 				bus_space_write_4(sc->sc_iot, sc->sc_reh,
 				    CRIME_DE_X_VERTEX_1 | CRIME_DE_START,
-				    ((x + wi) << 16) | y);
+				    ((x + wi - 1) << 16) | y);
 				y++;
 				fd16++;
 			}

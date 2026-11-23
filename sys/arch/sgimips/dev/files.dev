@@ -46,7 +46,7 @@ file	arch/sgimips/dev/ioc3early.c		ioc3early needs-flag
 device	crmfb: wsemuldisplaydev, vcons, rasops8, rasops15, rasops16, rasops32, i2cbus, i2c_bitbang, ddc_read_edid, edid 
 attach	crmfb at mainbus
 file	arch/sgimips/dev/crmfb.c		crmfb needs-flag
-defflag	opt_crmfb.h	CRMFB_DEBUG
+defflag	opt_crmfb.h	CRMFB_DEBUG CRMFB_FRAME
 
 device	scn: tty
 attach	scn at mainbus
