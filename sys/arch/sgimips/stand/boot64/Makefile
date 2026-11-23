@@ -38,9 +38,10 @@ LINKFORMAT+=    -m elf64btsmip
 
 # IP28's firmware reserves the first three pages at physical 0x20000000.
 # Keep its bootstrap below the kernel address documented in README.IPn.
-# The existing IP30 address is unchanged and needs separate qualification.
+# Octane desktop kernels start at 0x20010000. Place their bootstrap in the
+# free memory above the PROM reservation at 0x20f00000..0x20ffffff.
 
-LOAD_ADDRESS_IP30?=	0xa800000020080000
+LOAD_ADDRESS_IP30?=	0xa800000021000000
 LOAD_ADDRESS_IP28?=	0xa800000020003000
 
 ### find out what to use for libkern
