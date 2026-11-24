@@ -1390,3 +1390,10 @@ Interpreter, o32, static-image, protection, metadata and address-limit rules
 are unchanged. The companion Xiri `build-irix-exec-subpage.py` fixtures retain
 the prior executable cases and exercise copied prefixes, a shared file-page
 alias, full-page data, BSS and malformed layouts under two identities.
+
+The exec switch records the RW segment from its native page boundary and
+includes the leading bytes in its data size. This makes the break used by
+NetBSD's VM agree with the end of the mapped ELF pages. SGI's
+`iconcatalogedit` has a 4 KiB segment at 0x10013000. Its first heap write
+at 0x10014000 previously faulted after a successful break to 0x10016000.
+The subpage fixture also writes both ends of its first new heap page.

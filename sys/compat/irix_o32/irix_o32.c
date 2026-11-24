@@ -4793,10 +4793,32 @@ irix_o32_probe(struct lwp *l, struct exec_package *epp, void *header,
 	return 0;
 }
 
+static int
+irix_o32_makecmds(struct lwp *l, struct exec_package *epp)
+{
+	vaddr_t base;
+	int error;
+
+	error = exec_elf32_makecmds(l, epp);
+	if (error)
+		return error;
+
+	/*
+	 * Some SGI executables align their data to 4 KiB on a machine
+	 * with 8 KiB pages.  obreak counts whole pages from vm_daddr.
+	 * Include the leading part of the mapped page in that count so
+	 * the first heap allocation begins at the actual end of data.
+	 */
+	base = trunc_page(epp->ep_daddr);
+	epp->ep_dsize += epp->ep_daddr - base;
+	epp->ep_daddr = base;
+	return 0;
+}
+
 static struct execsw irix_o32_execsw[] = {
 	{
 		.es_hdrsz = sizeof(Elf32_Ehdr),
-		.es_makecmds = exec_elf32_makecmds,
+		.es_makecmds = irix_o32_makecmds,
 		.u = { .elf_probe_func = irix_o32_probe },
 		.es_emul = &emul_irix_o32,
 		.es_prio = EXECSW_PRIO_ANY,
