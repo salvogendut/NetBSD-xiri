@@ -4015,6 +4015,11 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_socketpair,
 	},
+	[146] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct sys_fsync_args),
+		.sy_call = (sy_call_t *)sys_fsync,
+	},
 	[158] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_xstat_args),
@@ -4119,7 +4124,7 @@ static struct sysent irix_o32_sysent[] = {
 
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
-	[8] = "creat", [60] = "umask",
+	[8] = "creat", [60] = "umask", [146] = "fsync",
 	[81] = "getdents",
 	[205] = "getdents64",
 	[207] = "ngetdents",
@@ -4252,6 +4257,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1136: code = 136; break;
 	case 1148: code = 148; break;
 	case 1155: code = 155; break;
+	case 1146: code = 146; break;
 	case 1158: code = 158; break;
 	case 1159: code = 159; break;
 	case 1160: code = 160; break;
