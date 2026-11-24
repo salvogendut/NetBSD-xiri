@@ -341,10 +341,12 @@ mips_fpu_state_load(lwp_t *l, u_int flags)
 #endif
 
 	/*
-	 * Mask off the exception bits in the FPCSR, load the FPCSR
-	 * and stop COP1 again
+	 * Writing an unimplemented or enabled cause re-enters the trap.
+	 * Keep disabled causes visible to CFC1 after a context switch or
+	 * a software-completed operation. Enable and Cause fields are
+	 * separated by five bits in FCSR.
 	 */
-	fpcsr &= ~MIPS_FCSR_CAUSE;
+	fpcsr &= ~(MIPS_FCSR_CAUSE_E | ((fpcsr & MIPS_FCSR_ENABLES) << 5));
 	__asm volatile(
 		".set noreorder"	"\n\t"
 		".set noat"		"\n\t"

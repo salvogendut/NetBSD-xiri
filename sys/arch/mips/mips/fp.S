@@ -256,7 +256,9 @@ paired_single_op:
  * Long Fixed functions
  */
 #define	cvt_s_l		ill
+#if defined(FPEMUL) || (!defined(__mips_n32) && !defined(__mips_n64))
 #define	cvt_d_l		ill
+#endif
 #define	cvt_s_pu	ill
 
 /*
@@ -1842,6 +1844,13 @@ cvt_d_s:
 	sll	t3, t2, 32 - 3			# convert S fraction to D
 	srl	t2, t2, 3
 	b	result_fs_d
+
+#if !defined(FPEMUL) && (defined(__mips_n32) || defined(__mips_n64))
+cvt_d_l:
+	REG_L	ra, CALLFRAME_RA(sp)
+	PTR_ADDU sp, CALLFRAME_SIZ
+	j	_C_LABEL(mips_cvt_d_l)
+#endif
 
 /*
  * Convert integer to double.
