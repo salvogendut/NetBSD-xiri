@@ -90,6 +90,7 @@
 #include <sys/filedesc.h>
 #include <sys/filio.h>
 #include <sys/kauth.h>
+#include <sys/kernel.h>
 #include <sys/ktrace.h>
 #include <sys/kmem.h>
 #include <sys/mbuf.h>
@@ -551,12 +552,44 @@ out:
 	return error;
 }
 
+/* SGI_INVENT exposes whole inventory records to the two 32-bit ABIs. */
+static int
+irix_inventory(const struct irix_o32_syssgi_args *uap, register_t *rval)
+{
+	struct {
+		uint32_t next;
+		int32_t class, type, controller, unit, state;
+	} memory = {
+		.class = 3, .type = 9,	/* INV_MEMORY, INV_MAIN_MB */
+		.state = howmany((uint64_t)physmem, (1024 * 1024) / PAGE_SIZE)
+	};
+
+	CTASSERT(sizeof(memory) == 24);
+	switch (SCARG(uap, arg1)) {
+	case 1:			/* SGI_INV_SIZEOF */
+		*rval = sizeof(memory);
+		return 0;
+	case 2:			/* SGI_INV_READ */
+		if (SCARG(uap, arg3) < sizeof(memory)) {
+			*rval = 0;
+			return 0;
+		}
+		*rval = sizeof(memory);
+		return copyout(&memory, irix_pointer(SCARG(uap, arg2)),
+		    sizeof(memory));
+	default:
+		return EINVAL;
+	}
+}
+
 static int
 irix_o32_syssgi(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_syssgi_args * const uap = args;
 
 	switch (SCARG(uap, request)) {
+	case 5: /* SGI_INVENT */
+		return irix_inventory(uap, rval);
 	case 109: { /* SGI_FDHI: one beyond the highest currently open fd. */
 		filedesc_t *fdp = l->l_proc->p_fd;
 
@@ -1832,16 +1865,128 @@ struct irix_o32_sysmp_args {
 	syscallarg(uint32_t) arg4;
 };
 
+enum {
+	IRIX_MP_NPROCS = 1, IRIX_MP_NAPROCS = 2,
+	IRIX_MP_SASZ = 9, IRIX_MP_SAGET = 10, IRIX_MP_PGSIZE = 14,
+	IRIX_MP_SAGET1 = 15,
+	IRIX_MPSA_SINFO = 1, IRIX_MPSA_RMINFO = 8
+};
+
+/* The same 32-bit word layouts are used by o32 and n32. */
+struct irix_sysinfo {
+	uint32_t cpu[6];		/* idle, user, kernel, wait, sxbrk, intr */
+	uint32_t wait[5];
+	uint32_t other[59];
+};
+
+struct irix_rminfo {
+	uint32_t freemem, availsmem, availrmem, bufmem, physmem;
+	uint32_t dchunkpages, pmapmem, strmem, chunkpages, dpages;
+	uint32_t emptymem, ravailrmem;
+};
+CTASSERT(sizeof(struct irix_sysinfo) == 280);
+CTASSERT(sizeof(struct irix_rminfo) == 48);
+
+static void
+irix_sysmp_cpu(struct irix_sysinfo *si, int cpuid)
+{
+	CPU_INFO_ITERATOR cii;
+	struct cpu_info *ci;
+	uint64_t ticks[CPUSTATES] = { 0 };
+	const unsigned int rate = stathz ? stathz : hz;
+
+	for (CPU_INFO_FOREACH(cii, ci)) {
+		if (cpuid >= 0 && cpu_index(ci) != (unsigned int)cpuid)
+			continue;
+		for (int i = 0; i < CPUSTATES; i++)
+			ticks[i] += ci->ci_schedstate.spc_cp_time[i];
+	}
+	/* IRIX exports cumulative ticks at 100 Hz and wraps at 32 bits. */
+	si->cpu[0] = ticks[CP_IDLE] * 100 / rate;
+	si->cpu[1] = (ticks[CP_USER] + ticks[CP_NICE]) * 100 / rate;
+	si->cpu[2] = ticks[CP_SYS] * 100 / rate;
+	si->cpu[5] = ticks[CP_INTR] * 100 / rate;
+}
+
+static void
+irix_sysmp_memory(struct irix_rminfo *rm)
+{
+	/* NetBSD reports these counters in native pages, as does MP_PGSIZE. */
+	const int freepages = uvm_availmem(true);
+	const int64_t dirty = cpu_count_get(CPU_COUNT_FILEDIRTY);
+	const int64_t files = cpu_count_get(CPU_COUNT_FILECLEAN) + dirty +
+	    cpu_count_get(CPU_COUNT_FILEUNKNOWN);
+
+	rm->physmem = physmem;
+	rm->freemem = rm->emptymem = MIN((uint32_t)freepages, rm->physmem);
+	rm->availrmem = MIN(rm->physmem, (uint32_t)MAX(freepages,
+	    uvmexp.npages - uvmexp.wired));
+	rm->ravailrmem = rm->availrmem;
+	rm->availsmem = MIN((uint64_t)UINT32_MAX, (uint64_t)rm->availrmem +
+	    MAX(0, uvmexp.swpages - uvmexp.swpginuse));
+	rm->chunkpages = MIN(MAX(INT64_C(0), files),
+	    rm->availrmem - rm->freemem);
+	rm->dchunkpages = MIN(MAX(INT64_C(0), dirty), rm->chunkpages);
+}
+
 static int
 irix_o32_sysmp(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_sysmp_args * const uap = args;
+	const int command = SCARG(uap, command), selector = SCARG(uap, arg1);
+	union {
+		struct irix_sysinfo si;
+		struct irix_rminfo rm;
+	} record = { 0 };
+	size_t size;
+	int cpuid = -1;
 
-	/* Marshal the full o32 ABI, but only implement the MP_PGSIZE query. */
-	if (SCARG(uap, command) != 14)
+	switch (command) {
+	case IRIX_MP_NPROCS:
+		*rval = ncpu;
+		return 0;
+	case IRIX_MP_NAPROCS:
+		*rval = ncpuonline;
+		return 0;
+	case IRIX_MP_PGSIZE:
+		*rval = PAGE_SIZE;
+		return 0;
+	case IRIX_MP_SASZ:
+	case IRIX_MP_SAGET:
+	case IRIX_MP_SAGET1:
+		break;
+	default:
 		return ENOSYS;
-	*rval = PAGE_SIZE;
-	return 0;
+	}
+	switch (selector) {
+	case IRIX_MPSA_SINFO:
+		size = sizeof(record.si);
+		break;
+	case IRIX_MPSA_RMINFO:
+		size = sizeof(record.rm);
+		break;
+	default:
+		return EINVAL;
+	}
+	if (command == IRIX_MP_SASZ) {
+		*rval = size;
+		return 0;
+	}
+	if (command == IRIX_MP_SAGET1) {
+		cpuid = (int32_t)SCARG(uap, arg4);
+		if (selector != IRIX_MPSA_SINFO || cpuid < 0 ||
+		    cpuid >= ncpu || cpu_lookup(cpuid) == NULL)
+			return EINVAL;
+	}
+	if ((int32_t)SCARG(uap, arg3) < 0)
+		return EFAULT;
+	if (selector == IRIX_MPSA_SINFO)
+		irix_sysmp_cpu(&record.si, cpuid);
+	else
+		irix_sysmp_memory(&record.rm);
+	*rval = 0;
+	size = MIN(size, SCARG(uap, arg3));
+	return size ? copyout(&record, irix_pointer(SCARG(uap, arg2)), size) : 0;
 }
 
 /* Stream TCP and pathname Unix sockets. Translate every foreign constant:

@@ -314,10 +314,16 @@ calls copy only the implemented argument words; saved trap number, original
 argument registers, restart PC, and branch-delay handling remain intact.
 This does not add `__syscall`, recursive dispatch, or 64-bit argument forms.
 
-`sysmp(MP_PGSIZE)` (1056, command 14) returns PAGE_SIZE. The dispatcher marshals
-its five o32 argument words, including checked stack spills, matching the
-reference's bad-stack EFAULT. Only the command is interpreted; other commands
-return ENOSYS. Native non-fixed mmap now accepts the supplied user-space hint
+The `sysmp` dispatcher (1056) marshals five IRIX argument words, including
+checked o32 stack spills. It supports page size, CPU counts and the system
+activity and real-memory queries used by xosview. `MPSA_SINFO` exports
+cumulative user, kernel, interrupt and idle time in IRIX 100 Hz units.
+`MPSA_RMINFO` exports native page counts for physical, free, available,
+swap-backed and file-cache memory. Activity fields without a native mapping
+are zero. The per-CPU query accepts the CPU record. The two 32-bit ABIs
+share the same layouts. `SGI_INVENT` exposes one main-memory record in MiB.
+
+Native non-fixed mmap now accepts the supplied user-space hint
 while preserving all previous flag, length, protection and offset checks.
 
 With unchanged IRIX 6.5.22m asa/libc/rld, the page-size query now returns 4096
