@@ -1600,6 +1600,83 @@ irix_gettimeofday(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* IRIX o32 and n32 both use four signed 32-bit interval-timer fields. */
+struct irix_itimerval {
+	int32_t interval_sec, interval_usec;
+	int32_t value_sec, value_usec;
+};
+CTASSERT(sizeof(struct irix_itimerval) == 16);
+
+struct irix_getitimer_args {
+	syscallarg(int32_t) which;
+	syscallarg(uint32_t) value;
+};
+
+struct irix_setitimer_args {
+	syscallarg(int32_t) which;
+	syscallarg(uint32_t) value;
+	syscallarg(uint32_t) oldvalue;
+};
+
+static int
+irix_timer_copyout(struct proc *p, int which, uint32_t addr)
+{
+	struct itimerval timer;
+	struct irix_itimerval wire;
+	int error;
+
+	if (which < ITIMER_REAL || which > ITIMER_PROF)
+		return EINVAL;
+	error = dogetitimer(p, which, &timer);
+	if (error != 0)
+		return error;
+	wire.interval_sec = timer.it_interval.tv_sec;
+	wire.interval_usec = timer.it_interval.tv_usec;
+	wire.value_sec = timer.it_value.tv_sec;
+	wire.value_usec = timer.it_value.tv_usec;
+	return copyout(&wire, irix_pointer(addr), sizeof(wire));
+}
+
+static int
+irix_getitimer(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_getitimer_args *uap = args;
+
+	*rval = 0;
+	return irix_timer_copyout(l->l_proc, SCARG(uap, which),
+	    SCARG(uap, value));
+}
+
+static int
+irix_setitimer(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_setitimer_args *uap = args;
+	const int which = SCARG(uap, which);
+	struct irix_itimerval wire;
+	struct itimerval timer;
+	int error;
+
+	if (which < ITIMER_REAL || which > ITIMER_PROF)
+		return EINVAL;
+	error = copyin(irix_pointer(SCARG(uap, value)), &wire, sizeof(wire));
+	if (error != 0)
+		return error;
+	timer.it_interval.tv_sec = wire.interval_sec;
+	timer.it_interval.tv_usec = wire.interval_usec;
+	timer.it_value.tv_sec = wire.value_sec;
+	timer.it_value.tv_usec = wire.value_usec;
+	if (SCARG(uap, oldvalue) != 0) {
+		/* IRIX validates the new time before writing the old value. */
+		if (itimerfix(&timer.it_value) || itimerfix(&timer.it_interval))
+			return EINVAL;
+		error = irix_timer_copyout(l->l_proc, which, SCARG(uap, oldvalue));
+		if (error != 0)
+			return error;
+	}
+	*rval = 0;
+	return dosetitimer(l->l_proc, which, &timer);
+}
+
 /* Both supported IRIX ABIs use 32-bit fd-mask words and timeval fields. */
 struct irix_select_args {
 	syscallarg(int32_t) nd;
@@ -4257,6 +4334,18 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_waitsys,
 	},
+	[125] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_getitimer_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_getitimer,
+	},
+	[126] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_setitimer_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_setitimer,
+	},
 	[128] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_gettimeofday_args),
@@ -4321,6 +4410,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[39] = "pgrpsys", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
 	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [178] = "lchown", [128] = "gettimeofday",
+	[125] = "getitimer", [126] = "setitimer",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
@@ -4431,6 +4521,8 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1108: code = 108; break;
 	case 1114: code = 114; break;
 	case 1116: code = 116; break;
+	case 1125: code = 125; break;
+	case 1126: code = 126; break;
 	case 1128: code = 128; break;
 	case 1129: code = 129; break;
 	case 1130: code = 130; break;
