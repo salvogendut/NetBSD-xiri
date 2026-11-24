@@ -661,8 +661,8 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	const struct irix_o32_open_args * const uap = args;
 	struct sys_open_args native = { 0 };
 	const uint32_t flags = SCARG(uap, flags);
-	const uint32_t supported = 3 | 0x4 | 0x8 | 0x80 | 0x100 | 0x200 |
-	    0x400 | 0x800;
+	const uint32_t supported = 3 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 |
+	    0x80 | 0x100 | 0x200 | 0x400 | 0x800;
 	int converted, error;
 
 	if ((flags & ~supported) != 0 || (flags & 3) == 3)
@@ -674,6 +674,12 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	 * I/O error behavior rather than introducing a second file flag. */
 	if (flags & (0x4 | 0x80))
 		converted |= O_NONBLOCK;
+	if (flags & 0x10)
+		converted |= O_SYNC;
+	if (flags & 0x20)
+		converted |= O_DSYNC;
+	if (flags & 0x40)
+		converted |= O_RSYNC;
 	if (flags & 0x100)
 		converted |= O_CREAT;
 	if (flags & 0x200)
@@ -689,6 +695,23 @@ irix_o32_open(struct lwp *l, const void *args, register_t *rval)
 	if (error == 0)
 		irix_tty_open(l, *rval, converted);
 	return error;
+}
+
+struct irix_creat_args {
+	syscallarg(uint32_t) path;
+	syscallarg(uint32_t) mode;
+};
+
+static int
+irix_creat(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_creat_args *uap = args;
+	struct irix_o32_open_args open = { 0 };
+
+	SCARG(&open, path) = SCARG(uap, path);
+	SCARG(&open, flags) = 0x301;	/* O_WRONLY | O_CREAT | O_TRUNC */
+	SCARG(&open, mode) = SCARG(uap, mode);
+	return irix_o32_open(l, &open, rval);
 }
 
 /* Rename uses explicit foreign pointers and native POSIX vnode semantics.
@@ -3771,6 +3794,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_open,
 	},
+	[8] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_creat_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_creat,
+	},
 	[6] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct sys_close_args),
@@ -3831,6 +3860,11 @@ static struct sysent irix_o32_sysent[] = {
 	/* IRIX pipe has no kernel arguments and returns both fds in v0/v1.
 	 * Native allocation owns limits, rollback and descriptor lifetime. */
 	[42] = { .sy_call = sys_pipe },
+	[60] = {
+		.sy_narg = 1,
+		.sy_argsize = sizeof(struct sys_umask_args),
+		.sy_call = (sy_call_t *)sys_umask,
+	},
 	[59] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_execve_args),
@@ -4085,6 +4119,7 @@ static struct sysent irix_o32_sysent[] = {
 
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
+	[8] = "creat", [60] = "umask",
 	[81] = "getdents",
 	[205] = "getdents64",
 	[207] = "ngetdents",
@@ -4156,6 +4191,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1004: code = 4; break;
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
+	case 1008: code = 8; break;
 	case 1010: code = 10; break;
 	case 1115: code = 115; break;
 	case 1235: code = 235; break;
@@ -4177,6 +4213,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1054: code = 54; break;
 	case 1056: code = 56; break;
 	case 1059: code = 59; break;
+	case 1060: code = 60; break;
 	case 1062: code = 62; break;
 	case 1063: code = 63; break;
 	case 1075: code = 75; break;
