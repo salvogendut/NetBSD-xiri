@@ -1198,6 +1198,18 @@ irix_chown(struct lwp *l, const void *args, register_t *rval)
 	return sys___posix_chown(l, &native, rval);
 }
 
+static int
+irix_lchown(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_chown_args *uap = args;
+	struct sys___posix_lchown_args native = { 0 };
+
+	SCARG(&native, path) = irix_pointer(SCARG(uap, path));
+	SCARG(&native, uid) = SCARG(uap, uid);
+	SCARG(&native, gid) = SCARG(uap, gid);
+	return sys___posix_lchown(l, &native, rval);
+}
+
 struct irix_access_args {
 	syscallarg(uint32_t) path;
 	syscallarg(int32_t) mode;
@@ -4056,6 +4068,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_fstatvfs,
 	},
+	[178] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_chown_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_lchown,
+	},
 	[201] = {
 		.sy_narg = 2,
 		.sy_argsize = sizeof(struct irix_statvfs_args),
@@ -4137,7 +4155,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[5] = "open", [6] = "close", [12] = "chdir", [17] = "break", [24] = "getuid",
 	[39] = "pgrpsys", [40] = "syssgi",
 	[33] = "access", [41] = "dup", [42] = "pipe", [59] = "execve", [63] = "ulimit",
-	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [128] = "gettimeofday",
+	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [178] = "lchown", [128] = "gettimeofday",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
@@ -4265,6 +4283,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1164: code = 164; break;
 	case 1174: code = 174; break;
 	case 1175: code = 175; break;
+	case 1178: code = 178; break;
 	case 1201: code = 201; break;
 	case 1202: code = 202; break;
 	case 1170: code = 170; break;
