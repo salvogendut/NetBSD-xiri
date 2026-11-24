@@ -714,18 +714,32 @@ irix_creat(struct lwp *l, const void *args, register_t *rval)
 	return irix_o32_open(l, &open, rval);
 }
 
-/* Rename uses explicit foreign pointers and native POSIX vnode semantics.
- * Preserve both hard-link names when they already identify the same file;
- * native lookup owns emulation-root selection, permissions and atomicity. */
-struct irix_rename_args {
+struct irix_two_paths_args {
 	syscallarg(uint32_t) from;
 	syscallarg(uint32_t) to;
 };
 
 static int
+irix_link(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_two_paths_args *uap = args;
+	int error;
+
+	/* SGI link() links a source symlink itself, including a dangling one. */
+	error = do_sys_linkat(l, AT_FDCWD, irix_pointer(SCARG(uap, from)),
+	    AT_FDCWD, irix_pointer(SCARG(uap, to)), 0, rval);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+/* Rename uses explicit foreign pointers and native POSIX vnode semantics.
+ * Preserve both hard-link names when they already identify the same file;
+ * native lookup owns emulation-root selection, permissions and atomicity. */
+static int
 irix_rename(struct lwp *l, const void *args, register_t *rval)
 {
-	const struct irix_rename_args *uap = args;
+	const struct irix_two_paths_args *uap = args;
 	char from[MAXPATHLEN], to[MAXPATHLEN];
 	size_t fromlen, tolen;
 	int error;
@@ -3817,6 +3831,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct sys_close_args),
 		.sy_call = (sy_call_t *)sys_close,
 	},
+	[9] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_two_paths_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_link,
+	},
 	[10] = {
 		.sy_narg = 1,
 		.sy_argsize = sizeof(struct irix_remove_args),
@@ -4005,7 +4025,7 @@ static struct sysent irix_o32_sysent[] = {
 	},
 	[114] = {
 		.sy_narg = 2,
-		.sy_argsize = sizeof(struct irix_rename_args),
+		.sy_argsize = sizeof(struct irix_two_paths_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_rename,
 	},
@@ -4142,7 +4162,7 @@ static struct sysent irix_o32_sysent[] = {
 
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
-	[8] = "creat", [60] = "umask", [146] = "fsync",
+	[8] = "creat", [9] = "link", [60] = "umask", [146] = "fsync",
 	[81] = "getdents",
 	[205] = "getdents64",
 	[207] = "ngetdents",
@@ -4215,6 +4235,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1005: code = 5; break;
 	case 1006: code = 6; break;
 	case 1008: code = 8; break;
+	case 1009: code = 9; break;
 	case 1010: code = 10; break;
 	case 1115: code = 115; break;
 	case 1235: code = 235; break;

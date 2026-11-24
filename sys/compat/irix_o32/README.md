@@ -1230,6 +1230,15 @@ access, automatic acquisition, O_NOCTTY and foreground/session ownership
 against independent probes on the original installation.
 
 
+## Hard links
+
+IRIX trap 1009 (`link`) takes two 32-bit pathname pointers in both o32 and
+n32. It uses native `do_sys_linkat` with source symlink following disabled,
+as required by SGI's distinction between `link` and `linkfollow`. NetBSD
+performs both pathname lookups, permission checks and the filesystem link
+operation. The module returns zero on success. SGI's timezone compiler uses
+this call to give one compiled zone multiple names.
+
 ## Measured pathname rename
 
 Trap 1114 now uses native POSIX rename with explicit 32-bit pathname pointers.
