@@ -70,6 +70,11 @@ LDADD.${_SL}=	${LIBDIR.${_SL}}/lib${_SL:T}.a
 DPADD.${_SL}=	${LIBDIR.${_SL}}/lib${_SL:T}.a
 .endfor
 
+.if ${MACHINE} == "sgimips"
+LDADD.glx+=	-lglapi
+DPADD.glx+=	${DESTDIR}${X11USRLIBDIR}/libglapi.so
+.endif
+
 LDADD.XORG_CORE=	${LDADD.dix} ${LDADD.config}
 DPADD.XORG_CORE=	${DPADD.dix} ${DPADD.config}
 

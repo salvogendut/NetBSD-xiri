@@ -10,9 +10,6 @@ SRCS.glx= \
         indirect_reqsize.c \
         indirect_size_get.c \
         indirect_table.c \
-        glapi.c \
-        glapi_gentable.c \
-        glthread.c \
         glxdri.c \
         glxdri2.c \
         extension_string.c \
@@ -37,6 +34,31 @@ SRCS.glx= \
         singlesize.c \
         swap_interval.c \
         xfont.c
+
+# Mesa's DRI driver reads context and dispatch from shared libglapi TLS.
+.if ${MACHINE} == "sgimips"
+CPPFLAGS+=	-DGLX_USE_TLS -DTLS=__thread -DIN_DRI_DRIVER
+# Use the old generator's remap path for functions outside the fixed GL ABI.
+CPPFLAGS+=	-DdriDispatchRemapTable=xorgGlxDispatchRemapTable
+.if defined(XMODULEDIR)
+LDADD+=		-lglapi
+DPADD+=		${DESTDIR}${X11USRLIBDIR}/libglapi.so
+.endif
+GLXDIR=		${X11SRCDIR.xorg-server}/glx
+GLXSRCS:=	${SRCS.glx:@src@${GLXDIR}/${src}@}
+GLXOFFSETS=	${GLXDIR}/dispatch.h ${GLXDIR}/glapioffsets.h
+GLXMAP=		${X11SRCDIR.Mesa}/../src/mapi/shared-glapi_glapi_mapi_tmp.h
+GLXMAPAWK=	${NETBSDSRCDIR}/external/mit/xorg/server/xorg-server.old/glx/glx-remap.awk
+SRCS.glx+=	glx-remap.c
+CLEANFILES+=	glx-remap.c glx-remap.c.tmp
+
+glx-remap.c: ${GLXMAPAWK} ${GLXMAP} ${GLXOFFSETS} ${GLXSRCS}
+	${_MKTARGET_CREATE}
+	${TOOL_AWK} -f ${GLXMAPAWK} ${GLXMAP} ${GLXOFFSETS} ${GLXSRCS} > ${.TARGET}.tmp
+	mv ${.TARGET}.tmp ${.TARGET}
+.else
+SRCS.glx+=	glapi.c glapi_gentable.c glthread.c
+.endif
 
 COPTS.glxcmds.c=		-Wno-error
 COPTS.indirect_dispatch.c=	-Wno-error
