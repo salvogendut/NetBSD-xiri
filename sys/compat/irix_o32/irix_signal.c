@@ -90,6 +90,91 @@ word_to_mask(uint32_t word, sigset_t *set)
 	}
 }
 
+/* Both 32-bit IRIX ABIs use a 128-byte signal-information record. */
+static void
+irix_put_siginfo(uint8_t *out, unsigned signo, const struct _ksiginfo *info)
+{
+	const int code = info->_code;
+
+	put32(out, 0, signo);
+	if (code == SI_USER) {
+		put32(out, 12, info->_reason._child._pid);
+		put32(out, 16, info->_reason._child._uid);
+	} else if (signo == 18) {
+		put32(out, 4, code);
+		put32(out, 12, info->_reason._child._pid);
+		unsigned status = info->_reason._child._status;
+		put32(out, 20, code == CLD_EXITED ? status : foreign_signal(status));
+	} else if (code > 0 && code != SI_NOINFO) {
+		put32(out, 4, code);
+		put32(out, 12, (uintptr_t)info->_reason._fault._addr);
+	}
+}
+
+static int
+irix_fetch_waitset(const void *user, void *dest, size_t len)
+{
+	uint32_t words[4];
+	sigset_t *set = dest;
+	int error = copyin(user, words, sizeof(words));
+
+	if (error != 0)
+		return error;
+	sigemptyset(set);
+	word_to_mask(words[0], set);
+	return 0;
+}
+
+static int
+irix_fetch_wait_timeout(const void *user, void *dest, size_t len)
+{
+	int32_t interval[2];
+	struct timespec *ts = dest;
+	int error = copyin(user, interval, sizeof(interval));
+
+	if (error == 0) {
+		ts->tv_sec = interval[0];
+		ts->tv_nsec = interval[1];
+	}
+	return error;
+}
+
+static int
+irix_keep_wait_timeout(const void *src, void *dst, size_t len)
+{
+	/* IRIX uses an input-only timeout. */
+	return 0;
+}
+
+static int
+irix_store_waitinfo(const void *src, void *user, size_t len)
+{
+	const struct _ksiginfo *info = src;
+	uint8_t out[128] = { 0 };
+
+	irix_put_siginfo(out, foreign_signal(info->_signo), info);
+	return copyout(out, user, sizeof(out));
+}
+
+int
+irix_sigpoll(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_sigpoll_args *uap = args;
+	struct sys_____sigtimedwait50_args native;
+	int error;
+
+	if (!n32_process(l->l_proc))
+		return ENOSYS;
+	SCARG(&native, set) = ptr32(SCARG(uap, set));
+	SCARG(&native, info) = ptr32(SCARG(uap, info));
+	SCARG(&native, timeout) = ptr32(SCARG(uap, timeout));
+	error = sigtimedwait1(l, &native, rval, irix_fetch_waitset,
+	    irix_store_waitinfo, irix_fetch_wait_timeout, irix_keep_wait_timeout);
+	if (error == 0)
+		*rval = foreign_signal(*rval);
+	return error == ERESTART ? EINTR : error;
+}
+
 int
 irix_kill(struct lwp *l, const void *args, register_t *rval)
 {
@@ -264,19 +349,7 @@ irix_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 		put32(frame, 28, l->l_sigstk.ss_size);
 		put32(frame, 32, l->l_sigstk.ss_flags & SS_ONSTACK ? 1 : 2);
 		unsigned si = n32 ? 800 : 512;
-		put32(frame, si, signo);
-		if (ksi->ksi_code == SI_USER) {
-			put32(frame, si + 12, ksi->ksi_pid);
-			put32(frame, si + 16, ksi->ksi_uid);
-		} else if (signo == 18) {
-			put32(frame, si + 4, ksi->ksi_code);
-			put32(frame, si + 12, ksi->ksi_pid);
-			put32(frame, si + 20, ksi->ksi_code == CLD_EXITED ?
-			    (unsigned)ksi->ksi_status : foreign_signal(ksi->ksi_status));
-		} else if (ksi->ksi_code > 0 && ksi->ksi_code != SI_NOINFO) {
-			put32(frame, si + 4, ksi->ksi_code);
-			put32(frame, si + 12, (uintptr_t)ksi->ksi_addr);
-		}
+		irix_put_siginfo(frame + si, signo, &ksi->ksi_info);
 	}
 	sendsig_reset(l, ksi->ksi_signo);
 	mutex_exit(p->p_lock);

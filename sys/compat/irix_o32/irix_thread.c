@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <sys/proc.h>
 #include <sys/sched.h>
+#include <sys/signalvar.h>
 #include <sys/syscallargs.h>
 #include <sys/systm.h>
 #include <uvm/uvm.h>
@@ -40,9 +41,11 @@
 #include <uvm/uvm_map.h>
 #include <mips/locore.h>
 #include <mips/regnum.h>
+#include <compat/irix_o32/irix_signal.h>
 #include <compat/irix_o32/irix_sproc.h>
 
 #define NS_FLAGS 0x020000ffU
+#define PR_EVENT 0x04000000U
 #define PRDA_BYTES 4096
 #define PRDA_TID_OFFSET 0xe40
 #define IRIX_SCHED_RR 2
@@ -51,6 +54,7 @@
 struct irix_worker {
 	uint32_t prda[PRDA_BYTES / sizeof(uint32_t)];
 	uint32_t id;
+	LIST_ENTRY(irix_worker) ids;
 	unsigned int wakeups;
 	kcondvar_t cv;
 };
@@ -88,6 +92,8 @@ irix_thread_exit(struct lwp *l)
 		ip->active_worker = NULL;
 	l->l_emuldata = NULL;
 	kpreempt_enable();
+	if (t->id != 0)
+		LIST_REMOVE(t, ids);
 	mutex_exit(p->p_lock);
 	cv_destroy(&t->cv);
 	kmem_free(t, sizeof(*t));
@@ -177,7 +183,7 @@ irix_nsproc(struct lwp *l, const void *args, register_t *retval)
 	struct irix_process *ip = p->p_emuldata;
 	struct { uint32_t entry, arg, flags, sp, len; } desc;
 	struct { int32_t priority, policy; } sched;
-	struct irix_worker *t;
+	struct irix_worker *t, *next, *prev;
 	struct lwp *child;
 	vaddr_t uarea;
 	uint32_t id, pc = SCARG(uap, entry);
@@ -186,7 +192,7 @@ irix_nsproc(struct lwp *l, const void *args, register_t *retval)
 	bool initialized = ip->prda_window == 0;
 
 	if (p->p_md.md_abi != _MIPS_BSD_API_N32 || !ip->threads ||
-	    SCARG(uap, flags) != NS_FLAGS)
+	    (SCARG(uap, flags) & ~PR_EVENT) != NS_FLAGS)
 		return EOPNOTSUPP;
 	if (SCARG(uap, desc) > INT32_MAX || SCARG(uap, sched) > INT32_MAX)
 		return EFAULT;
@@ -194,7 +200,8 @@ irix_nsproc(struct lwp *l, const void *args, register_t *retval)
 	    sizeof(desc))) != 0)
 		return error;
 	if (pc == 0 || pc >= INT32_MAX || (pc & 3) != 0 ||
-	    desc.sp < 80 || desc.sp > INT32_MAX || desc.flags != NS_FLAGS)
+	    desc.sp < 80 || desc.sp > INT32_MAX ||
+	    (desc.flags != NS_FLAGS && desc.flags != SCARG(uap, flags)))
 		return EINVAL;
 	if (desc.len != 0)
 		return EOPNOTSUPP;
@@ -231,21 +238,33 @@ irix_nsproc(struct lwp *l, const void *args, register_t *retval)
 		error = ENOMEM;
 		goto free;
 	}
+	/* Reserve the lowest free ID before dropping p_lock to create the LWP. */
 	mutex_enter(p->p_lock);
-	if (ip->thread_serial == INT32_MAX) {
-		mutex_exit(p->p_lock);
-		error = EAGAIN;
-		goto free_uarea;
+	id = 1;
+	prev = NULL;
+	LIST_FOREACH(next, &ip->workers, ids) {
+		if (next->id != id)
+			break;
+		prev = next;
+		id++;
 	}
-	id = ++ip->thread_serial;
+	t->id = id;
+	if (prev == NULL)
+		LIST_INSERT_HEAD(&ip->workers, t, ids);
+	else
+		LIST_INSERT_AFTER(prev, t, ids);
 	mutex_exit(p->p_lock);
 	error = lwp_create(l, p, uarea, LWP_DETACHED, NULL, 0, irix_thread_return,
 	    NULL, &child, l->l_class, &l->l_sigmask, &l->l_sigstk);
-	if (error != 0)
-		goto free_uarea;
+	if (error != 0) {
+		mutex_enter(p->p_lock);
+		LIST_REMOVE(t, ids);
+		mutex_exit(p->p_lock);
+		uvm_uarea_free(uarea);
+		goto free;
+	}
 	/* The caller's view is installed whenever this LWP executes. */
 	memcpy(t->prda, (void *)ip->prda_window, PRDA_BYTES);
-	t->id = id;
 	t->prda[PRDA_TID_OFFSET / sizeof(uint32_t)] = id;
 	struct trapframe *tf = child->l_md.md_utf;
 	tf->tf_regs[_R_PC] = pc;
@@ -267,8 +286,6 @@ irix_nsproc(struct lwp *l, const void *args, register_t *retval)
 	lwp_start(child, 0);
 	retval[0] = id;
 	return 0;
-free_uarea:
-	uvm_uarea_free(uarea);
 free:
 	if (initialized)
 		irix_threads_release(p);
@@ -278,7 +295,8 @@ free:
 }
 
 int
-irix_thread_ctl(struct lwp *l, uint32_t cmd, uint32_t id, register_t *retval)
+irix_thread_ctl(struct lwp *l, uint32_t cmd, uint32_t id, uint32_t signo,
+    register_t *retval)
 {
 	struct proc *p = l->l_proc;
 	struct irix_worker *t = l->l_emuldata;
@@ -290,6 +308,33 @@ irix_thread_ctl(struct lwp *l, uint32_t cmd, uint32_t id, register_t *retval)
 	*retval = 0;
 	if (cmd == 1)
 		lwp_exit(l);
+	if (cmd == 4) {
+		/* Hold the target stable across ID lookup and native delivery. */
+		if (signo >= __arraycount(irix_signal_map))
+			return EOPNOTSUPP;
+		ksiginfo_t ksi;
+		KSI_INIT(&ksi);
+		ksi.ksi_signo = irix_signal_map[signo];
+		ksi.ksi_code = SI_USER;
+		ksi.ksi_pid = p->p_pid;
+		ksi.ksi_uid = kauth_cred_geteuid(l->l_cred);
+		mutex_enter(&proc_lock);
+		mutex_enter(p->p_lock);
+		error = ESRCH;
+		LIST_FOREACH(peer, &p->p_lwps, l_sibling) {
+			t = peer->l_emuldata;
+			if (t == NULL || t->id != id)
+				continue;
+			if (lwp_find(p, peer->l_lid) == NULL)
+				break;
+			ksi.ksi_lid = peer->l_lid;
+			error = signo == 0 ? 0 : kpsignal2(p, &ksi);
+			break;
+		}
+		mutex_exit(p->p_lock);
+		mutex_exit(&proc_lock);
+		return error;
+	}
 	mutex_enter(p->p_lock);
 	switch (cmd) {
 	case 2: /* PR_THREAD_BLOCK */

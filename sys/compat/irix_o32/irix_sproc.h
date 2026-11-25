@@ -23,7 +23,7 @@ struct irix_process {
 	krwlock_t maplock;	/* live with the pthread PRDA window */
 	struct irix_worker *active_worker;
 	struct irix_usync_state *usync;	/* private to this process image */
-	uint32_t thread_serial;
+	LIST_HEAD(, irix_worker) workers;	/* reserved IDs in ascending order */
 	struct irix_localset local;
 	struct irix_share *share;
 	struct irix_spawn *spawning;
@@ -48,7 +48,7 @@ struct irix_usync_args {
 int irix_usync_cntl(struct lwp *, const void *, register_t *);
 void irix_usync_release(struct irix_process *);
 int irix_nsproc(struct lwp *, const void *, register_t *);
-int irix_thread_ctl(struct lwp *, uint32_t, uint32_t, register_t *);
+int irix_thread_ctl(struct lwp *, uint32_t, uint32_t, uint32_t, register_t *);
 void irix_thread_exit(struct lwp *);
 void irix_threads_release(struct proc *);
 struct irix_sproc_args {

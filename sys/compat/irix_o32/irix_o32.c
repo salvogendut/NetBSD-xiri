@@ -3065,8 +3065,10 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 		goto out;
 	}
 	so = fp->f_socket;
-	if (so->so_proto->pr_domain->dom_family != AF_INET ||
-	    so->so_type != SOCK_STREAM || so->so_proto->pr_protocol != IPPROTO_TCP) {
+	if (so->so_type != SOCK_STREAM ||
+	    (so->so_proto->pr_domain->dom_family != AF_LOCAL &&
+	    (so->so_proto->pr_domain->dom_family != AF_INET ||
+	    so->so_proto->pr_protocol != IPPROTO_TCP))) {
 		error = EAFNOSUPPORT;
 		goto out;
 	}
@@ -3725,6 +3727,7 @@ struct irix_prctl_args {
 	syscallarg(uint32_t) option;
 	syscallarg(uint32_t) argument;
 	syscallarg(uint32_t) target;
+	syscallarg(uint32_t) signo;
 };
 
 static int
@@ -3737,7 +3740,8 @@ irix_prctl(struct lwp *l, const void *args, register_t *rval)
 	int error;
 
 	if (SCARG(uap, option) == 21)
-		return irix_thread_ctl(l, SCARG(uap, argument), SCARG(uap, target), rval);
+		return irix_thread_ctl(l, SCARG(uap, argument), SCARG(uap, target),
+		    SCARG(uap, signo), rval);
 	if (SCARG(uap, option) != 20) /* PR_INIT_THREADS */
 		return irix_share_prctl(l, SCARG(uap, option), SCARG(uap, argument), rval);
 	if (ip->threads) {
@@ -4398,6 +4402,8 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_fxstat,
 	},
+	[166] = { .sy_narg = 3, .sy_argsize = sizeof(struct irix_sigpoll_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_sigpoll },
 	[164] = {
 		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_sigprocmask_args),
@@ -4488,7 +4494,7 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_call = irix_nsproc,
 	},
 	[130] = {
-		.sy_narg = 3,
+		.sy_narg = 4,
 		.sy_argsize = sizeof(struct irix_prctl_args),
 		.sy_call = irix_prctl,
 	},
@@ -4530,7 +4536,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [178] = "lchown", [128] = "gettimeofday",
 	[125] = "getitimer", [126] = "setitimer",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
-	[2] = "fork", [129] = "sproc", [204] = "nsproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
+	[2] = "fork", [129] = "sproc", [204] = "nsproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [166] = "sigpoll", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [77] = "nanosleep", [82] = "sginap", [87] = "poll", [91] = "connect",
 	[89] = "accept", [90] = "bind", [96] = "listen",
@@ -4659,6 +4665,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1160: code = 160; break;
 	case 1162: code = 162; break;
 	case 1164: code = 164; break;
+	case 1166: code = 166; break;
 	case 1174: code = 174; break;
 	case 1175: code = 175; break;
 	case 1178: code = 178; break;

@@ -415,7 +415,9 @@ and vendor controls. Toolchest still needs version-2 xstat for its menu check.
 ### Experimental SIOCNREAD (1054, 0x4004730a)
 
 The ioctl adapter decodes three explicit 32-bit arguments. Its SIOCNREAD path
-supports IPv4 TCP streams. It keeps a native file reference and uses
+supports IPv4 TCP and local stream sockets. Connected local streams return
+0, 3, 2 and 0 queued bytes across write and partial-read controls on both
+IRIX releases, followed by ECONNRESET after draining EOF. It keeps a native file reference and uses
 a kernel-owned integer with native FIONREAD under the socket lock. Exactly
 four bytes are copied out after releasing the socket lock. Counts are snapshots;
 the query never consumes queued data or changes nonblocking mode.
@@ -431,7 +433,7 @@ Except for the PTY request below, other selectors retain ENOSYS, including
 TCGETA, altered size/group encodings,
 and 0x4004667f (which original IRIX also accepts for bytes-readable). This is an
 explicit bounded-policy difference, including invalid-fd unknown commands.
-AF_UNIX, datagrams, listening sockets, urgent data, resets, concurrent changes,
+Datagrams, listening sockets, urgent data, resets, concurrent changes,
 large queue counts, inherited unsupported descriptor types and general ioctl
 translation are outside this qualification. The companion irix-siocnread lab
 holds the original synthetic fixtures and reviewed observations.
@@ -1188,7 +1190,7 @@ for native sun_path are rejected without truncation. This native field is
 four bytes smaller than IRIX's. Name outputs report their full length even
 when truncated; original IRIX's zero-length unnamed getsockname and 16-byte
 unnamed accept outputs are preserved. Additional accept output-fault cases,
-Unix SIOCNREAD and broader concurrency remain unqualified.
+Connected Unix-stream SIOCNREAD is covered above. Broader concurrency remains unqualified.
 
 Independent o32/n32 direct/indirect fixtures produce 136 NetBSD observations
 under root and UID/GID 1234, compared with 68 original IRIX 6.5.22m captures.
@@ -1442,7 +1444,21 @@ an extent in the rollback journal. The lock lives as long as the wired
 PRDA window. Separate sproc address spaces keep their existing admission
 rules.
 
-`PR_THREAD_CTL` supports worker exit, interruptible block and counted unblock.
+The n32 event-worker request adds `PR_EVENT` (0x04000000) to the
+ordinary flags. The descriptor may contain the ordinary flags or match
+the syscall flags. Workers receive the lowest available positive ID.
+Creation reserves the ID under the process lock and exit releases it.
+
+`PR_THREAD_CTL` supports worker exit, interruptible block, counted unblock
+and directed traditional signals within the current process. A signal of
+zero checks whether the target exists. The n32 signal wait (`__sigpoll`,
+trap 1166) translates the IRIX mask, optional 128-byte siginfo and optional
+32-bit timespec at the ABI boundary, and waits on NetBSD's signal queues.
+On both Indy lines, a blocked SIGUSR1 sent to a named worker is consumed
+once. Other mask words lack native signal mappings. The private signal 47
+send returns EOPNOTSUPP. Original IRIX accepts it, but a subsequent
+synchronous wait for 47 times out on both vendor releases.
+
 The measured privileged system-scope request uses IRIX round-robin scheduling
 at priority zero. The adapter authorizes round-robin through native kauth and
 scales IRIX priorities 0 through 255 into NetBSD's real-time range. Other
