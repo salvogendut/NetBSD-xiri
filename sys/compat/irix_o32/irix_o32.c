@@ -282,25 +282,58 @@ struct irix_o32_break_args {
 	syscallarg(uint32_t) nsize;
 };
 
+static bool
+irix_private_pthread_vm(struct proc *p)
+{
+	struct irix_process *ip = p->p_emuldata;
+
+	return ip->prda_window != 0 && ip->share == NULL &&
+	    p->p_vmspace->vm_refcnt == 1;
+}
+
 static int
 irix_o32_break(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_break_args *uap = args;
 	struct sys_obreak_args native = { 0 };
+	struct proc *p = l->l_proc;
+	struct irix_process *ip = p->p_emuldata;
+	struct vmspace *vm = p->p_vmspace;
 	const vaddr_t end = SCARG(uap, nsize);
+	const bool threaded = irix_private_pthread_vm(p);
 	int error;
 
-	if (!irix_share_single(l->l_proc))
+	if (!threaded && !irix_share_single(p))
 		return EOPNOTSUPP;
 
 	/* Bound page rounding and prevent vm_dsize underflow on a request
 	 * below the data segment. Native obreak enforces RLIMIT_DATA and
 	 * refuses to replace an existing mapping while growing the heap. */
-	if (end < (vaddr_t)l->l_proc->p_vmspace->vm_daddr ||
-	    end > IRIX_MAXUSER_ADDRESS - PAGE_MASK)
+	if (end < (vaddr_t)vm->vm_daddr || end > IRIX_MAXUSER_ADDRESS - PAGE_MASK)
 		return ENOMEM;
+	if (threaded) {
+		const vaddr_t next = round_page(end);
+		vaddr_t current;
+		rlim_t limit;
+
+		/* Older heap pages may contain fixed mappings installed before
+		 * pthread initialization. Only release pages acquired since
+		 * then, when peer replacement and unmapping are excluded. */
+		if (next < ip->heap_floor)
+			return EOPNOTSUPP;
+		rw_enter(&ip->maplock, RW_WRITER);
+		current = round_page((vaddr_t)vm->vm_daddr + ptoa(vm->vm_dsize));
+		limit = p->p_rlimit[RLIMIT_AS].rlim_cur;
+		if (next > current && (vm->vm_map.size > limit ||
+		    next - current > limit - vm->vm_map.size)) {
+			rw_exit(&ip->maplock);
+			return ENOMEM;
+		}
+	}
 	SCARG(&native, nsize) = irix_pointer(end);
 	error = sys_obreak(l, &native, rval);
+	if (threaded)
+		rw_exit(&ip->maplock);
 	if (error == 0)
 		*rval = 0;
 	return error;
@@ -470,12 +503,11 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 	/*
 	 * A pthread group owns one vmspace. Serialize placement, the
 	 * address-space limit check and rollback against other ELF maps
-	 * and non-fixed mmap. Fixed mmap, munmap, mprotect and break still
-	 * require irix_share_single(), so a peer cannot replace an extent
-	 * in our rollback journal.
+	 * and non-fixed mmap and heap resizing. Fixed mmap, munmap and
+	 * mprotect still require irix_share_single(), so a peer cannot
+	 * replace an extent in our rollback journal.
 	 */
-	if (ip->prda_window != 0 && ip->share == NULL &&
-	    p->p_vmspace->vm_refcnt == 1) {
+	if (irix_private_pthread_vm(p)) {
 		rw_enter(&ip->maplock, RW_WRITER);
 		locked = true;
 	} else if (!irix_share_single(p)) {

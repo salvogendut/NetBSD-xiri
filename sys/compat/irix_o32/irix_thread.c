@@ -147,6 +147,8 @@ irix_thread_init(struct lwp *l)
 	l->l_emuldata = t;
 	error = lwp_setswitchin(l, irix_thread_switchin);
 	if (error == 0) {
+		ip->heap_floor = round_page((vaddr_t)p->p_vmspace->vm_daddr +
+		    ptoa(p->p_vmspace->vm_dsize));
 		rw_init(&ip->maplock);
 		return 0;
 	}

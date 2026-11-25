@@ -19,6 +19,7 @@ struct irix_process {
 	struct { uint32_t flags, mask, trampoline; } signal[32];
 	bool threads, reset_hold;
 	vaddr_t prda_window;
+	vaddr_t heap_floor;	/* break at first pthread initialization */
 	krwlock_t maplock;	/* live with the pthread PRDA window */
 	struct irix_worker *active_worker;
 	uint32_t thread_serial;

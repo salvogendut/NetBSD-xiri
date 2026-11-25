@@ -1434,7 +1434,10 @@ the first worker starts.
 A pthread process can use SGI_ELFMAP for the same two-segment layouts as a
 single LWP. From the address-space limit check through the final segment or
 rollback, ELF mapping holds a per-process VM lock. Ordinary non-fixed mmap
-uses the same lock during insertion. Other workers cannot replace or unmap
+uses the same lock during insertion. Threaded break can grow the heap and
+release pages down to the rounded break recorded at first worker setup.
+This preserves earlier fixed mappings. Growth respects the data and address
+space limits and fails on contact with an existing mapping. Other workers cannot replace or unmap
 an extent in the rollback journal. The lock lives as long as the wired
 PRDA window. Separate sproc address spaces keep their existing admission
 rules.
