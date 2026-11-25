@@ -396,9 +396,10 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 	struct file *fp;
 	struct vnode *vp;
 	vsize_t total = 0;
+	struct irix_process *ip = p->p_emuldata;
 	unsigned ncmd = 0, mapped = 0;
 	int error;
-	bool single;
+	bool locked = false;
 
 	CTASSERT(sizeof(ph) == 64);
 	if (count != __arraycount(ph))
@@ -466,9 +467,22 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 		ph[1].p_filesz += prefix;
 	ph[1].p_memsz += prefix;
 	total = round_page(ph[0].p_memsz) + round_page(ph[1].p_memsz);
-	/* ELF mapping rollback remains restricted to a sole group member. */
-	single = irix_share_single(p);
-	if (!single || (map->flags & VM_MAP_WIREFUTURE) != 0) {
+	/*
+	 * A pthread group owns one vmspace. Serialize placement, the
+	 * address-space limit check and rollback against other ELF maps
+	 * and non-fixed mmap. Fixed mmap, munmap, mprotect and break still
+	 * require irix_share_single(), so a peer cannot replace an extent
+	 * in our rollback journal.
+	 */
+	if (ip->prda_window != 0 && ip->share == NULL &&
+	    p->p_vmspace->vm_refcnt == 1) {
+		rw_enter(&ip->maplock, RW_WRITER);
+		locked = true;
+	} else if (!irix_share_single(p)) {
+		error = EOPNOTSUPP;
+		goto out;
+	}
+	if ((map->flags & VM_MAP_WIREFUTURE) != 0) {
 		error = EOPNOTSUPP;
 		goto out;
 	}
@@ -548,6 +562,8 @@ rollback:
 		uvm_unmap(map, cmd->ev_addr, cmd->ev_addr + round_page(cmd->ev_len));
 	}
 out:
+	if (locked)
+		rw_exit(&ip->maplock);
 	fd_putfile(fd);
 	return error;
 }
@@ -1859,7 +1875,11 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	    ((flags & 0x10) != 0 ? MAP_FIXED : 0);
 	SCARG(&native, fd) = SCARG(uap, fd);
 	SCARG(&native, pos) = SCARG(uap, pos); /* signed 32-bit to native off_t */
+	if (ip->prda_window != 0)
+		rw_enter(&ip->maplock, RW_WRITER);
 	error = irix_share_mmap(l, &native, rval);
+	if (ip->prda_window != 0)
+		rw_exit(&ip->maplock);
 	if (error == 0) {
 		if (!local_plan && (flags & 0x80)) {
 			int e = irix_local_plan(&ip->local, *rval,

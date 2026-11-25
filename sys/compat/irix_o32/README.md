@@ -1431,6 +1431,14 @@ before releasing the alias. Operations requiring a single unshared mapping,
 including fork and fixed replacement, keep their conservative guards after
 the first worker starts.
 
+A pthread process can use SGI_ELFMAP for the same two-segment layouts as a
+single LWP. From the address-space limit check through the final segment or
+rollback, ELF mapping holds a per-process VM lock. Ordinary non-fixed mmap
+uses the same lock during insertion. Other workers cannot replace or unmap
+an extent in the rollback journal. The lock lives as long as the wired
+PRDA window. Separate sproc address spaces keep their existing admission
+rules.
+
 `PR_THREAD_CTL` supports worker exit, interruptible block and counted unblock.
 The measured privileged system-scope request uses IRIX round-robin scheduling
 at priority zero. The adapter authorizes round-robin through native kauth and

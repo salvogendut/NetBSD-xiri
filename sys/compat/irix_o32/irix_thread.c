@@ -103,6 +103,7 @@ irix_threads_release(struct proc *p)
 	irix_thread_exit(curlwp);
 	uvm_unmap(kernel_map, ip->prda_window, ip->prda_window + PAGE_SIZE);
 	ip->prda_window = 0;
+	rw_destroy(&ip->maplock);
 }
 
 static int
@@ -145,8 +146,10 @@ irix_thread_init(struct lwp *l)
 	ip->active_worker = t;
 	l->l_emuldata = t;
 	error = lwp_setswitchin(l, irix_thread_switchin);
-	if (error == 0)
+	if (error == 0) {
+		rw_init(&ip->maplock);
 		return 0;
+	}
 	ip->prda_window = 0;
 	ip->active_worker = NULL;
 	l->l_emuldata = NULL;
