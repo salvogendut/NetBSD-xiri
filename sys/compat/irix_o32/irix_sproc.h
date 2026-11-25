@@ -22,6 +22,7 @@ struct irix_process {
 	vaddr_t heap_floor;	/* break at first pthread initialization */
 	krwlock_t maplock;	/* live with the pthread PRDA window */
 	struct irix_worker *active_worker;
+	struct irix_usync_state *usync;	/* private to this process image */
 	uint32_t thread_serial;
 	struct irix_localset local;
 	struct irix_share *share;
@@ -40,6 +41,12 @@ struct irix_nsproc_args {
 	syscallarg(uint32_t) desc;
 	syscallarg(uint32_t) sched;
 };
+struct irix_usync_args {
+	syscallarg(uint32_t) operation;
+	syscallarg(uint32_t) request;
+};
+int irix_usync_cntl(struct lwp *, const void *, register_t *);
+void irix_usync_release(struct irix_process *);
 int irix_nsproc(struct lwp *, const void *, register_t *);
 int irix_thread_ctl(struct lwp *, uint32_t, uint32_t, register_t *);
 void irix_thread_exit(struct lwp *);

@@ -1450,3 +1450,13 @@ scheduling policies are outside the current adapter. The two original IRIX
 controls and both Xiri Indys passed default-scope create, shared writes,
 distinct thread identity and join. Root also passed system scope. Ordinary
 users received EPERM from vendor libpthread when selecting system scope.
+
+The n32 libc lock operations on trap 1223 use a version-1002 request with
+zero flags. Interruptible block (2) uses policy 1. Unblock (4) ignores the
+policy field, which SGI libpthread leaves unset. Both operations use the
+private lock word's address within the process image. One unblock grants a
+single waiting LWP its wake, or saves one credit for a future wait. A process
+can retain credits at 256 distinct addresses at once. Consuming the last
+credit frees its slot. Exec and exit discard outstanding credits. A child
+starts with an empty table. Shared mappings and other usync operations need
+separate ABI qualification.

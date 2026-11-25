@@ -3728,6 +3728,7 @@ irix_proc_exec(struct proc *p, struct exec_package *epp)
 	if (ip == NULL)
 		p->p_emuldata = kmem_zalloc(sizeof(*ip), KM_SLEEP);
 	else {
+		irix_usync_release(ip);
 		irix_threads_release(p);
 		irix_share_leave(p);
 		memset(ip, 0, sizeof(*ip));
@@ -3751,6 +3752,7 @@ irix_proc_exit(struct proc *p)
 {
 	struct irix_process *ip = p->p_emuldata;
 
+	irix_usync_release(ip);
 	irix_threads_release(p);
 	irix_share_leave(p);
 	p->p_emuldata = NULL;
@@ -4426,6 +4428,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_sprocsp,
 	},
+	[223] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct irix_usync_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_usync_cntl,
+	},
 	[204] = {
 		.sy_narg = 4,
 		.sy_argsize = sizeof(struct irix_nsproc_args),
@@ -4461,7 +4469,7 @@ static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 
 static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] = {
 	[8] = "creat", [9] = "link", [60] = "umask", [146] = "fsync",
 	[81] = "getdents",
-	[205] = "getdents64",
+	[205] = "getdents64", [223] = "usync_cntl",
 	[207] = "ngetdents",
 	[208] = "ngetdents64",
 	[10] = "unlink", [79] = "rmdir", [115] = "symlink", [235] = "utimets",
@@ -4565,6 +4573,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1082: code = 82; break;
 	case 1081: code = 81; break;
 	case 1204: code = 204; break;
+	case 1223: code = 223; break;
 	case 1205: code = 205; break;
 	case 1207: code = 207; break;
 	case 1208: code = 208; break;

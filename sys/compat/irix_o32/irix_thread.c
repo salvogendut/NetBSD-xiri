@@ -35,6 +35,7 @@
 #include <sys/sched.h>
 #include <sys/syscallargs.h>
 #include <sys/systm.h>
+#include <uvm/uvm.h>
 #include <uvm/uvm_extern.h>
 #include <uvm/uvm_map.h>
 #include <mips/locore.h>
@@ -316,5 +317,178 @@ irix_thread_ctl(struct lwp *l, uint32_t cmd, uint32_t id, register_t *retval)
 		error = ENOSYS;
 	}
 	mutex_exit(p->p_lock);
+	return error;
+}
+
+#define IRIX_USYNC_INTR_BLOCK	2
+#define IRIX_USYNC_UNBLOCK	4
+#define IRIX_USYNC_VERSION	1002
+#define IRIX_USYNC_MAX_CREDITS	256	/* distinct preposted addresses */
+
+/* Only the prefix used by libc for these two operations. The n32 ABI
+ * carries the address in a 64-bit field, high word first. */
+struct irix_usync_request {
+	uint32_t version, pad, addr_hi, addr_lo;
+	uint16_t policy, flags;
+};
+
+struct irix_usync_waiter {
+	TAILQ_ENTRY(irix_usync_waiter) link;
+	uint32_t address;
+	kcondvar_t cv;
+	bool granted;
+};
+
+struct irix_usync_credit {
+	uint32_t address, count;
+};
+
+struct irix_usync_state {
+	TAILQ_HEAD(, irix_usync_waiter) waiters;
+	unsigned int ncredits;
+	struct irix_usync_credit credits[IRIX_USYNC_MAX_CREDITS];
+};
+
+/* Exec/exit run after all peer LWPs have returned from their waits.
+ * Fork allocates fresh zeroed emulation state for the child. */
+void
+irix_usync_release(struct irix_process *ip)
+{
+	if (ip->usync != NULL) {
+		KASSERT(TAILQ_EMPTY(&ip->usync->waiters));
+		kmem_free(ip->usync, sizeof(*ip->usync));
+		ip->usync = NULL;
+	}
+}
+
+static int
+irix_usync_wait(struct irix_usync_state *s, uint32_t addr, kmutex_t *lock)
+{
+	struct irix_usync_waiter waiter;
+	int error = 0;
+
+	for (unsigned int i = 0; i < s->ncredits; i++) {
+		if (s->credits[i].address != addr)
+			continue;
+		if (--s->credits[i].count == 0)
+			s->credits[i] = s->credits[--s->ncredits];
+		return 0;
+	}
+	waiter.address = addr;
+	waiter.granted = false;
+	cv_init(&waiter.cv, "irixusyn");
+	TAILQ_INSERT_TAIL(&s->waiters, &waiter, link);
+	while (!waiter.granted && error == 0)
+		error = cv_wait_sig(&waiter.cv, lock);
+	if (waiter.granted)
+		error = 0;	/* wake already handed to this waiter */
+	else
+		TAILQ_REMOVE(&s->waiters, &waiter, link);
+	cv_destroy(&waiter.cv);
+	return error;
+}
+
+static int
+irix_usync_wake(struct irix_usync_state *s, uint32_t addr)
+{
+	struct irix_usync_waiter *w;
+	struct irix_usync_credit *credit;
+
+	TAILQ_FOREACH(w, &s->waiters, link) {
+		if (w->address != addr)
+			continue;
+		TAILQ_REMOVE(&s->waiters, w, link);
+		w->granted = true;
+		cv_signal(&w->cv);
+		return 0;
+	}
+	for (unsigned int i = 0; i < s->ncredits; i++) {
+		credit = &s->credits[i];
+		if (credit->address != addr)
+			continue;
+		if (credit->count == UINT_MAX)
+			return EOVERFLOW;
+		credit->count++;
+		return 0;
+	}
+	if (s->ncredits == __arraycount(s->credits))
+		return EAGAIN;
+	credit = &s->credits[s->ncredits++];
+	credit->address = addr;
+	credit->count = 1;
+	return 0;
+}
+
+int
+irix_usync_cntl(struct lwp *l, const void *args, register_t *retval)
+{
+	const struct irix_usync_args *uap = args;
+	struct proc *p = l->l_proc;
+	struct irix_process *ip = p->p_emuldata;
+	struct vm_map *map = &p->p_vmspace->vm_map;
+	struct vm_map_entry *entry;
+	struct irix_usync_request req;
+	struct irix_usync_state *spare = NULL;
+	const uint32_t op = SCARG(uap, operation);
+	const uint32_t ptr = SCARG(uap, request);
+	int error;
+
+	if (p->p_md.md_abi != _MIPS_BSD_API_N32 ||
+	    (op != IRIX_USYNC_INTR_BLOCK && op != IRIX_USYNC_UNBLOCK))
+		return ENOSYS;
+	if (ip->share != NULL || p->p_vmspace->vm_refcnt != 1)
+		return EOPNOTSUPP;
+	if (ptr > INT32_MAX - (sizeof(req) - 1))
+		return EFAULT;
+	error = copyin((const void *)(uintptr_t)ptr, &req, sizeof(req));
+	if (error != 0)
+		return error;
+	if (KTRPOINT(p, KTR_USER)) {
+		char record[100];
+		int n = snprintf(record, sizeof(record),
+		    "op=%u version=%u addr=%#x:%#x policy=%u flags=%#x",
+		    op, req.version, req.addr_hi, req.addr_lo,
+		    req.policy, req.flags);
+		ktr_kuser("irix_usync", record, n);
+	}
+	/* libpthread leaves policy uninitialized on the wake path. */
+	if (req.version != IRIX_USYNC_VERSION || req.flags != 0 ||
+	    (op == IRIX_USYNC_INTR_BLOCK && req.policy != 1))
+		return EOPNOTSUPP;
+	if (req.addr_hi != 0 || req.addr_lo == 0 || req.addr_lo > INT32_MAX)
+		return EFAULT;
+	if ((req.addr_lo & 3) != 0)
+		return EINVAL;
+
+	/* Shared mappings need a backing-object key across processes. */
+	vm_map_lock_read(map);
+	if (!uvm_map_lookup_entry(map, req.addr_lo, &entry) ||
+	    UVM_ET_ISSUBMAP(entry) || !(entry->protection & VM_PROT_READ))
+		error = EFAULT;
+	else if (entry->inheritance != MAP_INHERIT_COPY)
+		error = EOPNOTSUPP;
+	vm_map_unlock_read(map);
+	if (error != 0)
+		return error;
+
+	mutex_enter(p->p_lock);
+	if (ip->usync == NULL) {
+		mutex_exit(p->p_lock);
+		spare = kmem_zalloc(sizeof(*spare), KM_SLEEP);
+		TAILQ_INIT(&spare->waiters);
+		mutex_enter(p->p_lock);
+		if (ip->usync == NULL) {
+			ip->usync = spare;
+			spare = NULL;
+		}
+	}
+	if (op == IRIX_USYNC_INTR_BLOCK)
+		error = irix_usync_wait(ip->usync, req.addr_lo, p->p_lock);
+	else
+		error = irix_usync_wake(ip->usync, req.addr_lo);
+	mutex_exit(p->p_lock);
+	if (spare != NULL)
+		kmem_free(spare, sizeof(*spare));
+	*retval = 0;
 	return error;
 }
