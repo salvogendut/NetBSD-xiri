@@ -126,6 +126,7 @@
 #include <mips/regnum.h>
 #include <mips/userret.h>
 #include <compat/irix_o32/irix_errno.h>
+#include <compat/irix_o32/irix_errno_map.h>
 
 #if (!defined(__mips_o32) && !defined(_LP64)) || BYTE_ORDER != BIG_ENDIAN
 #error COMPAT_IRIX_O32 requires a big-endian o32 or LP64 kernel
@@ -2516,6 +2517,106 @@ irix_accept(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
+/* SO_ERROR returns an errno as data, in the same numbering as a syscall. */
+static int
+irix_error_number(int error)
+{
+	if (error == 0)
+		return 0;
+	if ((unsigned)error < __arraycount(irix_o32_errno) &&
+	    irix_o32_errno[error] != 0)
+		return irix_o32_errno[error];
+	return IRIX_EIO;
+}
+
+/* Connected socket I/O. IRIX MSG_PEEK is bit 1. */
+struct irix_socket_io_args {
+	syscallarg(int32_t) fd;
+	syscallarg(uint32_t) buffer;
+	syscallarg(int32_t) length;
+	syscallarg(int32_t) flags;
+};
+
+static int
+irix_send(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_socket_io_args *uap = args;
+	struct sys_sendto_args native = { 0 };
+
+	if (SCARG(uap, length) < 0)
+		return EINVAL;
+	if (SCARG(uap, flags) != 0)
+		return EOPNOTSUPP;
+	SCARG(&native, s) = SCARG(uap, fd);
+	SCARG(&native, buf) = irix_pointer(SCARG(uap, buffer));
+	SCARG(&native, len) = SCARG(uap, length);
+	return sys_sendto(l, &native, rval);
+}
+
+static int
+irix_recv(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_socket_io_args *uap = args;
+	struct sys_recvfrom_args native = { 0 };
+
+	if (SCARG(uap, length) < 0)
+		return EINVAL;
+	if (SCARG(uap, flags) & ~2)
+		return EOPNOTSUPP;
+	SCARG(&native, s) = SCARG(uap, fd);
+	SCARG(&native, buf) = irix_pointer(SCARG(uap, buffer));
+	SCARG(&native, len) = SCARG(uap, length);
+	SCARG(&native, flags) = SCARG(uap, flags) ? MSG_PEEK : 0;
+	return sys_recvfrom(l, &native, rval);
+}
+
+struct irix_getsockopt_args {
+	syscallarg(int32_t) fd;
+	syscallarg(int32_t) level;
+	syscallarg(int32_t) name;
+	syscallarg(uint32_t) value;
+	syscallarg(uint32_t) len;
+};
+
+static int
+irix_getsockopt(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_getsockopt_args *uap = args;
+	struct sockopt opt;
+	struct socket *so;
+	int32_t length = 0, result;
+	int error, pending;
+
+	if (SCARG(uap, level) != 0xffff || SCARG(uap, name) != 0x1007)
+		return ENOPROTOOPT;
+	if (SCARG(uap, value) != 0) {
+		error = copyin(irix_pointer(SCARG(uap, len)), &length,
+		    sizeof(length));
+		if (error != 0)
+			return error;
+		if (length < 0)
+			return EINVAL;
+	}
+	error = fd_getsock(SCARG(uap, fd), &so);
+	if (error != 0)
+		return error;
+	sockopt_init(&opt, SOL_SOCKET, SO_ERROR, sizeof(pending));
+	error = sogetopt(so, &opt);
+	if (error == 0)
+		error = sockopt_getint(&opt, &pending);
+	sockopt_destroy(&opt);
+	fd_putfile(SCARG(uap, fd));
+	*rval = 0;
+	if (error != 0 || SCARG(uap, value) == 0)
+		return error;
+	result = irix_error_number(pending);
+	length = MIN((size_t)length, sizeof(result));
+	error = copyout(&result, irix_pointer(SCARG(uap, value)), length);
+	if (error == 0)
+		error = copyout(&length, irix_pointer(SCARG(uap, len)), sizeof(length));
+	return error;
+}
+
 struct irix_setsockopt_args {
 	syscallarg(int32_t) fd;
 	syscallarg(int32_t) level;
@@ -4282,10 +4383,22 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_getsockname,
 	},
+	[95] = {
+		.sy_narg = 5,
+		.sy_argsize = sizeof(struct irix_getsockopt_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_getsockopt,
+	},
 	[96] = {
 		.sy_narg = 2,
 		.sy_argsize = sizeof(struct irix_listen_args),
 		.sy_call = irix_listen,
+	},
+	[97] = {
+		.sy_narg = 4,
+		.sy_argsize = sizeof(struct irix_socket_io_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_recv,
 	},
 	[99] = {
 		.sy_narg = 3,
@@ -4298,6 +4411,12 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_argsize = sizeof(struct irix_select_args),
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_select,
+	},
+	[101] = {
+		.sy_narg = 4,
+		.sy_argsize = sizeof(struct irix_socket_io_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_send,
 	},
 	[102] = {
 		.sy_narg = 3,
@@ -4512,14 +4631,11 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [77] = "nanosleep", [82] = "sginap", [87] = "poll", [91] = "connect",
 	[89] = "accept", [90] = "bind", [96] = "listen",
-	[93] = "getpeername", [94] = "getsockname",
+	[93] = "getpeername", [94] = "getsockname", [95] = "getsockopt",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
-	[102] = "sendmsg", [105] = "setsockopt",
+	[97] = "recv", [101] = "send", [102] = "sendmsg", [105] = "setsockopt",
 	[106] = "shutdown", [107] = "socket", [108] = "gethostname", [114] = "rename", [116] = "readlink",
 };
-
-/* Symbolic native indices avoid importing the obsolete positional table. */
-#include <compat/irix_o32/irix_errno_map.h>
 
 static void
 irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
@@ -4609,9 +4725,12 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1091: code = 91; break;
 	case 1093: code = 93; break;
 	case 1094: code = 94; break;
+	case 1095: code = 95; break;
 	case 1096: code = 96; break;
+	case 1097: code = 97; break;
 	case 1099: code = 99; break;
 	case 1100: code = 100; break;
+	case 1101: code = 101; break;
 	case 1102: code = 102; break;
 	case 1105: code = 105; break;
 	case 1106: code = 106; break;
@@ -4695,10 +4814,7 @@ done:
 	case EJUSTRETURN:
 		break;
 	default:
-		/* Unmapped host errors must not appear as successful returns. */
-		reg->r_regs[_R_V0] = error > 0 &&
-		    (unsigned)error < __arraycount(irix_o32_errno) &&
-		    irix_o32_errno[error] != 0 ? irix_o32_errno[error] : IRIX_EIO;
+		reg->r_regs[_R_V0] = irix_error_number(error);
 		reg->r_regs[_R_A3] = 1;
 		break;
 	}
