@@ -310,11 +310,12 @@ irix_thread_ctl(struct lwp *l, uint32_t cmd, uint32_t id, uint32_t signo,
 		lwp_exit(l);
 	if (cmd == 4) {
 		/* Hold the target stable across ID lookup and native delivery. */
-		if (signo >= __arraycount(irix_signal_map))
+		if (signo != IRIX_SIGPTINTR && signo >= __arraycount(irix_signal_map))
 			return EOPNOTSUPP;
 		ksiginfo_t ksi;
 		KSI_INIT(&ksi);
-		ksi.ksi_signo = irix_signal_map[signo];
+		ksi.ksi_signo = signo == IRIX_SIGPTINTR ?
+		    IRIX_NATIVE_PTINTR : irix_signal_map[signo];
 		ksi.ksi_code = SI_USER;
 		ksi.ksi_pid = p->p_pid;
 		ksi.ksi_uid = kauth_cred_geteuid(l->l_cred);
@@ -327,6 +328,14 @@ irix_thread_ctl(struct lwp *l, uint32_t cmd, uint32_t id, uint32_t signo,
 				continue;
 			if (lwp_find(p, peer->l_lid) == NULL)
 				break;
+			/* IRIX drops SIGPTINTR under its default disposition,
+			 * including when a sigpoll waiter is already asleep. */
+			if (signo == IRIX_SIGPTINTR &&
+			    (SIGACTION(p, IRIX_NATIVE_PTINTR).sa_handler == SIG_DFL ||
+			     SIGACTION(p, IRIX_NATIVE_PTINTR).sa_handler == SIG_IGN)) {
+				error = 0;
+				break;
+			}
 			ksi.ksi_lid = peer->l_lid;
 			error = signo == 0 ? 0 : kpsignal2(p, &ksi);
 			break;

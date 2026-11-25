@@ -3665,20 +3665,6 @@ const uint8_t irix_signal_map[32] = {
 	SIGTSTP, SIGCONT, SIGTTIN, SIGTTOU, SIGVTALRM, SIGPROF, SIGXCPU, SIGXFSZ,
 };
 
-/* The initial pthread has one native LWP. PRDA signal holds become active
- * only after PR_INIT_THREADS, independently of the user-writable flag word.
- * Thread creation, scheduling and realtime signal delivery are separate work. */
-static uint32_t
-irix_mask_word(const sigset_t *mask)
-{
-	uint32_t word = 0;
-
-	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
-		if (sigismember(mask, irix_signal_map[i]))
-			word |= 1U << (i - 1);
-	return word;
-}
-
 static void
 irix_prda_sigmask(struct lwp *l)
 {
@@ -3696,14 +3682,7 @@ irix_prda_sigmask(struct lwp *l)
 		sigexit(l, SIGSEGV);
 	mutex_enter(p->p_lock);
 	mask = l->l_sigmask;
-	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++) {
-		if (hold[1] & (1U << (i - 1)))
-			sigaddset(&mask, irix_signal_map[i]);
-		else
-			sigdelset(&mask, irix_signal_map[i]);
-	}
-	/* Keep unmapped native signals, and let native signal policy strip
-	 * SIGKILL/SIGSTOP. Only the measured traditional signals are mapped. */
+	irix_mask_import(hold[1], hold[0], &mask);
 	(void)sigprocmask1(l, SIG_SETMASK, &mask, NULL);
 	mutex_exit(p->p_lock);
 }
@@ -3718,7 +3697,7 @@ irix_prda_maskout(struct lwp *l)
 	if (!ip->threads)
 		return 0;
 	mutex_enter(p->p_lock);
-	hold[1] = irix_mask_word(&l->l_sigmask);
+	irix_mask_export(&l->l_sigmask, &hold[1], &hold[0]);
 	mutex_exit(p->p_lock);
 	return copyout(hold, irix_pointer(IRIX_PRDA_HOLD), sizeof(hold));
 }
@@ -3754,7 +3733,7 @@ irix_prctl(struct lwp *l, const void *args, register_t *rval)
 	    sizeof(flags))) != 0)
 		return error;
 	mutex_enter(p->p_lock);
-	hold[1] = irix_mask_word(&l->l_sigmask);
+	irix_mask_export(&l->l_sigmask, &hold[1], &hold[0]);
 	mutex_exit(p->p_lock);
 	/* Both ABIs on the reference use a big-endian 64-bit kernel hold:
 	 * the traditional signals occupy the second explicit 32-bit word.
@@ -3847,15 +3826,10 @@ irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
 	}
 	mutex_enter(p->p_lock);
 	sigemptyset(&requested);
-	if (how == SIG_SETMASK) {
+	if (how == SIG_SETMASK)
 		requested = l->l_sigmask;
-		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
-			sigdelset(&requested, irix_signal_map[i]);
-	}
 	if (SCARG(uap, set) != 0)
-		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
-			if (in[0] & (1U << (i - 1)))
-				sigaddset(&requested, irix_signal_map[i]);
+		irix_mask_import(in[0], in[1], &requested);
 	error = sigprocmask1(l, how, SCARG(uap, set) != 0 ? &requested : NULL,
 	    &old);
 	mutex_exit(p->p_lock);
@@ -3865,9 +3839,7 @@ irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
 	    (error = irix_prda_maskout(l)) != 0)
 		return error;
 	if (SCARG(uap, oldset) != 0) {
-		for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
-			if (sigismember(&old, irix_signal_map[i]))
-				out[0] |= 1U << (i - 1);
+		irix_mask_export(&old, &out[0], &out[1]);
 		error = copyout(out, irix_pointer(SCARG(uap, oldset)), sizeof(out));
 		if (error != 0)
 			return error;

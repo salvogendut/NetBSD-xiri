@@ -16,7 +16,7 @@ struct irix_localset {
 struct irix_share;
 struct irix_spawn;
 struct irix_process {
-	struct { uint32_t flags, mask, trampoline; } signal[32];
+	struct { uint32_t flags, mask[2], trampoline; } signal[65];
 	bool threads, reset_hold;
 	vaddr_t prda_window;
 	vaddr_t heap_floor;	/* break at first pthread initialization */

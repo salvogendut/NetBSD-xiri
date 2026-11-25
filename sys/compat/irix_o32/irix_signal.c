@@ -63,31 +63,38 @@ put64(uint8_t *p, unsigned offset, uint64_t value)
 static unsigned
 foreign_signal(unsigned native)
 {
+	if (native == IRIX_NATIVE_PTINTR)
+		return IRIX_SIGPTINTR;
 	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
 		if (irix_signal_map[i] == native)
 			return i;
 	return 0;
 }
 
-static uint32_t
-mask_to_word(const sigset_t *set)
+void
+irix_mask_export(const sigset_t *set, uint32_t *low, uint32_t *high)
 {
-	uint32_t word = 0;
+	*low = 0;
+	*high = sigismember(set, IRIX_NATIVE_PTINTR) ? IRIX_PTINTR_BIT : 0;
 	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++)
 		if (sigismember(set, irix_signal_map[i]))
-			word |= 1U << (i - 1);
-	return word;
+			*low |= 1U << (i - 1);
 }
 
-static void
-word_to_mask(uint32_t word, sigset_t *set)
+/* Update only mapped signals; preserve native-only bits in an existing set. */
+void
+irix_mask_import(uint32_t low, uint32_t high, sigset_t *set)
 {
 	for (unsigned i = 1; i < __arraycount(irix_signal_map); i++) {
-		if (word & (1U << (i - 1)))
+		if (low & (1U << (i - 1)))
 			sigaddset(set, irix_signal_map[i]);
 		else
 			sigdelset(set, irix_signal_map[i]);
 	}
+	if (high & IRIX_PTINTR_BIT)
+		sigaddset(set, IRIX_NATIVE_PTINTR);
+	else
+		sigdelset(set, IRIX_NATIVE_PTINTR);
 }
 
 /* Both 32-bit IRIX ABIs use a 128-byte signal-information record. */
@@ -121,7 +128,7 @@ irix_fetch_waitset(const void *user, void *dest, size_t len)
 	if (error != 0)
 		return error;
 	sigemptyset(set);
-	word_to_mask(words[0], set);
+	irix_mask_import(words[0], words[1], set);
 	return 0;
 }
 
@@ -205,20 +212,22 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 	if (sig <= 0 || sig > 64 || (change && (sig == 9 || sig == 23)))
 		return EINVAL;
 	/* Checkpoint/realtime signal dispositions have no mapping in this subset. */
-	if (sig >= 32)
+	if (sig >= 32 && sig != IRIX_SIGPTINTR)
 		return EOPNOTSUPP;
+	int nsig = sig == IRIX_SIGPTINTR ? IRIX_NATIVE_PTINTR : irix_signal_map[sig];
 	if (change && sig == 18 && (in[0] & 0x10000))
 		return EOPNOTSUPP;
 	/* Per-process foreign metadata is serialized by the current one-LWP
 	 * restriction. Native sigaction1 owns the actual disposition and locks. */
 	if (p->p_nlwps != 1)
 		return EOPNOTSUPP;
-	error = sigaction1(l, irix_signal_map[sig], NULL, &previous, NULL, 0);
+	error = sigaction1(l, nsig, NULL, &previous, NULL, 0);
 	if (error != 0)
 		return error;
 	out[0] = ip->signal[sig].flags;
 	out[1] = (uintptr_t)previous.sa_handler;
-	out[2] = ip->signal[sig].mask;
+	out[2] = ip->signal[sig].mask[0];
+	out[3] = ip->signal[sig].mask[1];
 	/* Preserve IRIX's copyout-before-install ordering, including partial
 	 * copyout on a boundary fault. No user pointer is retained in the kernel. */
 	if (SCARG(uap, old) != 0) {
@@ -246,7 +255,8 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 		 * sigaction1 also removes this signal from an explicit mask.
 		 * Omit the native flag when the caller explicitly blocks itself;
 		 * retain the foreign flag below for action queries. */
-		if ((in[0] & 16) && !(in[2] & (1U << (sig - 1))))
+		if ((in[0] & 16) &&
+		    !(in[2 + (sig - 1) / 32] & (1U << ((sig - 1) % 32))))
 			native.sa_flags |= SA_NODEFER;
 		/* IRIX signal(SIGCHLD, handler) requests NOCLDSTOP. Native
 		 * signal code retains exit notifications and waitable children. */
@@ -257,16 +267,17 @@ irix_sigaction(struct lwp *l, const void *args, register_t *rval)
 		 * prevent registration of a traditional handler. Queries report
 		 * the effective mapped mask, not unsupported signal bits. */
 		sigemptyset(&native.sa_mask);
-		word_to_mask(in[2], &native.sa_mask);
+		irix_mask_import(in[2], in[3], &native.sa_mask);
 		/* Native validation requires a nonnull trampoline for version 2.
 		 * Our sendsig uses the separately stored foreign value, including
 		 * null/bad addresses accepted at registration by the reference. */
-		error = sigaction1(l, irix_signal_map[sig], &native, NULL,
+		error = sigaction1(l, nsig, &native, NULL,
 		    ptr32(1), 2);
 		if (error != 0)
 			return error;
 		ip->signal[sig].flags = in[0] & (sig == 18 ? 0x2001f : 0x1f);
-		ip->signal[sig].mask = in[2] & 0x7fbffeff;
+		ip->signal[sig].mask[0] = in[2] & 0x7fbffeff;
+		ip->signal[sig].mask[1] = in[3] & IRIX_PTINTR_BIT;
 		ip->signal[sig].trampoline = SCARG(uap, trampoline);
 	}
 	*rval = 0;
@@ -338,13 +349,17 @@ irix_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 	if ((uintptr_t)destination >= 0x80000000U ||
 	    sizeof(frame) > 0x80000000U - address)
 		sigexit(l, SIGILL);
+	uint32_t low, high;
+	irix_mask_export(mask, &low, &high);
 	if (legacy) {
 		put32(frame, 0, UINT32_MAX);
 		put32(frame, 540, l->l_sigstk.ss_flags & SS_ONSTACK ? 1 : 0);
-		put32(frame, 584, mask_to_word(mask));
+		put32(frame, 584, low);
+		put32(frame, 588, high);
 	} else {
 		put32(frame, 0, 7);
-		put32(frame, 8, mask_to_word(mask));
+		put32(frame, 8, low);
+		put32(frame, 12, high);
 		put32(frame, 24, (uintptr_t)l->l_sigstk.ss_sp);
 		put32(frame, 28, l->l_sigstk.ss_size);
 		put32(frame, 32, l->l_sigstk.ss_flags & SS_ONSTACK ? 1 : 2);
@@ -446,7 +461,8 @@ irix_sigreturn(struct lwp *l, const void *args, register_t *rval)
 	}
 	maskoffset = legacy ? 584 : 8;
 	if ((wireflags & 1) && ((get32(frame, maskoffset) & 0x80000000U) ||
-	    get32(frame, maskoffset + 4) || get32(frame, maskoffset + 8) ||
+	    (get32(frame, maskoffset + 4) & ~IRIX_PTINTR_BIT) ||
+	    get32(frame, maskoffset + 8) ||
 	    get32(frame, maskoffset + 12)))
 		return EOPNOTSUPP;
 	error = cpu_setmcontext(l, &mc, flags);
@@ -460,7 +476,8 @@ irix_sigreturn(struct lwp *l, const void *args, register_t *rval)
 	if (wireflags & 1) {
 		mutex_enter(p->p_lock);
 		mask = l->l_sigmask;
-		word_to_mask(get32(frame, maskoffset), &mask);
+		irix_mask_import(get32(frame, maskoffset),
+		    get32(frame, maskoffset + 4), &mask);
 		(void)sigprocmask1(l, SIG_SETMASK, &mask, NULL);
 		mutex_exit(p->p_lock);
 	}

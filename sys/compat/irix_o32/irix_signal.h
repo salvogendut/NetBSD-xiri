@@ -21,7 +21,14 @@ struct irix_kill_args {
 	syscallarg(int32_t) pid;
 	syscallarg(int32_t) signo;
 };
+/* SGI libpthread uses this private directed signal for its event worker.
+ * Reserve one native realtime signal for the foreign personality. */
+#define IRIX_SIGPTINTR 47
+#define IRIX_NATIVE_PTINTR SIGRTMIN
+#define IRIX_PTINTR_BIT (1U << ((IRIX_SIGPTINTR - 1) % 32))
 extern const uint8_t irix_signal_map[32];
+void irix_mask_export(const sigset_t *, uint32_t *, uint32_t *);
+void irix_mask_import(uint32_t, uint32_t, sigset_t *);
 int irix_prda_maskout(struct lwp *);
 int irix_sigaction(struct lwp *, const void *, register_t *);
 int irix_sigpoll(struct lwp *, const void *, register_t *);
