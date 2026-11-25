@@ -220,6 +220,7 @@ struct lwp {
 #ifdef KCOV
 	void		*l_kcov; /* !: KCOV private data. */
 #endif
+	void		(*l_switchin)(struct lwp *); /* private UP emulation state */
 };
 
 /*
@@ -365,6 +366,7 @@ void	lwp_exit(lwp_t *);
 int	lwp_suspend(lwp_t *, lwp_t *);
 int	lwp_create1(lwp_t *, const void *, size_t, u_long, lwpid_t *);
 void	lwp_start(lwp_t *, int);
+int	lwp_setswitchin(lwp_t *, void (*)(lwp_t *));
 void	lwp_migrate(lwp_t *, struct cpu_info *);
 lwp_t *	lwp_find2(pid_t, lwpid_t);
 lwp_t *	lwp_find(proc_t *, int);

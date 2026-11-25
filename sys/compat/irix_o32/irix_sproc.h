@@ -18,6 +18,9 @@ struct irix_spawn;
 struct irix_process {
 	struct { uint32_t flags, mask, trampoline; } signal[32];
 	bool threads, reset_hold;
+	vaddr_t prda_window;
+	struct irix_worker *active_worker;
+	uint32_t thread_serial;
 	struct irix_localset local;
 	struct irix_share *share;
 	struct irix_spawn *spawning;
@@ -29,6 +32,16 @@ struct irix_process {
 	vaddr_t stack_base, stack_top;
 	vsize_t stack_size;
 };
+struct irix_nsproc_args {
+	syscallarg(uint32_t) entry;
+	syscallarg(uint32_t) flags;
+	syscallarg(uint32_t) desc;
+	syscallarg(uint32_t) sched;
+};
+int irix_nsproc(struct lwp *, const void *, register_t *);
+int irix_thread_ctl(struct lwp *, uint32_t, uint32_t, register_t *);
+void irix_thread_exit(struct lwp *);
+void irix_threads_release(struct proc *);
 struct irix_sproc_args {
 	syscallarg(uint32_t) entry;
 	syscallarg(uint32_t) flags;

@@ -3625,6 +3625,7 @@ irix_prda_maskout(struct lwp *l)
 struct irix_prctl_args {
 	syscallarg(uint32_t) option;
 	syscallarg(uint32_t) argument;
+	syscallarg(uint32_t) target;
 };
 
 static int
@@ -3636,6 +3637,8 @@ irix_prctl(struct lwp *l, const void *args, register_t *rval)
 	uint32_t flags, hold[2] = { 0, 0 };
 	int error;
 
+	if (SCARG(uap, option) == 21)
+		return irix_thread_ctl(l, SCARG(uap, argument), SCARG(uap, target), rval);
 	if (SCARG(uap, option) != 20) /* PR_INIT_THREADS */
 		return irix_share_prctl(l, SCARG(uap, option), SCARG(uap, argument), rval);
 	if (ip->threads) {
@@ -3673,6 +3676,7 @@ irix_proc_exec(struct proc *p, struct exec_package *epp)
 	if (ip == NULL)
 		p->p_emuldata = kmem_zalloc(sizeof(*ip), KM_SLEEP);
 	else {
+		irix_threads_release(p);
 		irix_share_leave(p);
 		memset(ip, 0, sizeof(*ip));
 	}
@@ -3695,6 +3699,7 @@ irix_proc_exit(struct proc *p)
 {
 	struct irix_process *ip = p->p_emuldata;
 
+	irix_threads_release(p);
 	irix_share_leave(p);
 	p->p_emuldata = NULL;
 	kmem_free(ip, sizeof(*ip));
@@ -4369,8 +4374,14 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_sprocsp,
 	},
+	[204] = {
+		.sy_narg = 4,
+		.sy_argsize = sizeof(struct irix_nsproc_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_nsproc,
+	},
 	[130] = {
-		.sy_narg = 2,
+		.sy_narg = 3,
 		.sy_argsize = sizeof(struct irix_prctl_args),
 		.sy_call = irix_prctl,
 	},
@@ -4412,7 +4423,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[19] = "lseek", [13] = "time", [15] = "chmod", [16] = "chown", [178] = "lchown", [128] = "gettimeofday",
 	[125] = "getitimer", [126] = "setitimer",
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
-	[2] = "fork", [129] = "sproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
+	[2] = "fork", [129] = "sproc", [204] = "nsproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
 	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [77] = "nanosleep", [82] = "sginap", [87] = "poll", [91] = "connect",
 	[89] = "accept", [90] = "bind", [96] = "listen",
@@ -4501,6 +4512,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1080: code = 80; break;
 	case 1082: code = 82; break;
 	case 1081: code = 81; break;
+	case 1204: code = 204; break;
 	case 1205: code = 205; break;
 	case 1207: code = 207; break;
 	case 1208: code = 208; break;
@@ -4649,6 +4661,7 @@ static struct emul emul_irix_o32 = {
 	.e_proc_exec = irix_proc_exec,
 	.e_proc_fork = irix_proc_fork,
 	.e_proc_exit = irix_proc_exit,
+	.e_lwp_exit = irix_thread_exit,
 	.e_sigmask = irix_prda_sigmask,
 	.e_syscall_intern = irix_o32_syscall_intern,
 #ifdef _LP64

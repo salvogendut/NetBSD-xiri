@@ -715,8 +715,8 @@ checks. LP64 CI/ordinary and o32 CI kernels are covered. The additional native
 exec checks verify inherited SIGUSR1/SIGINFO/SIGRTMIN holds, PRDA removal and
 native fork/wait. See Xiri lab/irix-init-threads and its 2026-11-01 reports.
 
-Traditional foreign signals1..31 are the supported mapping. Thread creation,
-realtime delivery, foreign handlers and general pthread semantics remain open.
+Traditional foreign signals1..31 are the supported mapping. Realtime delivery,
+foreign handlers and general pthread semantics remain open.
 PR_GETNSHARE/PR_GETSHMASK remain ENOSYS. NetBSD's PRDA protection policy is
 explicit: initialization on read-only/inaccessible memory returns EFAULT even
 where IRIX succeeds; the kernel does not bypass UVM protections. An unreadable
@@ -1412,3 +1412,30 @@ NetBSD's VM agree with the end of the mapped ELF pages. SGI's
 `iconcatalogedit` has a 4 KiB segment at 0x10013000. Its first heap write
 at 0x10014000 previously faulted after a successful break to 0x10016000.
 The subpage fixture also writes both ends of its first new heap page.
+
+### n32 pthread kernel workers on a uniprocessor
+
+On the two Indy release lines, SGI libpthread creates its default worker with
+`nsproc` (trap 1204), flags `0x020000ff`, a caller-owned stack and a null
+scheduling pointer. The worker is a detached NetBSD LWP in the caller's
+process. Its entry PC is the syscall trampoline and its stack starts 64 bytes
+below the 16-byte-aligned top. The parent receives the worker ID. The child's
+PRDA begins as a copy of the parent's, with the new ID at offset 0xe40.
+
+`irix_thread.c` wires a kernel alias of the anonymous PRDA page. The native
+scheduler calls the LWP's switch-in hook before resuming it. The hook saves
+and restores the 4 KiB IRIX PRDA only when another worker in the same process
+owns the window. This requires a matching kernel and module. Multiprocessor
+kernels reject hook registration. Exec or process exit drains the other LWPs
+before releasing the alias. Operations requiring a single unshared mapping,
+including fork and fixed replacement, keep their conservative guards after
+the first worker starts.
+
+`PR_THREAD_CTL` supports worker exit, interruptible block and counted unblock.
+The measured privileged system-scope request uses IRIX round-robin scheduling
+at priority zero. The adapter authorizes round-robin through native kauth and
+scales IRIX priorities 0 through 255 into NetBSD's real-time range. Other
+scheduling policies are outside the current adapter. The two original IRIX
+controls and both Xiri Indys passed default-scope create, shared writes,
+distinct thread identity and join. Root also passed system scope. Ordinary
+users received EPERM from vendor libpthread when selecting system scope.

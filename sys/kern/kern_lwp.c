@@ -990,6 +990,21 @@ lwp_create(lwp_t *l1, proc_t *p2, vaddr_t uaddr, int flags,
 	return (0);
 }
 
+/* Install before lwp_start, or from the running LWP.  The hook may
+ * access wired kernel storage only and runs at IPL_SCHED.  A shared
+ * user page switched in this way requires a uniprocessor kernel. */
+int
+lwp_setswitchin(lwp_t *l, void (*func)(lwp_t *))
+{
+#ifdef MULTIPROCESSOR
+	if (func != NULL)
+		return EOPNOTSUPP;
+#endif
+	KASSERT(l == curlwp || l->l_stat == LSIDL);
+	l->l_switchin = func;
+	return 0;
+}
+
 /*
  * Set a new LWP running.  If the process is stopping, then the LWP is
  * created stopped.

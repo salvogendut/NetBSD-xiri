@@ -86,6 +86,10 @@ irix_share_single(struct proc *p)
 	struct irix_share *g = ip->share;
 	bool single;
 
+	/* A pthread PRDA has a wired kernel alias until exec or exit. */
+	if (ip->prda_window != 0)
+		return false;
+
 	if (g != NULL)
 		mutex_enter(&g->lock);
 	single = p->p_nlwps == 1 && p->p_vmspace->vm_refcnt ==
