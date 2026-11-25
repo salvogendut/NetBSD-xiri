@@ -1460,3 +1460,11 @@ can retain credits at 256 distinct addresses at once. Consuming the last
 credit frees its slot. Exec and exit discard outstanding credits. A child
 starts with an empty table. Shared mappings and other usync operations need
 separate ABI qualification.
+
+A private n32 pthread vmspace can change read/write permissions on a
+contiguous range of private anonymous pages while workers are live. This
+allows libpthread to install and remove a stack guard. The adapter excludes
+the fixed PRDA page used by the switch hook and serializes the range check
+and native mprotect with heap resizing, mmap and ELF loading. Native UVM
+enforces maximum permissions. Process-shared ranges, file-backed ranges
+and requests for execute permission remain outside the threaded subset.

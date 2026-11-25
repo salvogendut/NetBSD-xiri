@@ -120,6 +120,7 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <uvm/uvm.h>
 #include <uvm/uvm_extern.h>
 #include <mips/locore.h>
 #include <mips/regnum.h>
@@ -503,8 +504,8 @@ irix_o32_elfmap(struct lwp *l, int fd, uint32_t headers, uint32_t count,
 	/*
 	 * A pthread group owns one vmspace. Serialize placement, the
 	 * address-space limit check and rollback against other ELF maps
-	 * and non-fixed mmap and heap resizing. Fixed mmap, munmap and
-	 * mprotect still require irix_share_single(), so a peer cannot
+	 * and non-fixed mmap, heap resizing and private stack protection.
+	 * Fixed mmap and munmap still require irix_share_single(), so a peer cannot
 	 * replace an extent in our rollback journal.
 	 */
 	if (irix_private_pthread_vm(p)) {
@@ -1967,23 +1968,69 @@ struct irix_o32_mprotect_args {
 	syscallarg(int32_t) prot;
 };
 
+/* Called with the pthread maplock held. Native mprotect skips holes;
+ * verify the entire range before changing any of its protections. */
+static int
+irix_thread_guard_range(struct vm_map *map, vaddr_t start, vaddr_t end)
+{
+	struct vm_map_entry *entry;
+	int error = 0;
+
+	if (start < IRIX_PRDA_ADDRESS + PAGE_SIZE && end > IRIX_PRDA_ADDRESS)
+		return EOPNOTSUPP;
+
+	vm_map_lock_read(map);
+	while (start < end) {
+		if (!uvm_map_lookup_entry(map, start, &entry)) {
+			error = ENOMEM;
+			break;
+		}
+		if (UVM_ET_ISSUBMAP(entry) || entry->object.uvm_obj != NULL ||
+		    entry->inheritance != MAP_INHERIT_COPY) {
+			error = EOPNOTSUPP;
+			break;
+		}
+		start = entry->end;
+	}
+	vm_map_unlock_read(map);
+	return error;
+}
+
 static int
 irix_o32_mprotect(struct lwp *l, const void *args, register_t *rval)
 {
 	const struct irix_o32_mprotect_args * const uap = args;
 	struct sys_mprotect_args native = { 0 };
+	struct proc *p = l->l_proc;
+	struct irix_process *ip = p->p_emuldata;
+	const bool threaded = irix_private_pthread_vm(p);
+	const vaddr_t start = SCARG(uap, addr);
+	const int32_t len = SCARG(uap, len), prot = SCARG(uap, prot);
+	int error;
 
-	if (!irix_share_single(l->l_proc))
+	if (!threaded && !irix_share_single(p))
 		return EOPNOTSUPP;
-
-	if ((int32_t)SCARG(uap, len) <= 0 ||
-	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0 ||
-	    (SCARG(uap, prot) & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
+	if (len <= 0 || (start & PAGE_MASK) != 0 ||
+	    (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
 		return EINVAL;
-	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
-	SCARG(&native, len) = SCARG(uap, len);
-	SCARG(&native, prot) = SCARG(uap, prot);
-	return sys_mprotect(l, &native, rval);
+	SCARG(&native, addr) = irix_pointer(start);
+	SCARG(&native, len) = len;
+	SCARG(&native, prot) = prot;
+	if (!threaded)
+		return sys_mprotect(l, &native, rval);
+
+	if (start >= IRIX_MAXUSER_ADDRESS ||
+	    round_page((vsize_t)len) > IRIX_MAXUSER_ADDRESS - start)
+		return EINVAL;
+	if (prot & PROT_EXEC)
+		return EOPNOTSUPP;
+	rw_enter(&ip->maplock, RW_WRITER);
+	error = irix_thread_guard_range(&p->p_vmspace->vm_map, start,
+	    start + round_page((vsize_t)len));
+	if (error == 0)
+		error = sys_mprotect(l, &native, rval);
+	rw_exit(&ip->maplock);
+	return error;
 }
 
 struct irix_o32_sysmp_args {
