@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.131 2026/07/06 16:08:13 thorpej Exp $	*/
+/*	$NetBSD: pmap.c,v 1.136 2026/11/16 22:56:33 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -105,7 +105,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.131 2026/07/06 16:08:13 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.136 2026/11/16 22:56:33 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -134,9 +134,6 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.131 2026/07/06 16:08:13 thorpej Exp $");
 #include <sun3/sun3/machdep.h>
 
 #include "pmap_pvt.h"
-
-/* XXX - What headers declare these? */
-extern struct pcb *curpcb;
 
 /* Defined in locore.s */
 extern char kernel_text[];
@@ -274,9 +271,6 @@ paddr_t	avail_start, avail_end;
 
 /* This keep track of the end of the contiguously mapped range. */
 vaddr_t virtual_contig_end;
-
-/* These are used by pmap_copy_page(), etc. */
-vaddr_t tmp_vpages[2];
 
 /* memory pool for pmap structures */
 struct pool	pmap_pmap_pool;
@@ -798,14 +792,10 @@ pmap_bootstrap(vaddr_t nextva)
 	/*
 	 * Now allocate some virtual addresses, but not the physical pages
 	 * behind them.  Note that virtual_avail is already page-aligned.
-	 *
-	 * tmp_vpages[] is an array of two virtual pages used for temporary
-	 * kernel mappings in the pmap module to facilitate various physical
-	 * address-oritented operations.
 	 */
-	tmp_vpages[0] = virtual_avail;
+	cpu_info_primary.ci_tmpva_src = virtual_avail;
 	virtual_avail += PAGE_SIZE;
-	tmp_vpages[1] = virtual_avail;
+	cpu_info_primary.ci_tmpva_dst = virtual_avail;
 	virtual_avail += PAGE_SIZE;
 
 	/** Initialize the PV system **/
@@ -1634,6 +1624,16 @@ pmap_stroll(pmap_t pmap, vaddr_t va, a_tmgr_t **a_tbl, b_tmgr_t **b_tbl,
 	return true;
 }
 
+/* pmap_update			INTERFACE
+ **
+ * Process any deferred pmap operations.
+ */
+void
+pmap_update(pmap_t pmap __unused)
+{
+	/* this implementation does not defer any operations */
+}
+
 /* pmap_enter			INTERFACE
  **
  * Called by the kernel to map a virtual address
@@ -1981,7 +1981,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	if (c_pte->attr.raw & ~(MMU_SHORT_PTE_M |
 		MMU_SHORT_PTE_USED | MMU_SHORT_PTE_WIRED)) {
 		printf("pmap_enter: junk left in PTE at %p\n", c_pte);
-		Debugger();
+		cpu_Debugger();
 	}
 #endif
 	c_pte->attr.raw |= ((u_long) pa | MMU_DT_PAGE);
@@ -2452,10 +2452,11 @@ pmap_copy_page(paddr_t srcpa, paddr_t dstpa)
 	vaddr_t srcva, dstva;
 	int s;
 
-	srcva = tmp_vpages[0];
-	dstva = tmp_vpages[1];
-
 	s = splvm();
+
+	srcva = curcpu()->ci_tmpva_src;
+	dstva = curcpu()->ci_tmpva_dst;
+
 #ifdef DIAGNOSTIC
 	if (tmp_vpages_inuse++)
 		panic("pmap_copy_page: temporary vpages are in use.");
@@ -2490,8 +2491,9 @@ pmap_zero_page(paddr_t dstpa)
 	vaddr_t dstva;
 	int s;
 
-	dstva = tmp_vpages[1];
 	s = splvm();
+
+	dstva = curcpu()->ci_tmpva_dst;
 #ifdef DIAGNOSTIC
 	if (tmp_vpages_inuse++)
 		panic("pmap_zero_page: temporary vpages are in use.");
@@ -2576,7 +2578,7 @@ pmap_release(pmap_t pmap)
 #ifdef	PMAP_DEBUG /* XXX - todo! */
 		/* XXX - Now complain... */
 		printf("pmap_release: still have table\n");
-		Debugger();
+		cpu_Debugger();
 #endif
 		free_a_table(pmap->pm_a_tmgr, true);
 		pmap->pm_a_tmgr = NULL;
@@ -3697,16 +3699,15 @@ pmap_procwr(struct proc *p, vaddr_t va, size_t len)
 	(void)cachectl1(0x80000004, va, len, p);
 }
 
-#if defined(DDB) || defined(KGDB)
 /*
- *	Routine:	pmap_db_write_text_enter
+ *	Routine:	pmap_write_text_enter
  *
  *	Function:
  *		Temporarily map a page of kernel text read-write for the
  *		kernel debugger.
  */
 bool
-pmap_db_write_text_enter(vaddr_t pgva, struct pmap_db_write_text_context *ctx)
+pmap_write_text_enter(vaddr_t pgva, struct pmap_write_text_context *ctx)
 {
 	int oldpte, tmppte;
 
@@ -3734,17 +3735,16 @@ pmap_db_write_text_enter(vaddr_t pgva, struct pmap_db_write_text_context *ctx)
 }
 
 /*
- *	Routine:	pmap_db_write_text_exit
+ *	Routine:	pmap_write_text_exit
  *
  *	Function:
- *		Undo the effects of pmap_db_write_text_enter().
+ *		Undo the effects of pmap_write_text_enter().
  */
 void
-pmap_db_write_text_exit(struct pmap_db_write_text_context *ctx)
+pmap_write_text_exit(struct pmap_write_text_context *ctx)
 {
 	set_pte(ctx->pgva, ctx->opte);
 }
-#endif /* DDB || KGDB */
 
 #ifdef	PMAP_DEBUG
 /************************** DEBUGGING ROUTINES **************************

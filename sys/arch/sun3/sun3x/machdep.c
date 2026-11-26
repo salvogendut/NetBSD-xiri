@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.154 2026/04/28 03:29:11 thorpej Exp $	*/
+/*	$NetBSD: machdep.c,v 1.156 2026/11/15 15:16:25 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.154 2026/04/28 03:29:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.156 2026/11/15 15:16:25 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -108,9 +108,6 @@ const vaddr_t kern_end = KERN_END3X;
 
 extern void *msgbufaddr;
 
-/* Virtual page frame for /dev/mem (see mem.c) */
-vaddr_t vmmap;
-
 u_char cpu_machine_id = 0;
 const char *cpu_string = NULL;
 int cpu_has_vme = 0;
@@ -159,7 +156,7 @@ consinit(void)
 		kgdb_connect(1);
 #else	/* KGDB */
 		/* Either DDB or no debugger (just PROM). */
-		Debugger();
+		cpu_Debugger();
 #endif	/* KGDB */
 	}
 }
@@ -192,8 +189,9 @@ cpu_startup(void)
 	 * This page is handed to pmap_enter() therefore
 	 * it has to be in the normal kernel VA range.
 	 */
-	vmmap = uvm_km_alloc(kernel_map, PAGE_SIZE, 0,
-	    UVM_KMF_VAONLY | UVM_KMF_WAITVA);
+	cpu_info_primary.ci_tmpva_vmmap =
+	    uvm_km_alloc(kernel_map, PAGE_SIZE, 0,
+			 UVM_KMF_VAONLY | UVM_KMF_WAITVA);
 
 	/*
 	 * Create the DVMA maps.
@@ -474,7 +472,8 @@ dumpsys(void)
 	 * might NOT be contiguous, so do it by segments.
 	 */
 
-	vaddr = (char *)vmmap;	/* Borrow /dev/mem VA */
+	vaddr_t vmmap = curcpu()->ci_tmpva_vmmap;
+	vaddr = (char *)vmmap;
 
 	for (seg = 0; seg < SUN3X_NPHYS_RAM_SEGS; seg++) {
 		crs_p = &sh->ram_segs[seg];

@@ -1,4 +1,4 @@
-/*	$NetBSD: npftest.c,v 1.32 2026/10/30 23:36:16 joe Exp $	*/
+/*	$NetBSD: npftest.c,v 1.34 2026/11/07 00:16:34 joe Exp $	*/
 
 /*
  * NPF testing framework.
@@ -335,7 +335,9 @@ main(int argc, char **argv)
 			tname_matched = true;
 		}
 
-		if (strcmp("l2defpass", testname) == 0) {
+		// don't run l2defpass tests with -t, use atf or -T l2defpass
+		// alao must be tested with l3 only rules(as specified in atf)
+		if (testname && strcmp("l2defpass", testname) == 0) {
 			ok = rumpns_npf_layer2only_test(verbose);
 			fail |= result(" layer 2 default pass", ok);
 			tname_matched = true;
@@ -374,7 +376,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	rumpns_npf_test_fini();
+	rumpns_npf_test_fini(config);
 	npf_kern_fini();
 
 	if (testname && !tname_matched)

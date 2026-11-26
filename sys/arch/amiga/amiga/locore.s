@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.190 2026/04/28 03:29:09 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.194 2026/11/14 22:40:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -57,6 +57,8 @@
 #include <machine/asm.h>
 #include <machine/trap.h>
 
+#include <m68k/m68k/locore_data.s>
+
 	.text
 GLOBAL(kernel_text)
 L_base:
@@ -113,17 +115,13 @@ Ljmp0panic:
  * and serial RBF (int5) specially, to improve performance
  */
 ENTRY_NOPROFILE(spurintr)
-	addql	#1,_C_LABEL(intr_depth)
-	addql	#1,_C_LABEL(intrcnt)+0
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	addql	#1,_C_LABEL(intrcnt)+0
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev5intr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 #include "ser.h"
 #if NSER > 0
 	jsr	_C_LABEL(ser_fastint)
@@ -132,15 +130,12 @@ ENTRY_NOPROFILE(lev5intr)
 	movew	#INTF_RBF,%a0@		| clear RBF interrupt in intreq
 #endif
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
 	addql	#1,_C_LABEL(intrcnt)+20
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 #ifdef DRACO
 ENTRY_NOPROFILE(DraCoLev2intr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 
 	CIAAADDR(%a0)
 	movb	%a0@(CIAICR),%d0	| read irc register (clears ints!)
@@ -160,14 +155,11 @@ ENTRY_NOPROFILE(DraCoLev2intr)
 
 Ldraciaend:
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 /* XXX on the DraCo rev. 4 or later, lev 1 is vectored here. */
 ENTRY_NOPROFILE(DraCoLev1intr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	movl	_C_LABEL(draco_ioct),%a0
 	btst	#5,%a0@(7)
 	jeq	Ldrintrcommon
@@ -193,14 +185,11 @@ Ldrclockretry:
 	clrb	%a0@(9)		| reset timer irq
 
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)	| XXXX: shouldn't we call the normal lev1?
+	INTERRUPT_EXIT		| XXXX: shouldn't we call the normal lev1?
 
 /* XXX on the DraCo, lev 1, 3, 4, 5 and 6 are vectored here by initcpu() */
 ENTRY_NOPROFILE(DraCoIntr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 Ldrintrcommon:
 	lea	_ASM_LABEL(Drintrcnt)-4,%a0
 	movw	%sp@(22),%d0		| use vector offset
@@ -211,9 +200,7 @@ Ldrintrcommon:
 	jbsr	_C_LABEL(intrhand)	| handle interrupt
 	addql	#4,%sp			| pop SR
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 #endif
 
 
@@ -223,8 +210,7 @@ ENTRY_NOPROFILE(lev3intr)
 #ifndef LEV6_DEFER
 ENTRY_NOPROFILE(lev4intr)
 #endif
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 Lintrcommon:
 	lea	_C_LABEL(intrcnt),%a0
 	movw	%sp@(22),%d0		| use vector offset
@@ -235,9 +221,7 @@ Lintrcommon:
 	jbsr	_C_LABEL(intrhand)	| handle interrupt
 	addql	#4,%sp			| pop SR
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 /* XXX used to be ifndef DRACO; vector will be overwritten by initcpu() */
 
@@ -248,7 +232,7 @@ ENTRY_NOPROFILE(lev6intr)
 	 * as we return. Block generation of level 6 ints until
 	 * we have dealt with this one.
 	 */
-	addql	#1,_C_LABEL(intr_depth)
+	_INTR_DEPTH_INCR
 	moveml	%d0/%a0,%sp@-
 	INTREQRADDR(%a0)
 	movew	%a0@,%d0
@@ -260,19 +244,18 @@ ENTRY_NOPROFILE(lev6intr)
 	movew	#INTF_EXTER,%a0@
 	movew	#INTF_SETCLR+INTF_AUD3,%a0@	| make sure THIS one is ok...
 	moveml	%sp@+,%d0/%a0
-	subql	#1,_C_LABEL(intr_depth)
+	_INTR_DEPTH_DECR
 	rte
 Llev6spur:
 	addql	#1,_C_LABEL(intrcnt)+36	| count spurious level 6 interrupts
 	moveml	%sp@+,%d0/%a0
-	subql	#1,_C_LABEL(intr_depth)
+	_INTR_DEPTH_DECR
 	rte
 
 ENTRY_NOPROFILE(lev4intr)
 ENTRY_NOPROFILE(fake_lev6intr)
 #endif
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 #ifdef LEV6_DEFER
 	/*
 	 * check for fake level 6
@@ -314,9 +297,7 @@ Lskipciab:
 | other ciab interrupts?
 Llev6done:
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		| all done [can we do rte here?]
+	INTERRUPT_EXIT
 Lchkexter:
 | check to see if EXTER request is really set?
 	movl	_C_LABEL(isr_exter),%a0	| get head of EXTER isr chain
@@ -392,7 +373,7 @@ ASENTRY_NOPROFILE(start)
 
 	movw	#PSL_HIGHIPL,%sr	| no interrupts
 	ASRELOC(tmpstk,%a6)
-	movl	%a6,%sp			| give ourselves a temporary stack
+	INIT_KSP(%a6)			| give ourselves a temporary stack
 
 	| save the passed parameters. "prepass" them on the stack for
 	| later catch by start_c()
@@ -581,13 +562,13 @@ Lenable030:
 Ltc:	.long	MMU51_TCR_BITS		| see pmap.h
 
 LMMUenable_end:
-	lea	_ASM_LABEL(tmpstk),%sp	| give ourselves a temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| re-load the temporary stack
+	INIT_KSP(%a0)
 	jbsr	_C_LABEL(vec_init)	| initialize the vector table
 
 	/* start_c_finish() returns lwp0 SP in %a0 */
 	jbsr	_C_LABEL(start_c_finish)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 /* flush TLB and turn on caches */
 	jbsr	_C_LABEL(_TBIA)		| invalidate TLB
@@ -872,9 +853,6 @@ ASLOCAL(zero)
 Ldorebootend:
 
 	.data
-	.space	PAGE_SIZE
-	.align	4
-ASGLOBAL(tmpstk)
 
 GLOBAL(mmutype)
 	.long	MMU_68851

@@ -1,0 +1,19 @@
+#	$NetBSD: files.imx_ccm,v 1.2 2026/11/26 03:39:30 hkenken Exp $
+#
+# Configuration info for the Freescale i.MX Clock framework
+#
+
+# Common clock framework
+define	imx_ccm: clk
+file	arch/arm/nxp/imx_ccm.c			imx_ccm
+file	arch/arm/nxp/imx_ccm_composite.c	imx_ccm
+file	arch/arm/nxp/imx_ccm_div.c		imx_ccm
+file	arch/arm/nxp/imx_ccm_fixed.c		imx_ccm
+file	arch/arm/nxp/imx_ccm_fixed_factor.c	imx_ccm
+file	arch/arm/nxp/imx_ccm_gate.c		imx_ccm
+file	arch/arm/nxp/imx_ccm_mux.c		imx_ccm
+file	arch/arm/nxp/imx_ccm_pll.c		imx_ccm
+
+# DPLLs
+define	imx_ccm_dpll: imx_ccm
+file	arch/arm/nxp/imx_ccm_dpll.c		imx_ccm_dpll

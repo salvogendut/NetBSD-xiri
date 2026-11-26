@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_68k.h,v 1.22 2026/07/16 14:15:15 thorpej Exp $	*/
+/*	$NetBSD: pmap_68k.h,v 1.37 2026/11/26 13:46:06 thorpej Exp $	*/
 
 /*-     
  * Copyright (c) 2025 The NetBSD Foundation, Inc.
@@ -68,10 +68,19 @@
 #ifndef _M68K_PMAP_68K_H_
 #define	_M68K_PMAP_68K_H_
 
+#ifdef _KERNEL_OPT
+#include "opt_multiprocessor.h"
+#endif
+
 #if defined(_KERNEL)
 
 #if !defined(_MODULE)
 
+#if defined(MULTIPROCESSOR) || defined(PMAP_LOCK_DIAGNOSTIC)
+#define	PMAP_ENABLE_LOCKS
+#endif
+
+#include <sys/mutex.h>
 #include <sys/rbtree.h>
 #include <sys/queue.h>
 
@@ -81,6 +90,20 @@
 #include <sys/kcore.h>
 #include <m68k/kcore.h>
 
+#ifdef PMAP_ENABLE_LOCKS
+#define	PMAP_MUTEX_INIT(m, f, i) mutex_init((m), (f), (i))
+#define	PMAP_MUTEX_ENTER(m)	 mutex_enter(m)
+#define	PMAP_MUTEX_TRYENTER(m)	 mutex_tryenter(m)
+#define	PMAP_MUTEX_EXIT(m)	 mutex_exit(m)
+#define	PMAP_MUTEX_OWNED(m)	 mutex_owned(m)
+#else
+#define	PMAP_MUTEX_INIT(m, f, i) __nothing
+#define	PMAP_MUTEX_ENTER(m)	 __nothing
+#define	PMAP_MUTEX_TRYENTER(m)	 true
+#define	PMAP_MUTEX_EXIT(m)	 __nothing
+#define	PMAP_MUTEX_OWNED(m)	 true
+#endif /* PMAP_ENABLE_LOCKS */
+
 typedef unsigned int	pt_entry_t;
 
 #define	NPTEPG		(PAGE_SIZE / (sizeof(pt_entry_t)))
@@ -88,13 +111,18 @@ typedef unsigned int	pt_entry_t;
 TAILQ_HEAD(pmap_ptpage_list, pmap_ptpage);
 LIST_HEAD(pmap_pv_list, pv_entry);
 
+struct pmap_garbage {
+	struct pmap_ptpage_list g_ptpages;
+	struct pmap_pv_list g_pvlist;
+};
+
 struct pmap {
+#ifdef PMAP_ENABLE_LOCKS
+	kmutex_t           pm_mutex;	/* pmap's lock */
+#endif
 	struct pmap_table *pm_lev1map;	/* level 1 table */
 	paddr_t            pm_lev1pa;	/* PA of level 1 table */
-	uint16_t           pm_refcnt;	/* reference count */
-	uint16_t           pm_busy;	/* "busy" (currently loaded in
-					   to MMU, or involved in
-					   some pmap operation) count */
+	uint32_t           pm_refcnt;	/* reference count */
 
 	struct pmap_table *pm_pt_cache;	/* most recently used leaf table */
 
@@ -107,7 +135,27 @@ struct pmap {
 	struct pmap_pv_list pm_pvlist;	/* all associated P->V entries */
 
 	struct pmap_statistics pm_stats;/* statistics */
+
+	/* We collect the garbage here for deferred resource disposal. */
+	struct pmap_garbage pm_garbage;
+#if defined(MULTIPROCESSOR)
+
+	/*
+	 * Bitmap of CPUs actively using this pmap, indexed by
+	 * HW CPU number.  These bits are set in pmap_activate()
+	 * and cleared in pmap_deactivate().  Must hold the pmap
+	 * lock to modify.  The kernel pmap is always considered
+	 * active, so we don't bother fiddling with it in that
+	 * case.
+	 */
+	volatile uint32_t  pm_cpus;
+#endif
 };
+
+#define	PMAP_LOCK(pmap)		PMAP_MUTEX_ENTER(&(pmap)->pm_mutex)
+#define	PMAP_TRYLOCK(pmap)	PMAP_MUTEX_TRYENTER(&(pmap)->pm_mutex)
+#define	PMAP_UNLOCK(pmap)	PMAP_MUTEX_EXIT(&(pmap)->pm_mutex)
+#define	PMAP_LOCK_OWNED(pmap)	PMAP_MUTEX_OWNED(&(pmap)->pm_mutex)
 
 /*
  * One entry per P->V mapping of a managed page.
@@ -216,12 +264,17 @@ struct pmap_bootmap {
 	int			pmbm_flags;
 };
 
-#define	PMBM_F_VAONLY	__BIT(0)
-#define	PMBM_F_FIXEDVA	__BIT(1)
-#define	PMBM_F_KEEPOUT	__BIT(2)
-#define	PMBM_F_CI	__BIT(3)	/* cache-inhibited mapping */
-#define	PMBM_F_CWT	__BIT(4)	/* write-through cacheable mapping */
-#define	PMBM_F_RO	__BIT(5)	/* read-only mapping */
+#define	PMBM_F_RO	__BIT(2)	/* same as PTE40 W bit */
+#define	PMBM_F_U0	__BIT(8)	/* same as PTE40 U0 bit */
+#define	PMBM_F_U1	__BIT(9)	/* same as PTE40 U1 bit */
+
+#define	PMBM_F_VAONLY	__BIT(16)
+#define	PMBM_F_FIXEDVA	__BIT(17)
+#define	PMBM_F_KEEPOUT	__BIT(18)
+#define	PMBM_F_CI	__BIT(19)	/* cache-inhibited mapping */
+#define	PMBM_F_CWT	__BIT(20)	/* write-through cacheable mapping */
+
+#define	PMBM_F_PTEBITS	(PMBM_F_U0 | PMBM_F_U1)
 
 /*
  * Abstract definitions for PTE bits / fields.  C code will compile-time-
@@ -348,8 +401,15 @@ struct pmap_bootmap {
  */
 #define	__HAVE_VM_PAGE_MD
 struct vm_page_md {
+#ifdef PMAP_ENABLE_LOCKS
+	kmutex_t pvh_mutex;
+#endif
 	uintptr_t pvh_listx;		/* pv_entry list + attrs */
 };
+
+#define	PVH_LOCK(pg)		PMAP_MUTEX_ENTER(&(pg)->mdpage.pvh_mutex)
+#define	PVH_UNLOCK(pg)		PMAP_MUTEX_EXIT(&(pg)->mdpage.pvh_mutex)
+#define	PVH_LOCK_OWNED(pg)	PMAP_MUTEX_OWNED(&(pg)->mdpage.pvh_mutex)
 
 #define	PVH_UM_SHIFT	3
 #define	PVH_UM_MASK	__BITS(0,1)
@@ -359,6 +419,8 @@ struct vm_page_md {
 
 #define VM_MDPAGE_INIT(pg)					\
 do {								\
+	PMAP_MUTEX_INIT(&(pg)->mdpage.pvh_mutex, MUTEX_DEFAULT,	\
+	    IPL_NONE);						\
 	(pg)->mdpage.pvh_listx = 0;				\
 } while (/*CONSTCOND*/0)
 
@@ -421,6 +483,9 @@ do {								\
 void	pmap_procwr(struct proc *, vaddr_t, size_t);
 #define	PMAP_NEED_PROCWR
 
+/* machine-dependent flags for pmap_enter() / pmap_kenter_pa() */
+#define	PMAP_CPU_LOCAL	__BIT(24)	/* cpu-local mapping */
+
 /*
  * pmap_bootstrap1() is called before the MMU is turned on.
  * pmap_bootstrap2() is called after.
@@ -443,14 +508,14 @@ bool	pmap_pa_has_static_mapping(paddr_t, size_t, vm_prot_t,
 	    vaddr_t *, int *);
 bool	pmap_va_is_static_mapping(vaddr_t, size_t);
 
-/* Kernel debugger support functions. */
-struct pmap_db_write_text_context {
+/* Support for patching kernel text. */
+struct pmap_write_text_context {
 	vaddr_t		pgva;
 	pt_entry_t *	ptep;
 	pt_entry_t	opte;
 };
-bool	pmap_db_write_text_enter(vaddr_t, struct pmap_db_write_text_context *);
-void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
+bool	pmap_write_text_enter(vaddr_t, struct pmap_write_text_context *);
+void	pmap_write_text_exit(struct pmap_write_text_context *);
 
 /*
  * Functions exported for compatibility with the Hibler pmap, where
@@ -460,7 +525,7 @@ void	pmap_db_write_text_exit(struct pmap_db_write_text_context *);
  */
 paddr_t		vtophys(vaddr_t);
 
-extern char *	vmmap;
+extern paddr_t	lwp0upa;
 extern void *	msgbufaddr;
 
 /* Support functions for HP MMU. */
@@ -468,14 +533,21 @@ void	pmap_init_vac(size_t);
 void	pmap_prefer(vaddr_t, vaddr_t *, int);
 /* PMAP_PREFER() defined in <machine/pmap.h> on machines were it's needed. */
 
-/*
- * pmap hook for trap()'s page fault handler.  We don't need to
- * do anything special, so it just goes to uvm_fault().
- */
-#define	pmap_fault(m, v, t)	uvm_fault((m), (v), (t))
+/* pmap hook for trap()'s page fault handler. */
+int	pmap_fault(struct vm_map *, vaddr_t, vm_prot_t);
 
 /* Kernel crash dump support. */
 phys_ram_seg_t *	pmap_init_kcore_hdr(cpu_kcore_hdr_t *);
+
+/* Multiprocessor supprt. */
+struct cpu_info;
+struct cpu_info *	pmap_percpu_alloc(void);
+void			pmap_percpu_init(struct cpu_info *);
+void			pmap_percpu_start(void);
+
+void			pmap_message_user_process(void);
+void			pmap_message_intr_process(void);
+void			pmap_message_process(void);
 
 /*
  * pmap_bootstrap1() may need to relocate global references, and perform
@@ -525,12 +597,6 @@ phys_ram_seg_t *	pmap_init_kcore_hdr(cpu_kcore_hdr_t *);
 #endif
 
 #endif /* ! _MODULE */
-
-/*
- * Some pmap(9) API macros should be defined here for module(7).
- * Luckily, all m68k pmap implementations behave this way. (see PR/54869)
- */
-#define	pmap_update(pmap)		__nothing
 
 #endif /* _KERNEL */
 

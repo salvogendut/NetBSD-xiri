@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.144 2026/04/28 03:29:09 thorpej Exp $	*/
+/*	$NetBSD: locore.s,v 1.148 2026/11/14 22:40:14 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -61,6 +61,8 @@
 #include "assym.h"
 #include <machine/asm.h>
 
+#include <m68k/m68k/locore_data.s>
+
 /*
  * This is for kvm_mkdb, and should be the address of the beginning
  * of the kernel text segment (not necessarily the same as kernbase).
@@ -101,12 +103,9 @@ ENTRY_NOPROFILE(addrerr_early)
  */
 
 ENTRY_NOPROFILE(intr_glue)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(intr_dispatch)	|  handle interrupt
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(lev2intr)
 	rte				|  HBL, can't be turned off on Falcon!
@@ -117,11 +116,10 @@ ENTRY_NOPROFILE(lev4intr)		|  VBL interrupt
 	jne	1f			|  Yes, go service a VBL-request
 	rte				|  Nothing to do.
 1:
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(falcon_display_switch)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
+	_INTR_DEPTH_DECR		| no AST processing here
+	_INTERRUPT_RESTOREREG
 #endif /* FALCON_VIDEO */
 	rte
 
@@ -135,8 +133,8 @@ ENTRY_NOPROFILE(lev6intr)
 #define	PLX_PCICR	0x4204
 #define	PLX_CNTRL	0x42ec
 #define	PLX_DMCFGA	0x42ac
-	addql	#1,_C_LABEL(intr_depth)
 	moveml	%d0-%d2/%a0-%a1,%sp@-
+	_INTR_DEPTH_INCR		| might clobber %a0
 	movw	%sp@(20),%sp@-		|  push previous SR value
 	clrw	%sp@-			|	padded to longword
 	movl	_C_LABEL(stio_addr),%a0	| get KVA of ST-IO area
@@ -157,9 +155,10 @@ ENTRY_NOPROFILE(lev6intr)
 	movel	%d1,%sp@-		| Call handler
 	jbsr	_C_LABEL(milan_isa_intr)
 	addql	#8,%sp
+	_INTR_DEPTH_DECR		| might clobber %a0
+	CHECK_ASTPENDING(%a0)		| check for AST
 	moveml  %sp@+,%d0-%d2/%a0-%a1
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	RTE_AST
 
 /*
  * Support functions for reading and writing the Milan PCI config space.
@@ -207,40 +206,34 @@ ENTRY(milan_pci_confwrite)
 ENTRY_NOPROFILE(lev7intr)
 	tstl	_ASM_LABEL(plx_nonmi)	| milan_conf_read shortcut
 	jne	1f			| .... get out immediately
-	INTERRUPT_SAVEREG
+	_INTERRUPT_SAVEREG
 	movl	_C_LABEL(stio_addr),%a0	| get KVA of ST-IO area
 	movw	%a0@(PLX_PCICR),_C_LABEL(plx_status)
 	movw	#0xf900,%a0@(PLX_PCICR)	| Clear error bits
 	jbsr	_C_LABEL(nmihandler)	| notify...
-	INTERRUPT_RESTOREREG
+	_INTERRUPT_RESTOREREG
 	addql	#1,_C_LABEL(intrcnt)+28	| add another nmi interrupt
 1:
 	rte				| all done
 #endif /* _MILANHW_ */
 
 ENTRY_NOPROFILE(lev3intr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG
+	INTERRUPT_ENTER
 	movw	%sp@(22),%sp@-		|  push exception vector info
 	clrw	%sp@-
 	movl	%sp@(22),%sp@-		|  and PC
 	jbsr	_C_LABEL(straytrap)	|  report
 	addql	#8,%sp			|  pop args
-	INTERRUPT_RESTOREREG		|  restore regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		|  all done
+	INTERRUPT_EXIT
 
 ENTRY_NOPROFILE(badmfpint)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG		|  save scratch regs
+	INTERRUPT_ENTER
 	movw	%sp@(22),%sp@-		|  push exception vector info
 	clrw	%sp@-
 	movl	%sp@(22),%sp@-		|  and PC
 	jbsr	_C_LABEL(straymfpint)	|  report
 	addql	#8,%sp			|  pop args
-	INTERRUPT_RESTOREREG		|  restore regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		|  all done
+	INTERRUPT_EXIT
 
 /*
  * Interrupt handlers.
@@ -260,101 +253,79 @@ ENTRY_NOPROFILE(badmfpint)
  */
 
 ENTRY_NOPROFILE(spurintr)
+	INTERRUPT_ENTER
 	addql	#1,_C_LABEL(intrcnt)+0
-	INTERRUPT_SAVEREG		|  save scratch registers
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG		|  restore scratch regs
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 	/* MFP timer A handler --- System clock --- */
 ASENTRY_NOPROFILE(mfp_tima)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG		|  save scratch registers
+	INTERRUPT_ENTER
 	movl	%sp,%sp@-		|  push pointer to clockframe
 	jbsr	_C_LABEL(hardclock)	|  call generic clock int routine
 	addql	#4,%sp			|  pop params
 	addql	#1,_C_LABEL(intrcnt_user)+52
 					|  add another system clock interrupt
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG		|  restore scratch regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		|  all done
+	INTERRUPT_EXIT
 
 #ifdef STATCLOCK
 	/* MFP timer C handler --- Stat/Prof clock --- */
 ASENTRY_NOPROFILE(mfp_timc)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG		|  save scratch registers
+	INTERRUPT_ENTER
 	jbsr	_C_LABEL(statintr)	|  call statistics clock handler
 	addql	#1,_C_LABEL(intrcnt)+36	|  add another stat clock interrupt
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG		|  restore scratch regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)		|  all done
+	INTERRUPT_EXIT
 #endif /* STATCLOCK */
 
 #if NKBD > 0
 	/* MFP ACIA handler --- keyboard/midi --- */
 ASENTRY_NOPROFILE(mfp_kbd)
-	addql	#1,_C_LABEL(intr_depth)
-	addql	#1,_C_LABEL(intrcnt)+8	|  add another kbd/mouse interrupt
-
-	INTERRUPT_SAVEREG		|  save scratch registers
+	INTERRUPT_ENTER
 	movw	%sp@(16),%sp@-		|  push previous SR value
 	clrw	%sp@-			|     padded to longword
 	jbsr	_C_LABEL(kbdintr)	|  handle interrupt
 	addql	#4,%sp			|  pop SR
+	addql	#1,_C_LABEL(intrcnt)+8	|  add another kbd/mouse interrupt
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG		|  restore scratch regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 #endif /* NKBD */
 
 #if NNCRSCSI > 0
 	/* MFP2 SCSI DMA handler --- NCR5380 --- */
 ASENTRY_NOPROFILE(mfp2_5380dm)
-	addql	#1,_C_LABEL(intr_depth)
-	addql	#1,_C_LABEL(intrcnt)+24	|  add another 5380-DMA interrupt
-
-	INTERRUPT_SAVEREG		|  save scratch registers
+	INTERRUPT_ENTER
 	movw	%sp@(16),%sp@-		|  push previous SR value
 	clrw	%sp@-			|     padded to longword
 	jbsr	_C_LABEL(scsi_dma)	|  handle interrupt
 	addql	#4,%sp			|  pop SR
+	addql	#1,_C_LABEL(intrcnt)+24	|  add another 5380-DMA interrupt
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG		|  restore scratch regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 	/* MFP2 SCSI handler --- NCR5380 --- */
 ASENTRY_NOPROFILE(mfp2_5380)
-	addql	#1,_C_LABEL(intr_depth)
-	addql	#1,_C_LABEL(intrcnt)+20	|  add another 5380-SCSI interrupt
-
-	INTERRUPT_SAVEREG		|  save scratch registers
+	INTERRUPT_ENTER
 	movw	%sp@(16),%sp@-		|  push previous SR value
 	clrw	%sp@-			|     padded to longword
 	jbsr	_C_LABEL(scsi_ctrl)	|  handle interrupt
 	addql	#4,%sp			|  pop SR
+	addql	#1,_C_LABEL(intrcnt)+20	|  add another 5380-SCSI interrupt
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG		|  restore scratch regs
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 #endif /* NNCRSCSI > 0 */
 
 #ifdef _ATARIHW_
 	/* Level 1 (Software) interrupt handler */
 ENTRY_NOPROFILE(lev1intr)
-	addql	#1,_C_LABEL(intr_depth)
-	INTERRUPT_SAVEREG		|  save scratch registers
+	INTERRUPT_ENTER
 	movl	_C_LABEL(stio_addr),%a0 |  get KVA of ST-IO area
 	moveb	#0, %a0@(SCU_SOFTINT)	|  Turn off software interrupt
 	addql	#1,_C_LABEL(intrcnt)+16	|  add another software interrupt
 	jbsr	_C_LABEL(nullop)	|  XXX handle software interrupts
 	CPUINFO_INCREMENT(CI_NINTR)
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(intr_depth)
-	jra	_ASM_LABEL(rei)
+	INTERRUPT_EXIT
 
 	/*
 	 * Should never occur, except when special hardware modification
@@ -367,7 +338,7 @@ ENTRY_NOPROFILE(lev7intr)
 	 * Note that the nmi has to be turned off while handling it because
 	 * the hardware modification has no de-bouncing logic....
 	 */
-	addql	#1,_C_LABEL(intr_depth)
+	_INTR_DEPTH_INCR
 	movl	%a0, %sp@-		|  save a0
 	movl	_C_LABEL(stio_addr),%a0	|  get KVA of ST-IO area
 	movb	%a0@(SCU_SYSMASK),%sp@-	|  save current sysmask
@@ -375,7 +346,7 @@ ENTRY_NOPROFILE(lev7intr)
 	trap	#15			|  drop into the debugger
 	movb	%sp@+, %a0@(SCU_SYSMASK)|  restore sysmask
 	movl	%sp@+, %a0		|  restore a0
-	subql	#1,_C_LABEL(intr_depth)
+	_INTR_DEPTH_DECR
 #endif
 	addql	#1,_C_LABEL(intrcnt)+28	|  add another nmi interrupt
 	rte				|  all done
@@ -435,7 +406,8 @@ Lstart2:
 	jcc	Lstart2
 Lstart3:
 
-	lea	_ASM_LABEL(tmpstk),%sp	| give ourselves a temporary stack
+	lea	_ASM_LABEL(tmpstk),%a0	| give ourselves a temporary stack
+	INIT_KSP(%a0)
 
 	/*
 	 *  save the passed parameters. `prepass' them on the stack for
@@ -498,8 +470,7 @@ Lend_cpuset:
 	 * start_c() returns lwp0 SP in %a0
 	 */
 	jsr	_C_LABEL(start_c)
-	movl	%a0,%sp			| now running on lwp0's stack
-	movl	#0,%a6			| terminate the stack back trace
+	INIT_KSP(%a0)			| now running on lwp0's stack
 
 	/* flush TLB and turn on caches */
 	jbsr	_C_LABEL(_TBIA)		|  invalidate TLB
@@ -629,9 +600,6 @@ ASLOCAL(zero)
 Ldorebootend:
 
 	.data
-	.p2align 2
-	.space	PAGE_SIZE
-ASGLOBAL(tmpstk)
 
 #ifdef M68060 /* XXX */
 L60iem:		.long	0

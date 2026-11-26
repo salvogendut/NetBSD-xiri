@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.3 2026/05/03 19:10:41 thorpej Exp $
+#	$NetBSD: genassym.cf,v 1.13 2026/11/17 06:19:33 thorpej Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -107,6 +107,7 @@ ifndef _MODULE
 define	PAGE_SIZE		PAGE_SIZE
 define	PGSHIFT			PGSHIFT
 define	PG_FRAME		(~PGOFSET)
+define	USPACE			USPACE
 endif
 
 # memory segment list
@@ -119,12 +120,29 @@ define	L_PCB			offsetof(struct lwp, l_addr)
 define	L_PROC			offsetof(struct lwp, l_proc)
 define	L_MD_REGS		offsetof(struct lwp, l_md.md_regs)
 define	L_MD_FLAGS		offsetof(struct lwp, l_md.md_flags)
+define	L_MD_ASTPENDING		offsetof(struct lwp, l_md.md_astpending)
 define	P_FLAG			offsetof(struct proc, p_flag)
 define	P_RASLIST		offsetof(struct proc, p_raslist)
 define	P_VMSPACE		offsetof(struct proc, p_vmspace)
 
-# interrupt/fault metering
+# cpu_info fields
 define	CI_NINTR		offsetof(struct cpu_info, ci_data.cpu_nintr)
+define	CI_IDEPTH		offsetof(struct cpu_info, ci_idepth)
+define	CI_CURLWP		offsetof(struct cpu_info, ci_curlwp)
+define	CI_SELF			offsetof(struct cpu_info, ci_self)
+define	CI_FLAGS		offsetof(struct cpu_info, ci_flags)
+ifndef _MODULE
+ifdef TBL40_L1_SIZE
+define	CI_LEV1MAP		(PAGE_SIZE - TBL40_L1_SIZE)
+endif
+ifdef CPUINFO_VA
+define	CPUINFO_VA		CPUINFO_VA
+endif
+endif
+
+define	CPU_F_RUNNING		CPU_F_RUNNING
+
+# interrupt/fault metering
 define	SIZEOF_EVCNT		sizeof(struct evcnt)
 define	EV_COUNT		offsetof(struct evcnt, ev_count)
 define	EV_COUNT32		offsetof(struct evcnt, ev_count32)
@@ -186,6 +204,9 @@ endif
 # pmap flags (dependent on pmap implementation)
 ifdef PMBM_F_CI
 define	PMBM_F_CI		PMBM_F_CI
+define	PMBM_PADDR		offsetof(struct pmap_bootmap, pmbm_paddr)
+define	PMBM_SIZE		offsetof(struct pmap_bootmap, pmbm_size)
+define	SIZEOF_PMAP_BOOTAMP	sizeof(struct pmap_bootmap)
 endif
 
 # delay(9) parameters
@@ -196,6 +217,7 @@ define	DELAY_MAGSHIFT		DELAY_MAGSHIFT
 define	PCB_PS			offsetof(struct pcb, pcb_ps)
 define	PCB_USP			offsetof(struct pcb, pcb_usp)
 define	PCB_REGS		offsetof(struct pcb, pcb_regs)
+define	PCB_REG_SP		offsetof(struct pcb, pcb_regs[PCB_REGS_SP])
 define	PCB_ONFAULT		offsetof(struct pcb, pcb_onfault)
 define	PCB_FPCTX		offsetof(struct pcb, pcb_fpregs)
 define	SIZEOF_PCB		sizeof(struct pcb)

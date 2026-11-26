@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: npfext_route.c,v 1.5 2026/10/31 08:04:12 martin Exp $");
+__RCSID("$NetBSD: npfext_route.c,v 1.7 2026/11/02 12:09:32 joe Exp $");
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -77,7 +77,7 @@ npfext_route_param(nl_ext_t *ext, const char *param, const char *val)
 		enum ptype	type;
 		bool		reqval;
 	} params[] = {
-		{ "route-interface",	PARAM_INTERFACE,	true    },
+		{ "interface",	PARAM_INTERFACE,	true    },
 		{ "via",	PARAM_INET4,	true	},
         { "via6",   PARAM_INET6,   true    },
         { "dup-to", PARAM_DUP,  false   },

@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_pgmmu.c,v 1.1 2026/07/19 01:48:24 thorpej Exp $	*/
+/*	$NetBSD: pmap_pgmmu.c,v 1.6 2026/11/16 22:56:32 thorpej Exp $	*/
 
 /*-     
  * Copyright (c) 2025, 2026 The NetBSD Foundation, Inc.
@@ -75,7 +75,7 @@
 #include "opt_kgdb.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap_pgmmu.c,v 1.1 2026/07/19 01:48:24 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap_pgmmu.c,v 1.6 2026/11/16 22:56:32 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1712,7 +1712,11 @@ kvtop(void *v)
  *	incorrect entries NOW, by processing any deferred
  *	pmap operations.
  */
-/* call deleted in <machine/pmap.h> */
+void
+pmap_update(pmap_t pmap __unused)
+{
+	/* this implementation does not defer any operations */
+}
 
 /*
  * pmap_activate:		[ INTERFACE ]
@@ -1759,12 +1763,6 @@ pmap_deactivate(struct lwp *l)
 	PMAP_CRIT_EXIT(pmap->pm_busy--);
 }
 
-static vaddr_t pmap_tmpmap_srcva;
-static vaddr_t pmap_tmpmap_dstva;
-
-static unsigned int pmap_tmpmap_srcidx;
-static unsigned int pmap_tmpmap_dstidx;
-
 /*
  * pmap_zero_page:		[ INTERFACE ]
  *
@@ -1775,21 +1773,13 @@ void
 pmap_zero_page(paddr_t pa)
 {
 	const int flags = PMAP_WIRED;
+	vaddr_t const dstva = curcpu()->ci_tmpva_dst;
 
-	/* Build the new PME. */
-	const pm_entry_t dst_pme =
-	    pmap_make_pme(pmap_kernel(), pa,
-			  UVM_PROT_READ | UVM_PROT_WRITE, flags);
+	pmap_kenter_pa(dstva, pa, UVM_PROT_READ | UVM_PROT_WRITE, flags);
 
-	/* Set the new PME. */
-	KASSERT(! pme_valid_p(pgmmu_getpme(pmap_tmpmap_dstidx)));
-	pgmmu_setpme(pmap_tmpmap_dstidx, dst_pme);
+	zeropage((void *)dstva);
 
-	/* Zero the page. */
-	zeropage((void *)pmap_tmpmap_dstva);
-
-	/* Invalidate the PME. */
-	pgmmu_setpme(pmap_tmpmap_dstidx, 0);
+	pmap_kremove(dstva, PAGE_SIZE);
 }
 
 /*
@@ -1802,27 +1792,16 @@ void
 pmap_copy_page(paddr_t src, paddr_t dst)
 {
 	const int flags = PMAP_WIRED;
+	vaddr_t const srcva = curcpu()->ci_tmpva_src;
+	vaddr_t const dstva = curcpu()->ci_tmpva_dst;
 
-	/* Build the new PMEs. */
-	const pm_entry_t src_pme =
-	    pmap_make_pme(pmap_kernel(), src,
-			  UVM_PROT_READ, flags);
-	const pm_entry_t dst_pme =
-	    pmap_make_pme(pmap_kernel(), dst,
-			  UVM_PROT_READ | UVM_PROT_WRITE, flags);
+	pmap_kenter_pa(srcva, src, UVM_PROT_READ, flags);
+	pmap_kenter_pa(dstva, dst, UVM_PROT_READ | UVM_PROT_WRITE, flags);
 
-	/* Set the new PMEs. */
-	KASSERT(! pme_valid_p(pgmmu_getpme(pmap_tmpmap_srcidx)));
-	pgmmu_setpme(pmap_tmpmap_srcidx, src_pme);
-	KASSERT(! pme_valid_p(pgmmu_getpme(pmap_tmpmap_dstidx)));
-	pgmmu_setpme(pmap_tmpmap_dstidx, dst_pme);
+	copypage((void *)srcva, (void *)dstva);
 
-	/* Copy the page. */
-	copypage((void *)pmap_tmpmap_srcva, (void *)pmap_tmpmap_dstva);
-
-	/* Invalidate the PMEs. */
-	pgmmu_setpme(pmap_tmpmap_srcidx, 0);
-	pgmmu_setpme(pmap_tmpmap_dstidx, 0);
+	pmap_kremove(srcva, PAGE_SIZE);
+	pmap_kremove(dstva, PAGE_SIZE);
 }
 
 /*
@@ -1976,13 +1955,13 @@ pmap_init_kcore_hdr(cpu_kcore_hdr_t *h)
 
 #if defined(DDB) || defined(KGDB)
 /*
- * pmap_db_write_text_enter:
+ * pmap_write_text_enter:
  *
  *	Temporarily map a page of kernel text read-write for the
  *	kernel debugger.
  */
 bool
-pmap_db_write_text_enter(vaddr_t pgva, struct pmap_db_write_text_context *ctx)
+pmap_write_text_enter(vaddr_t pgva, struct pmap_write_text_context *ctx)
 {
 	sm_entry_t sme = pgmmu_getsme0(pgva);
 	if (! sme_valid_p(sme)) {
@@ -2005,12 +1984,12 @@ pmap_db_write_text_enter(vaddr_t pgva, struct pmap_db_write_text_context *ctx)
 }
 
 /*
- * pmap_db_write_text_exit:
+ * pmap_write_text_exit:
  *
- *	Undo the effects of pmap_db_write_text_enter().
+ *	Undo the effects of pmap_write_text_enter().
  */
 void
-pmap_db_write_text_exit(struct pmap_db_write_text_context *ctx)
+pmap_write_text_exit(struct pmap_write_text_context *ctx)
 {
 	pgmmu_setpme(ctx->pmeidx, ctx->opme);
 }
@@ -2354,18 +2333,14 @@ pmap_bootstrap1(paddr_t nextpa, paddr_t reloff __unused)
 	}
 
 	/* pmap temporary map addresses */
-	pmap_tmpmap_srcva = nextva;
+	cpu_info_primary.ci_tmpva_src = nextva;
 	nextva += PAGE_SIZE;
-	sme = pgmmu_getsme0(pmap_tmpmap_srcva);
-	pmap_tmpmap_srcidx = pme_index(sme_pmeg(sme), pmap_tmpmap_srcva);
 
-	pmap_tmpmap_dstva = nextva;
+	cpu_info_primary.ci_tmpva_dst = nextva;
 	nextva += PAGE_SIZE;
-	sme = pgmmu_getsme0(pmap_tmpmap_dstva);
-	pmap_tmpmap_dstidx = pme_index(sme_pmeg(sme), pmap_tmpmap_dstva);
 
 	/* vmmap temporary map address */
-	vmmap = (char *)nextva;
+	cpu_info_primary.ci_tmpva_vmmap = nextva;
 	nextva += PAGE_SIZE;
 
 	/* kernel message buffer */
@@ -2390,7 +2365,7 @@ pmap_bootstrap1(paddr_t nextpa, paddr_t reloff __unused)
  *
  *	Phase 2 of bootstrapping virtual memory.  For this implementation,
  *	we just have to finish setting up some run-time-computed global
- *	pmap data, plus the lwp0 u-area, curlwp, and curpcb.
+ *	pmap data and the lwp0 u-area.
  *
  *	Returns the new kernel %sp value for lwp0.
  */
@@ -2404,8 +2379,6 @@ pmap_bootstrap2(void)
 	/* Initialize lwp0 u-area, curlwp, and curpcb. */
 	memset((void *)lwp0uarea, 0, USPACE);
 	uvm_lwp_setuarea(&lwp0, lwp0uarea);
-	curlwp = &lwp0;
-	curpcb = lwp_getpcb(&lwp0);
 
 	/* Create a fake exception frame so that cpu_lwp_fork() can copy it. */
 	struct trapframe *tf = (struct trapframe *)(lwp0uarea + USPACE) - 1;

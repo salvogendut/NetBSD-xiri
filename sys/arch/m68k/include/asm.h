@@ -1,4 +1,4 @@
-/*	$NetBSD: asm.h,v 1.38 2026/03/15 17:10:34 christos Exp $	*/
+/*	$NetBSD: asm.h,v 1.47 2026/11/15 15:16:24 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -177,19 +177,29 @@
 #define	ASBSS(name, size)				\
 	.comm	_ASM_LABEL(name),size
 
-/*
- * Need a better place for these but these are common across
- * all m68k ports so let's define just once.
- */
 #ifdef __mcoldfire__
-#define INTERRUPT_SAVEREG	lea -16(%sp),%sp; moveml #0xC0C0,(%sp)
-#define INTERRUPT_RESTOREREG	moveml (%sp),#0x0303; lea 16(%sp),%sp
+#define _INTERRUPT_SAVEREG	lea -16(%sp),%sp; moveml #0xC0C0,(%sp)
+#define _INTERRUPT_RESTOREREG	moveml (%sp),#0x0303; lea 16(%sp),%sp
 #else
-#define INTERRUPT_SAVEREG	moveml	#0xC0C0,-(%sp)
-#define INTERRUPT_RESTOREREG	moveml	(%sp)+,#0x0303
+#define _INTERRUPT_SAVEREG	moveml	#0xC0C0,-(%sp)
+#define _INTERRUPT_RESTOREREG	moveml	(%sp)+,#0x0303
 #endif
 
+#ifndef _KERNEL
+/* Compatiblity for user-space use of these macros. */
+#define	INTERRUPT_SAVEREG	_INTERRUPT_SAVEREG
+#define	INTERRUPT_RESTOREREG	_INTERRUPT_RESTOREREG
+#endif /* ! _KERNEL */
+
 #ifdef _KERNEL
+
+/*
+ * Macro for setting the initial kernel stack pointer.  Ensures tht
+ * the stack frame chain is terminated by also initializing the
+ * frame pointer to 0.
+ */
+#define	INIT_KSP(reg)		movl reg,%sp ; movl __IMMEDIATE 0,%a6
+
 /*
  * Shorthand for calling panic().
  * Note the side-effect: it uses up the 9: label, so be careful!
@@ -202,7 +212,7 @@
 
 /* 64-bit counter increments */
 #define CPUINFO_INCREMENT(n)					\
-	lea	_C_LABEL(cpu_info_store)+(n)+4,%a1;		\
+	lea	_C_LABEL(cpuinfo)+(n)+4,%a1;			\
 	addq.l	#1,(%a1);					\
 	clr.l	%d0;		/* doesn't change CCR[X] */	\
 	move.l	-(%a1),%d1;	/* doesn't change CCR[X] */	\
@@ -211,12 +221,69 @@
 
 /* 64-bit counter increments */
 #define CPUINFO_ADD(n, addend)					\
-	lea	_C_LABEL(cpu_info_store)+(n)+4,%a1;		\
+	lea	_C_LABEL(cpuinfo)+(n)+4,%a1;			\
 	add.l	addend,(%a1);					\
 	clr.l	%d0;		/* doesn't change CCR[X] */	\
 	move.l	-(%a1),%d1;	/* doesn't change CCR[X] */	\
 	addx.l	%d0,%d1;					\
 	move.l	%d1,(%a1)
+
+/* Get current process / current pcb */
+#define	GET_CURLWP(ar)						\
+	movl	_C_LABEL(cpuinfo)+CI_CURLWP,ar
+
+#define	SET_CURLWP(ar, sr)					\
+	movl	ar,_C_LABEL(cpuinfo)+CI_CURLWP
+
+#define	GET_CURPCB(ar)						\
+	GET_CURLWP(ar); movl L_PCB(ar),ar
+
+/*
+ * Check for pending ASTs.  Uses the specified scratch register
+ * and sets the condition codes. Z==no AST pending.
+ *
+ * After using this macro to set the condition codes, care must
+ * be taken to not alter them; MOVEM.L to restore registers and
+ * ADDQ.L to adjust an address register (e.g. %sp) are OK, but
+ * not much else!
+ */
+#define	CHECK_ASTPENDING(sr)					\
+	GET_CURLWP(sr); tstl L_MD_ASTPENDING(sr)
+
+/*
+ * Based on the condition codes set by CHECK_ASTPENDING(), either
+ * go processs the AST or just RTE.
+ */
+#define	RTE_AST			jne _ASM_LABEL(rte_ast); rte
+
+/* Increment/decrement the interrupt depth. */
+#define	_INTR_DEPTH_INCR					\
+	addql	__IMMEDIATE 1,_C_LABEL(cpuinfo)+CI_IDEPTH
+#define	_INTR_DEPTH_DECR					\
+	subql	__IMMEDIATE 1,_C_LABEL(cpuinfo)+CI_IDEPTH
+
+/*
+ * Interrupt handler entry / exit.  Save registers first, as
+ * incrementing the interrupt depth might require a scratch
+ * register.
+ *
+ * If a platform supports hardware-assisted ASTs, we don't branch to
+ * rei() after the interrupt.  Instead, we simply do an rte.  Such
+ * platforms will have their own vector stub for dealing with ASTs,
+ * which will in turn call rei().
+ */
+#ifdef __HAVE_M68K_HW_AST
+#define	_INTERRUPT_RETURN	rte
+#else
+#define	_INTERRUPT_RETURN	RTE_AST
+#endif /* __HAVE_M68K_HW_AST */
+
+#define	INTERRUPT_ENTER						\
+	_INTERRUPT_SAVEREG ; _INTR_DEPTH_INCR
+
+#define	INTERRUPT_EXIT						\
+	_INTR_DEPTH_DECR ; CHECK_ASTPENDING(%a0) ;		\
+	_INTERRUPT_RESTOREREG ; _INTERRUPT_RETURN
 
 #endif /* _KERNEL */
 

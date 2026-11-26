@@ -1,4 +1,4 @@
-/* $NetBSD: mech_gssapi.c,v 1.9 2025/12/17 15:58:36 nia Exp $ */
+/* $NetBSD: mech_gssapi.c,v 1.11 2026/11/26 01:45:10 riastradh Exp $ */
 
 /* Copyright (c) 2010 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -31,7 +31,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: mech_gssapi.c,v 1.9 2025/12/17 15:58:36 nia Exp $");
+__RCSID("$NetBSD: mech_gssapi.c,v 1.11 2026/11/26 01:45:10 riastradh Exp $");
 
 #include <assert.h>
 #include <errno.h>
@@ -54,6 +54,7 @@ __RCSID("$NetBSD: mech_gssapi.c,v 1.9 2025/12/17 15:58:36 nia Exp $");
 
 /* properties */
 #define SASLC_GSSAPI_AUTHCID		SASLC_PROP_AUTHCID
+#define SASLC_GSSAPI_AUTHZID		SASLC_PROP_AUTHZID
 #define SASLC_GSSAPI_HOSTNAME		SASLC_PROP_HOSTNAME
 #define SASLC_GSSAPI_SERVICE		SASLC_PROP_SERVICE
 #define SASLC_GSSAPI_QOPMASK		SASLC_PROP_QOPMASK
@@ -73,6 +74,7 @@ typedef struct {
 	saslc__mech_sess_t mech_sess;		/* mechanism session */
 	saslc__mech_gssapi_status_t status;	/* authentication status */
 	gss_ctx_id_t gss_ctx;			/* GSSAPI context */
+	gss_cred_id_t gss_cred;			/* GSSAPI credential handle */
 	gss_name_t server_name;			/* server name: service@host */
 	gss_name_t client_name;			/* client name - XXX: unused! */
 	uint32_t qop_mask;			/* available QOP services */
@@ -100,6 +102,7 @@ saslc__mech_gssapi_create(saslc_sess_t *sess)
 	sess->mech_sess = c;
 
 	c->gss_ctx = GSS_C_NO_CONTEXT;
+	c->gss_cred = GSS_C_NO_CREDENTIAL;
 	c->server_name = GSS_C_NO_NAME;
 	c->client_name = GSS_C_NO_NAME;
 
@@ -122,6 +125,8 @@ saslc__mech_gssapi_destroy(saslc_sess_t *sess)
 
 	if (ms->gss_ctx != GSS_C_NO_CONTEXT)
 		gss_delete_sec_context(&min_s, &ms->gss_ctx, GSS_C_NO_BUFFER);
+	if (ms->gss_cred != GSS_C_NO_CREDENTIAL)
+		gss_release_cred(&min_s, &ms->gss_cred);
 	if (ms->server_name != GSS_C_NO_NAME)
 		gss_release_name(&min_s, &ms->server_name);
 	if (ms->client_name != GSS_C_NO_NAME)
@@ -458,7 +463,7 @@ init_sec_context(saslc_sess_t *sess, gss_buffer_t inbuf, gss_buffer_t outbuf)
 	outbuf->value = NULL;
 	maj_s = gss_init_sec_context(
 		&min_s,			/* minor status */
-		GSS_C_NO_CREDENTIAL, /* use current login context credential */
+		ms->gss_cred,		/* credential */
 		&ms->gss_ctx,		/* initially GSS_C_NO_CONTEXT */
 		ms->server_name,	/* server@hostname */
 		GSS_C_NO_OID,		/* use default mechanism */
@@ -555,7 +560,7 @@ unwrap_input_token(saslc_sess_t *sess, gss_buffer_t inbuf)
  * struct {
  *   uint8_t qop;	// qop to use
  *   uint8_t maxbuf[3]	// maxbuf for client (network byte order)
- *   uint8_t authcid[]	// variable length authentication id (username)
+ *   uint8_t authzid[]	// variable length authorization id (username)
  * } __packed;
  * @param sess the session
  * @param outbuf the gss_buffer_t token to return to server.
@@ -568,7 +573,7 @@ wrap_output_token(saslc_sess_t *sess, gss_buffer_t outbuf)
 	gss_buffer_desc indesc;
 	char *input_value;
 	int len;
-	const char *authcid;
+	const char *authzid;
 	OM_uint32 min_s, maj_s;
 	unsigned char *p;
 
@@ -588,9 +593,9 @@ wrap_output_token(saslc_sess_t *sess, gss_buffer_t outbuf)
 
 	ms = sess->mech_sess;
 
-	authcid = saslc_sess_getprop(sess, SASLC_GSSAPI_AUTHCID);
+	authzid = saslc_sess_getprop(sess, SASLC_GSSAPI_AUTHZID);
 
-	len = asprintf(&input_value, "qmax%s", authcid ? authcid : "");
+	len = asprintf(&input_value, "qmax%s", authzid ? authzid : "");
 	if (len == -1) {
 		saslc__error_set_errno(ERR(sess), ERROR_NOMEM);
 		return -1;
@@ -756,6 +761,7 @@ saslc__mech_gssapi_cont(saslc_sess_t *sess, const void *in, size_t inlen,
     void **out, size_t *outlen)
 {
 	saslc__mech_gssapi_sess_t *ms;
+	const char *authcid;
 	gss_buffer_desc input, output;
 	int rv;
 
@@ -793,6 +799,47 @@ saslc__mech_gssapi_cont(saslc_sess_t *sess, const void *in, size_t inlen,
     /**************************************************************************/
 
 	ms = sess->mech_sess;
+
+	/*
+	 * If configured with an AUTHCID, acquire a credential for it;
+	 * otherwise we will let gss_init_sec_context use the default
+	 * credentials.
+	 */
+	authcid = saslc_sess_getprop(sess, SASLC_GSSAPI_AUTHCID);
+	if (authcid != NULL && ms->gss_cred == GSS_C_NO_CREDENTIAL) {
+		gss_buffer_desc desired_namebuf = GSS_C_EMPTY_BUFFER;
+		gss_name_t desired_name = GSS_C_NO_NAME;
+		OM_uint32 min_s, maj_s;
+
+		/*
+		 * Import the AUTHCID as a GSS user name for the
+		 * initiator.
+		 */
+		desired_namebuf.length = strlen(authcid);
+		desired_namebuf.value = __UNCONST(authcid);
+		maj_s = gss_import_name(&min_s, &desired_namebuf,
+		    GSS_C_NT_USER_NAME, &desired_name);
+		if (GSS_ERROR(maj_s)) {
+			saslc__mech_gssapi_set_err(sess, ERROR_MECH, maj_s,
+			    min_s);
+			return MECH_ERROR;
+		}
+
+		/*
+		 * Acquire an initiator credential for this user name.
+		 */
+		maj_s = gss_acquire_cred(&min_s, desired_name,
+		    /*time_req*/GSS_C_INDEFINITE,
+		    /*desired_mechs*/GSS_C_NO_OID_SET,
+		    /*cred_usage*/GSS_C_INITIATE,
+		    &ms->gss_cred, /*actual_mechs*/NULL, /*time_rec*/NULL);
+		(void)gss_release_name(&min_s, &desired_name);
+		if (GSS_ERROR(maj_s)) {
+			saslc__mech_gssapi_set_err(sess, ERROR_MECH, maj_s,
+			    min_s);
+			return MECH_ERROR;
+		}
+	}
 
 	switch(ms->status) {
 	case GSSAPI_AUTH_FIRST:

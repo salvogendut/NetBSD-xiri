@@ -1,4 +1,4 @@
-/* $NetBSD: imx_ccm.c,v 1.1 2020/12/23 14:42:38 skrll Exp $ */
+/* $NetBSD: imx_ccm.c,v 1.4 2026/11/26 06:03:59 hkenken Exp $ */
 
 /*-
  * Copyright (c) 2020 Jared McNeill <jmcneill@invisible.ca>
@@ -27,42 +27,16 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: imx_ccm.c,v 1.1 2020/12/23 14:42:38 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: imx_ccm.c,v 1.4 2026/11/26 06:03:59 hkenken Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/cpu.h>
 #include <sys/device.h>
 
-#include <dev/fdt/fdtvar.h>
-
 #include <dev/clk/clk_backend.h>
 
 #include <arm/nxp/imx_ccm.h>
-
-static struct clk *
-imx_ccm_clock_decode(device_t dev, int cc_phandle, const void *data, size_t len)
-{
-	struct imx_ccm_softc * const sc = device_private(dev);
-	struct imx_ccm_clk *clk;
-
-	if (len != 4)
-		return NULL;
-
-	const u_int clock_id = be32dec(data);
-
-	for (int i = 0; i < sc->sc_nclks; i++) {
-		clk = &sc->sc_clks[i];
-		if (clk->id == clock_id)
-			return &clk->base;
-	}
-
-	return NULL;
-}
-
-static const struct fdtbus_clock_controller_func imx_ccm_fdtclock_funcs = {
-	.decode = imx_ccm_clock_decode,
-};
 
 static struct clk *
 imx_ccm_clock_get(void *priv, const char *name)
@@ -119,6 +93,9 @@ imx_ccm_clock_set_rate(void *priv, struct clk *clkp, u_int rate)
 
 	if (clk->set_rate)
 		return clk->set_rate(sc, clk, rate);
+
+	if (clk_get_rate(clkp) == rate)
+		return 0;
 
 	return ENXIO;
 }
@@ -211,8 +188,10 @@ imx_ccm_clock_get_parent(void *priv, struct clk *clkp)
 	if (clk_parent != NULL)
 		return &clk_parent->base;
 
-	/* No parent in this domain, try FDT */
-	return fdtbus_clock_byname(parent);
+	if (sc->sc_clock_find_parent != NULL)
+		return sc->sc_clock_find_parent(sc, parent);
+
+	return NULL;
 }
 
 const struct clk_funcs imx_ccm_clock_funcs = {
@@ -241,31 +220,81 @@ imx_ccm_clock_find(struct imx_ccm_softc *sc, const char *name)
 }
 
 int
-imx_ccm_attach(struct imx_ccm_softc *sc)
+imx_ccm_clock_attach(struct imx_ccm_softc *sc)
 {
-	bus_addr_t addr;
-	bus_size_t size;
-	int i;
-
-	if (fdtbus_get_reg(sc->sc_phandle, 0, &addr, &size) != 0) {
-		aprint_error(": couldn't get registers\n");
-		return ENXIO;
-	}
-	if (bus_space_map(sc->sc_bst, addr, size, 0, &sc->sc_bsh[0]) != 0) {
-		aprint_error(": couldn't map registers\n");
-		return ENXIO;
-	}
-
 	sc->sc_clkdom.name = device_xname(sc->sc_dev);
 	sc->sc_clkdom.funcs = &imx_ccm_clock_funcs;
 	sc->sc_clkdom.priv = sc;
-	for (i = 0; i < sc->sc_nclks; i++) {
+
+	for (int i = 0; i < sc->sc_nclks; i++) {
+		/*
+		 * Use 0 to mark an unmapped bus_space handle. On ARM,
+		 * mapped handles are nonzero kernel virtual addresses.
+		 */
+		if (sc->sc_clks[i].regidx >= IMX_CCM_N_REGS ||
+		    sc->sc_bsh[sc->sc_clks[i].regidx] == 0) {
+			aprint_error(": %s: invalid regidx %u\n",
+			    sc->sc_clks[i].base.name, sc->sc_clks[i].regidx);
+			return EINVAL;
+		}
+	}
+
+	if (sc->sc_clock_find_parent == NULL) {
+		for (int i = 0; i < sc->sc_nclks; i++) {
+			const char * const *parents = NULL;
+			int nparents = 0;
+			const struct imx_ccm_clk *clk = &sc->sc_clks[i];
+
+			switch (clk->type) {
+			case IMX_CCM_GATE:
+				nparents = 1;
+				parents = &clk->u.gate.parent;
+				break;
+			case IMX_CCM_DIV:
+				nparents = 1;
+				parents = &clk->u.div.parent;
+				break;
+			case IMX_CCM_PLL:
+				nparents = 1;
+				parents = &clk->u.pll.parent;
+				break;
+			case IMX_CCM_FIXED_FACTOR:
+				nparents = 1;
+				parents = &clk->u.fixed_factor.parent;
+				break;
+			case IMX_CCM_MUX:
+				parents = clk->u.mux.parents;
+				nparents = clk->u.mux.nparents;
+				break;
+			case IMX_CCM_COMPOSITE:
+				parents = clk->u.composite.parents;
+				nparents = clk->u.composite.nparents;
+				break;
+			case IMX_CCM_DPLL:
+				parents = clk->u.dpll.parents;
+				nparents = clk->u.dpll.nparents;
+				break;
+			case IMX_CCM_UNKNOWN:
+			case IMX_CCM_EXTCLK:
+			case IMX_CCM_FIXED:
+				break;
+			}
+
+			for (int n = 0; n < nparents; n++, parents++) {
+				if (*parents == NULL ||
+				    imx_ccm_clock_find(sc, *parents) == NULL) {
+					aprint_error(": %s: parent %s not found\n",
+					    clk->base.name, *parents);
+					return ENOENT;
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < sc->sc_nclks; i++) {
 		sc->sc_clks[i].base.domain = &sc->sc_clkdom;
 		clk_attach(&sc->sc_clks[i].base);
 	}
-
-	fdtbus_register_clock_controller(sc->sc_dev, sc->sc_phandle,
-	    &imx_ccm_fdtclock_funcs);
 
 	return 0;
 }
@@ -294,16 +323,17 @@ imx_ccm_print(struct imx_ccm_softc *sc)
 		case IMX_CCM_FIXED_FACTOR:	type = "fixed-factor"; break;
 		case IMX_CCM_MUX:		type = "mux"; break;
 		case IMX_CCM_DIV:		type = "div"; break;
+		case IMX_CCM_DPLL:		type = "dpll"; break;
 		default:			type = "???"; break;
 		}
 
-        	aprint_debug_dev(sc->sc_dev,
+		aprint_debug_dev(sc->sc_dev,
 		    "%3d %-14s %2s %-14s %-7s ",
 		    clk->id,
-        	    clk->base.name,
-        	    clkp_parent ? "<-" : "",
-        	    clkp_parent ? clkp_parent->name : "",
-        	    type);
+		    clk->base.name,
+		    clkp_parent ? "<-" : "",
+		    clkp_parent ? clkp_parent->name : "",
+		    type);
 		aprint_debug("%10d Hz\n", clk_get_rate(&clk->base));
 	}
 }

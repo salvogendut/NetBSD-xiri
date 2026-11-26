@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_ccu.h,v 1.25 2026/10/04 03:03:17 rxg Exp $ */
+/* $NetBSD: sunxi_ccu.h,v 1.28 2026/11/23 16:35:10 martin Exp $ */
 
 /*-
  * Copyright (c) 2017 Jared McNeill <jmcneill@invisible.ca>
@@ -70,25 +70,32 @@ enum sunxi_ccu_clktype {
 struct sunxi_ccu_gate {
 	bus_size_t	reg;
 	uint32_t	mask;
+	u_int		fixed_rate;
 	const char	*parent;
 };
 
 int	sunxi_ccu_gate_enable(struct sunxi_ccu_softc *,
 			      struct sunxi_ccu_clk *, int);
+u_int	sunxi_ccu_gate_get_rate(struct sunxi_ccu_softc *,
+				struct sunxi_ccu_clk *);
 const char *sunxi_ccu_gate_get_parent(struct sunxi_ccu_softc *,
 				      struct sunxi_ccu_clk *);
 
-#define	SUNXI_CCU_GATE(_id, _name, _pname, _reg, _bit)		\
-	[_id] = {						\
-		.type = SUNXI_CCU_GATE,				\
-		.base.name = (_name),				\
-		.base.flags = CLK_SET_RATE_PARENT,		\
-		.u.gate.parent = (_pname),			\
-		.u.gate.reg = (_reg),				\
-		.u.gate.mask = __BIT(_bit),			\
-		.enable = sunxi_ccu_gate_enable,		\
-		.get_parent = sunxi_ccu_gate_get_parent,	\
+#define SUNXI_CCU_GATE_FIXED_RATE(_id, _name, _pname, _reg, _bit, _fixed_rate)	\
+	[_id] = {								\
+		.type = SUNXI_CCU_GATE,						\
+		.base.name = (_name),						\
+		.base.flags = CLK_SET_RATE_PARENT,				\
+		.u.gate.parent = (_pname),					\
+		.u.gate.reg = (_reg),						\
+		.u.gate.mask = __BIT(_bit),					\
+		.u.gate.fixed_rate = (_fixed_rate),				\
+		.enable = sunxi_ccu_gate_enable,				\
+		.get_rate = sunxi_ccu_gate_get_rate,				\
+		.get_parent = sunxi_ccu_gate_get_parent,			\
 	}
+#define SUNXI_CCU_GATE(_id, _name, _pname, _reg, _bit)				\
+	SUNXI_CCU_GATE_FIXED_RATE(_id, _name, _pname, _reg, _bit, 0)
 
 struct sunxi_ccu_nkmp_tbl {
 	u_int		rate;
@@ -212,6 +219,12 @@ const char *sunxi_ccu_nm_get_parent(struct sunxi_ccu_softc *,
 		.set_parent = sunxi_ccu_nm_set_parent,		\
 		.get_parent = sunxi_ccu_nm_get_parent,		\
 	}
+#define	SUNXI_CCU_M(_id, _name, _parents, _reg, _m, _sel,	\
+		    _flags)					\
+	SUNXI_CCU_NM(_id, _name, _parents, _reg, 0, _m, _sel, 0, _flags)
+#define	SUNXI_CCU_M_GATE(_id, _name, _parents, _reg, _m, _sel,	\
+			 _enable, _flags)			\
+	SUNXI_CCU_NM(_id, _name, _parents, _reg, 0, _m, _sel, _enable, _flags)
 
 struct sunxi_ccu_div {
 	bus_size_t	reg;

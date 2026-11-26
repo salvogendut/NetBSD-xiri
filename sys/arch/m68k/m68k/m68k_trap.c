@@ -1,4 +1,4 @@
-/*	$NetBSD: m68k_trap.c,v 1.12 2026/07/06 15:46:41 thorpej Exp $	*/
+/*	$NetBSD: m68k_trap.c,v 1.15 2026/11/15 15:16:24 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: m68k_trap.c,v 1.12 2026/07/06 15:46:41 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: m68k_trap.c,v 1.15 2026/11/15 15:16:24 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -86,8 +86,6 @@ __KERNEL_RCSID(0, "$NetBSD: m68k_trap.c,v 1.12 2026/07/06 15:46:41 thorpej Exp $
 #endif
 
 void	trap(struct frame *, int, u_int, u_int);
-
-volatile int astpending;
 
 static const char * const trap_descriptions[] = {
 	[T_BUSERR]	=	"Bus error",
@@ -302,8 +300,8 @@ m68040_writeback(struct frame *fp, int docachepush)
 	struct proc *p = l->l_proc;
 	struct pcb *pcb = lwp_getpcb(l);
 	int err = 0;
-	u_int fa = 0;
 	void *oonfault = pcb->pcb_onfault;
+	vaddr_t fa = 0, vmmap = curcpu()->ci_tmpva_vmmap;
 	paddr_t pa;
 
 #ifdef DEBUG
@@ -341,16 +339,15 @@ m68040_writeback(struct frame *fp, int docachepush)
 		 * cache push after a signal handler has been called.
 		 */
 		if (docachepush) {
-			pmap_enter(pmap_kernel(), (vaddr_t)vmmap,
+			pmap_enter(pmap_kernel(), vmmap,
 			    trunc_page(f->f_fa), VM_PROT_WRITE,
 			    VM_PROT_WRITE|PMAP_WIRED);
 			pmap_update(pmap_kernel());
-			fa = (u_int)&vmmap[m68k_page_offset(f->f_fa) & ~0xF];
+			fa = vmmap + (m68k_page_offset(f->f_fa) & ~0xF);
 			fastcopy16((void *)fa, (void *)&f->f_pd0);
 			(void) pmap_extract(pmap_kernel(), (vaddr_t)fa, &pa);
 			DCFL(pa);
-			pmap_remove(pmap_kernel(), (vaddr_t)vmmap,
-				    (vaddr_t)&vmmap[PAGE_SIZE]);
+			pmap_remove(pmap_kernel(), vmmap, vmmap + PAGE_SIZE);
 			pmap_update(pmap_kernel());
 		} else
 			printf("WARNING: pid %d(%s) uid %d: CPUSH not done\n",
@@ -945,7 +942,7 @@ trap(struct frame *fp, int type, unsigned int code, unsigned int v)
 		goto dopanic;
 
 	case T_ASTFLT|T_USER:	/* user async trap */
-		astpending = 0;
+		l->l_md.md_astpending = 0;
 		if (l->l_pflag & LP_OWEUPC) {
 			l->l_pflag &= ~LP_OWEUPC;
 			ADDUPROF(l);
@@ -1017,7 +1014,7 @@ trap(struct frame *fp, int type, unsigned int code, unsigned int v)
 #endif
 
 #ifdef DIAGNOSTIC
-		if (intr_depth && !panicking) {
+		if (curcpu()->ci_idepth && !panicking) {
 			printf("trap: calling pmap_fault() from interrupt!\n");
 			goto dopanic;
 		}
