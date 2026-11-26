@@ -1376,6 +1376,14 @@ the target bytes, including dangling, empty and trailing-slash targets; only
 trailing slashes on the new link pathname are removed to match measured IRIX.
 Native lookup, umask, ownership and access checks remain in force.
 
+Trap 1030 implements legacy utime with two signed 32-bit seconds on o32
+and n32. Direct and indirect calls share the pathname and VFS permission
+handling used by utimets. Explicit times have zero nanoseconds. A null
+time pointer also permits a writable non-owner to request the current time.
+The original Freeware wget 1.8.2 uses this call for HTTP Last-Modified.
+Both 6.5.22f and 6.5.30f accept -1 seconds on XFS. The module returns
+EINVAL for that value because NetBSD vattr reserves it for an omitted field.
+
 Trap 1235 implements utimets, including the indirect form used by File Manager.
 Both supported ABIs pass two signed 32-bit seconds/nanoseconds pairs. The adapter
 follows the target, retains emulation-root lookup, and delegates setting times

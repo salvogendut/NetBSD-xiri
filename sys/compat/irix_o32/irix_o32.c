@@ -880,21 +880,68 @@ irix_symlink(struct lwp *l, const void *args, register_t *rval)
 	return error;
 }
 
-/* utimets uses two 32-bit seconds/nanoseconds pairs on both supported ABIs. */
-struct irix_utimets_args {
+struct irix_file_times_args {
 	syscallarg(uint32_t) path;
 	syscallarg(uint32_t) times;
 };
 
 static int
-irix_utimets(struct lwp *l, const void *args, register_t *rval)
+irix_set_file_times(struct lwp *l, uint32_t address,
+    const struct timespec *times, register_t *rval)
 {
-	const struct irix_utimets_args *uap = args;
-	struct irix_stat_time input[2];
-	struct timespec times[2];
 	struct vnode *vp;
 	char path[MAXPATHLEN];
 	size_t len;
+	int error;
+
+	error = copyinstr(irix_pointer(address), path,
+	    sizeof(path), &len);
+	if (error != 0)
+		return error;
+	while (len > 2 && path[len - 2] == '/')
+		path[--len - 1] = '\0';
+	error = namei_simple_kernel(path, NSM_FOLLOW_TRYEMULROOT, &vp);
+	if (error != 0)
+		return error;
+	error = do_sys_utimens(l, vp, NULL, FOLLOW,
+	    times, UIO_SYSSPACE);
+	vrele(vp);
+	if (error == 0)
+		*rval = 0;
+	return error;
+}
+
+/* Legacy utime supplies two time_t seconds, each signed 32-bit in o32/n32. */
+static int
+irix_utime(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_file_times_args *uap = args;
+	int32_t seconds[2];
+	struct timespec times[2];
+	int error;
+
+	if (SCARG(uap, times) == 0)
+		return irix_set_file_times(l, SCARG(uap, path), NULL, rval);
+	error = copyin(irix_pointer(SCARG(uap, times)), seconds,
+	    sizeof(seconds));
+	if (error != 0)
+		return error;
+	for (size_t i = 0; i < __arraycount(seconds); i++) {
+		/* NetBSD vattr reserves -1 seconds for an omitted attribute. */
+		if (seconds[i] == -1)
+			return EINVAL;
+		times[i].tv_sec = seconds[i];
+		times[i].tv_nsec = 0;
+	}
+	return irix_set_file_times(l, SCARG(uap, path), times, rval);
+}
+
+static int
+irix_utimets(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_file_times_args *uap = args;
+	struct irix_stat_time input[2];
+	struct timespec times[2];
 	int error;
 
 	if (SCARG(uap, times) != 0) {
@@ -915,21 +962,8 @@ irix_utimets(struct lwp *l, const void *args, register_t *rval)
 			times[i].tv_nsec = input[i].nsec;
 		}
 	}
-	error = copyinstr(irix_pointer(SCARG(uap, path)), path,
-	    sizeof(path), &len);
-	if (error != 0)
-		return error;
-	while (len > 2 && path[len - 2] == '/')
-		path[--len - 1] = '\0';
-	error = namei_simple_kernel(path, NSM_FOLLOW_TRYEMULROOT, &vp);
-	if (error != 0)
-		return error;
-	error = do_sys_utimens(l, vp, NULL, FOLLOW,
-	    SCARG(uap, times) != 0 ? times : NULL, UIO_SYSSPACE);
-	vrele(vp);
-	if (error == 0)
-		*rval = 0;
-	return error;
+	return irix_set_file_times(l, SCARG(uap, path),
+	    SCARG(uap, times) != 0 ? times : NULL, rval);
 }
 
 /* Removal keeps native vnode permissions, sticky-directory policy and
@@ -4178,7 +4212,9 @@ irix_waitsys(struct lwp *l, const void *args, register_t *rval)
 static struct sysent irix_o32_sysent[] = {
 	[115] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_symlink_args),
 	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_symlink },
-	[235] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_utimets_args),
+	[30] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_file_times_args),
+	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_utime },
+	[235] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_file_times_args),
 	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_utimets },
 	[77] = { .sy_narg = 2, .sy_argsize = sizeof(struct irix_nanosleep_args),
 	    .sy_flags = SYCALL_ARG_PTR, .sy_call = irix_nanosleep },
@@ -4616,7 +4652,7 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[205] = "getdents64", [223] = "usync_cntl",
 	[207] = "ngetdents",
 	[208] = "ngetdents64",
-	[10] = "unlink", [79] = "rmdir", [115] = "symlink", [235] = "utimets",
+	[10] = "unlink", [79] = "rmdir", [115] = "symlink", [30] = "utime", [235] = "utimets",
 	[174] = "statvfs", [175] = "fstatvfs",
 	[201] = "statvfs64", [202] = "fstatvfs64",
 	[0] = "unsupported", [1] = "exit", [3] = "read", [4] = "write",
@@ -4694,6 +4730,7 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1019: code = 19; break;
 	case 1020: code = 20; break;
 	case 1024: code = 24; break;
+	case 1030: code = 30; break;
 	case 1033: code = 33; break;
 	case 1037: code = 37; break;
 	case 1039: code = 39; break;
