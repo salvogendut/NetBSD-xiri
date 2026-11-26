@@ -123,4 +123,6 @@ file compat/irix_o32/irix_o32.c		compat_irix_o32
 file compat/irix_o32/irix_thread.c		compat_irix_o32
 file compat/irix_o32/irix_sproc.c		compat_irix_o32
 file compat/irix_o32/irix_signal.c		compat_irix_o32
+file compat/irix_o32/irix_hdsp_events.c		compat_irix_o32
+file compat/irix_o32/irix_hdsp.c		compat_irix_o32
 file compat/irix_o32/irix_tty.c		compat_irix_o32

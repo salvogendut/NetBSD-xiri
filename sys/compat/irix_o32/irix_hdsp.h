@@ -1,0 +1,21 @@
+#ifndef _COMPAT_IRIX_O32_IRIX_HDSP_H_
+#define _COMPAT_IRIX_O32_IRIX_HDSP_H_
+
+#define AL_SYSTEM 11
+#define AL_DEFAULT_OUTPUT 10
+#define ANALOG_OUT 6
+#define SPEAKER 22
+#define INDY_SUBSYSTEM 25
+#define AL_PARAM(n) (0x10000000U | (n))
+#define AL_GAIN AL_PARAM(25)
+
+int irix_hdsp_ioctl(int, uint32_t, void *, register_t *);
+
+int irix_hdsp_event_ioctl(int, uint32_t, void *, register_t *);
+int irix_hdsp_events_init(void);
+int irix_hdsp_events_quiesce(void);
+void irix_hdsp_events_resume(void);
+void irix_hdsp_events_fini(void);
+void irix_hdsp_gain_changed(void);
+
+#endif

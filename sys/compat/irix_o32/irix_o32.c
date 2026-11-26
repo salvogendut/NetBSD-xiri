@@ -158,6 +158,7 @@ irix_pointer(uint32_t value)
 #include <compat/irix_o32/irix_sproc.h>
 #include <compat/irix_o32/irix_signal.h>
 #include <compat/irix_o32/irix_tty.h>
+#include <compat/irix_o32/irix_hdsp.h>
 
 static void irix_prda_sigmask(struct lwp *);
 
@@ -3174,6 +3175,14 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	int32_t foreign_count;
 
 	CTASSERT(sizeof(available) == sizeof(foreign_count));
+	if (SCARG(uap, command) == 101 || SCARG(uap, command) == 110 ||
+	    SCARG(uap, command) == 112 || SCARG(uap, command) == 113 ||
+	    SCARG(uap, command) == 116 || SCARG(uap, command) == 118)
+		return irix_hdsp_event_ioctl(SCARG(uap, fd), SCARG(uap, command),
+		    irix_pointer(SCARG(uap, data)), rval);
+	if (SCARG(uap, command) >= 24 && SCARG(uap, command) <= 28)
+		return irix_hdsp_ioctl(SCARG(uap, fd), SCARG(uap, command),
+		    irix_pointer(SCARG(uap, data)), rval);
 	if (SCARG(uap, command) == 0x5308) /* IRIX_I_STR */
 		return irix_pty_unlock(uap, rval);
 	if (SCARG(uap, command) == 0x40087468U ||
@@ -5343,12 +5352,29 @@ static struct execsw irix_o32_execsw[] = {
 static int
 compat_irix_o32_modcmd(modcmd_t cmd, void *arg)
 {
+	int error;
 
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		return exec_add(irix_o32_execsw, __arraycount(irix_o32_execsw));
+		error = irix_hdsp_events_init();
+		if (error)
+			return error;
+		error = exec_add(irix_o32_execsw, __arraycount(irix_o32_execsw));
+		if (error)
+			irix_hdsp_events_fini();
+		else
+			irix_hdsp_events_resume();
+		return error;
 	case MODULE_CMD_FINI:
-		return exec_remove(irix_o32_execsw, __arraycount(irix_o32_execsw));
+		error = irix_hdsp_events_quiesce();
+		if (error)
+			return error;
+		error = exec_remove(irix_o32_execsw, __arraycount(irix_o32_execsw));
+		if (error)
+			irix_hdsp_events_resume();
+		else
+			irix_hdsp_events_fini();
+		return error;
 	default:
 		return ENOTTY;
 	}

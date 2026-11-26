@@ -10,6 +10,7 @@ KMOD=	compat_irix_o32
 
 CPPFLAGS+=	-DEXEC_ELF32 -DCOMPAT_NETBSD32
 .PATH:	${S}/compat/irix_o32
-SRCS=	irix_o32.c irix_signal.c irix_sproc.c irix_thread.c irix_tty.c
+SRCS=	irix_o32.c irix_signal.c irix_sproc.c irix_thread.c irix_tty.c irix_hdsp.c
+SRCS+=	irix_hdsp_events.c
 
 .include <bsd.kmodule.mk>
