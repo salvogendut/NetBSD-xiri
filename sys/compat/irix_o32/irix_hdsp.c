@@ -1,6 +1,7 @@
 /* IRIX Audio Library master-device controls for the native Indy HAL2 mixer. */
 #include <sys/param.h>
 #include <sys/audioio.h>
+#include <sys/atomic.h>
 #include <sys/kmem.h>
 #include <sys/fcntl.h>
 #include <sys/proc.h>
@@ -72,8 +73,8 @@ static const struct {
 } controls[] = {
 	{ AL_INTERFACE, "Physical Interface", 2, 0x11, 1, 5 },
 	{ AL_CHANNELS, "Channels", 2, 0x12, 1, 1 },
-	{ AL_RATE, "Sample Rate", 2, 0x21, 1, 1 },
-	{ AL_MASTER_CLOCK, "Master Clock", 2, 0x11, 1, 5 },
+	{ AL_RATE, "Sample Rate", 2, 0x21, 1, 3 },
+	{ AL_MASTER_CLOCK, "Master Clock", 2, 0x11, 1, 7 },
 	{ AL_TYPE, "Resource Type", 2, 0x12, 1, 1 },
 	{ AL_NAME, "Full Resource Name", 4, 0x80, 32, 1 },
 	{ AL_PARAMS, "Resource Parameters", 3, 0x12, 64, 4 },
@@ -82,6 +83,16 @@ static const struct {
 	{ AL_LABEL, "Resource Label", 4, 0x80, 32, 1 },
 	{ AL_SHORT_NAME, "Short Resource Name", 4, 0x80, 32, 1 },
 };
+
+/* The virtual output clock feeds NetBSD per-track sample-rate conversion. */
+static unsigned playback_rate;
+
+unsigned
+irix_hdsp_rate(void)
+{
+	unsigned rate = atomic_load_relaxed(&playback_rate);
+	return rate;
+}
 
 static bool
 is_output(uint32_t id)
@@ -147,7 +158,9 @@ hardware_clock(file_t *fp, uint32_t *resource, unsigned *rate)
 	int error = (*fp->f_ops->fo_ioctl)(fp, AUDIO_GETFORMAT, &format);
 	if (error)
 		return error;
-	*rate = format.play.sample_rate;
+	*rate = atomic_load_relaxed(&playback_rate);
+	if (*rate == 0)
+		*rate = format.play.sample_rate;
 	switch (*rate) {
 	case 44100: *resource = CRYSTAL_44100; return 0;
 	case 48000: *resource = CRYSTAL_48000; return 0;
@@ -242,7 +255,7 @@ param_info(uint32_t resource, uint32_t param, struct al_info *info)
 }
 
 static int
-query_values(file_t *fp, struct al_query *q, register_t *rval)
+query_values(struct al_query *q, register_t *rval)
 {
 	union al_value values[__arraycount(controls)] = { 0 };
 	size_t count;
@@ -257,14 +270,14 @@ query_values(file_t *fp, struct al_query *q, register_t *rval)
 		count = 0;
 	} else if (is_output(q->resource) && (q->param == AL_INTERFACE ||
 	    q->param == AL_MASTER_CLOCK)) {
-		values[0].word[0] = SPEAKER;
 		if (q->param == AL_MASTER_CLOCK) {
-			unsigned rate;
-			int error = hardware_clock(fp, &values[0].word[0], &rate);
-			if (error)
-				return error;
+			values[0].word[0] = CRYSTAL_44100;
+			values[1].word[0] = CRYSTAL_48000;
+			count = 2;
+		} else {
+			values[0].word[0] = SPEAKER;
+			count = 1;
 		}
-		count = 1;
 	} else if (has_control(q->resource, AL_PARAMS) && q->param == AL_PARAMS) {
 		count = 0;
 		for (size_t i = 0; i < __arraycount(controls); i++) {
@@ -328,6 +341,29 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 	int error;
 
 	pv->used2 = 0;
+	if (set && is_output(resource) && (pv->param == AL_RATE ||
+	    pv->param == AL_MASTER_CLOCK)) {
+		if (pv->param == AL_RATE) {
+			if (pv->value.fixed == (INT64_C(44100) << 32))
+				rate = 44100;
+			else if (pv->value.fixed == (INT64_C(48000) << 32))
+				rate = 48000;
+			else {
+				pv->used = -1;
+				return 0;
+			}
+		} else if (pv->value.word[0] == CRYSTAL_44100)
+			rate = 44100;
+		else if (pv->value.word[0] == CRYSTAL_48000)
+			rate = 48000;
+		else {
+			pv->used = -1;
+			return 0;
+		}
+		atomic_store_relaxed(&playback_rate, rate);
+		pv->used = 1;
+		return 0;
+	}
 	if (set && (pv->param != AL_GAIN || !has_control(resource, AL_GAIN))) {
 		pv->used = -1;
 		return 0;
@@ -523,6 +559,11 @@ irix_hdsp_ioctl(int fd, uint32_t cmd, void *address, register_t *rval)
 	}
 	*rval = 0;
 	switch (cmd) {
+	case 2: { /* FIND_MINOR: each open of this node clones a private port. */
+		int32_t minor = 2;
+		error = copyout(&minor, address, sizeof(minor));
+		break;
+	}
 	case HDSP_SET_PARAMS:
 	case HDSP_GET_PARAMS:
 		error = params(fp, address, cmd == HDSP_SET_PARAMS, rval);
@@ -530,7 +571,7 @@ irix_hdsp_ioctl(int fd, uint32_t cmd, void *address, register_t *rval)
 	case HDSP_QUERY_VALUES:
 		error = copyin(address, &query, sizeof(query));
 		if (!error)
-			error = query_values(fp, &query, rval);
+			error = query_values(&query, rval);
 		break;
 	case HDSP_LOOKUP:
 		error = lookup_resource(address);

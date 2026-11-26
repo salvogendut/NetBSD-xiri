@@ -17,5 +17,9 @@ int irix_hdsp_events_quiesce(void);
 void irix_hdsp_events_resume(void);
 void irix_hdsp_events_fini(void);
 void irix_hdsp_gain_changed(void);
+int irix_hdsp_port_open(int);
+void irix_hdsp_port_release(void);
+int irix_hdsp_pcm_ioctl(int, uint32_t, void *, register_t *);
+unsigned irix_hdsp_rate(void);
 
 #endif

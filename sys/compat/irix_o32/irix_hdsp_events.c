@@ -45,6 +45,16 @@ struct hdsp_queue {
 static LIST_HEAD(, hdsp_queue) queues = LIST_HEAD_INITIALIZER(queues);
 static kmutex_t queue_lock;
 static bool stopping;
+static unsigned ports;
+
+void
+irix_hdsp_port_release(void)
+{
+	mutex_enter(&queue_lock);
+	KASSERT(ports > 0);
+	ports--;
+	mutex_exit(&queue_lock);
+}
 
 static int
 queue_poll(file_t *fp, int events)
@@ -89,6 +99,19 @@ queue_open(dev_t dev, int flags, int fmt, struct lwp *l)
 	file_t *fp;
 	int fd, error;
 
+	if (minor(dev) == 2) {
+		mutex_enter(&queue_lock);
+		if (stopping || ports >= 16) {
+			mutex_exit(&queue_lock);
+			return EBUSY;
+		}
+		ports++;
+		mutex_exit(&queue_lock);
+		error = irix_hdsp_port_open(flags);
+		if (error != EMOVEFD)
+			irix_hdsp_port_release();
+		return error;
+	}
 	if (minor(dev) != 0)
 		return ENXIO;
 	error = fd_allocfile(&fp, &fd);
@@ -139,7 +162,7 @@ irix_hdsp_events_quiesce(void)
 	bool busy;
 
 	mutex_enter(&queue_lock);
-	stopping = LIST_EMPTY(&queues);
+	stopping = LIST_EMPTY(&queues) && ports == 0;
 	busy = !stopping;
 	mutex_exit(&queue_lock);
 	return busy ? EBUSY : 0;

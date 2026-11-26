@@ -3180,7 +3180,12 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	    SCARG(uap, command) == 116 || SCARG(uap, command) == 118)
 		return irix_hdsp_event_ioctl(SCARG(uap, fd), SCARG(uap, command),
 		    irix_pointer(SCARG(uap, data)), rval);
-	if (SCARG(uap, command) >= 24 && SCARG(uap, command) <= 28)
+	if (SCARG(uap, command) == 3 || SCARG(uap, command) == 8 ||
+	    SCARG(uap, command) == 10 || SCARG(uap, command) == 29)
+		return irix_hdsp_pcm_ioctl(SCARG(uap, fd), SCARG(uap, command),
+		    irix_pointer(SCARG(uap, data)), rval);
+	if (SCARG(uap, command) == 2 ||
+	    (SCARG(uap, command) >= 24 && SCARG(uap, command) <= 28))
 		return irix_hdsp_ioctl(SCARG(uap, fd), SCARG(uap, command),
 		    irix_pointer(SCARG(uap, data)), rval);
 	if (SCARG(uap, command) == 0x5308) /* IRIX_I_STR */
