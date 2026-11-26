@@ -238,7 +238,9 @@ paired_single_op:
 #endif
 #define round_l_d	ill
 #define	ceil_l_d	ill
+#if defined(FPEMUL) || (!defined(__mips_n32) && !defined(__mips_n64))
 #define trunc_l_d	ill
+#endif
 #define	floor_l_d	ill
 #define	recip_d		ill
 #define	recip1_d	ill
@@ -1847,9 +1849,10 @@ cvt_d_s:
 
 #if !defined(FPEMUL) && (defined(__mips_n32) || defined(__mips_n64))
 cvt_d_l:
+trunc_l_d:
 	REG_L	ra, CALLFRAME_RA(sp)
 	PTR_ADDU sp, CALLFRAME_SIZ
-	j	_C_LABEL(mips_cvt_d_l)
+	j	_C_LABEL(mips_convert_long)
 #endif
 
 /*

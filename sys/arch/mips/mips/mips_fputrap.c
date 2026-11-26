@@ -83,35 +83,46 @@ mips_fpuillinst(struct lwp *l, uint32_t opcode)
 
 #if !defined(FPEMUL) && (defined(__mips_n32) || defined(__mips_n64))
 /*
- * R4x00/R5000 request software completion of CVT.D.L for large inputs.
+ * R4x00/R5000 request software completion of long conversions for large inputs.
  * Work in the saved FPU context so both paired and 64-bit FPRs, including
  * odd-numbered wide registers, use the same layout as context switching.
  */
-void mips_cvt_d_l(uint32_t, struct trapframe *, uint32_t);
+void mips_convert_long(uint32_t, struct trapframe *, uint32_t);
 
-void
-mips_cvt_d_l(uint32_t insn, struct trapframe *tf, uint32_t csr)
+/* Convert the IEEE-754 encoding directly, preserving the kernel's FPU state. */
+static uint64_t
+trunc_double_to_long(uint64_t src, bool *inexact, bool *invalid)
 {
-	struct lwp *l = curlwp;
-	struct pcb *pcb = lwp_getpcb(l);
-	struct fpreg *fp = &pcb->pcb_fpregs;
-	struct fpreg_oabi *pairs = (struct fpreg_oabi *)(void *)fp;
-	const unsigned fs = (insn >> 11) & 31, fd = (insn >> 6) & 31;
-	const bool wide = (tf->tf_regs[_R_SR] & MIPS3_SR_FR) != 0;
-	uint64_t src, mag, bits = 0;
-	bool inexact = false;
+	const bool neg = src >> 63;
+	const int exponent = ((src >> 52) & 0x7ff) - 1023;
+	const uint64_t implicit = UINT64_C(1) << 52;
+	const uint64_t frac = src & (implicit - 1);
+	uint64_t mag;
 
-	if (!wide && ((fs | fd) & 1)) {
-		mips_fpuillinst(l, insn);
-		return;
+	if (exponent >= 63) {
+		if (exponent == 63 && neg && frac == 0)
+			return (uint64_t)INT64_MIN;
+		*invalid = true;
+		return neg ? (uint64_t)INT64_MIN : (uint64_t)INT64_MAX;
 	}
-	fpu_save(l);
-	fpu_discard(l);
-	if (wide)
-		src = fp->r_regs[fs];
-	else
-		src = (uint32_t)pairs->r_regs[fs] |
-		    (uint64_t)(uint32_t)pairs->r_regs[fs + 1] << 32;
+	if (exponent < 0) {
+		*inexact = (src << 1) != 0;
+		return 0;
+	}
+	if (exponent >= 52) {
+		mag = (frac | implicit) << (exponent - 52);
+	} else {
+		unsigned shift = 52 - exponent;
+		*inexact = (frac & ((UINT64_C(1) << shift) - 1)) != 0;
+		mag = (frac | implicit) >> shift;
+	}
+	return neg ? -mag : mag;
+}
+
+static uint64_t
+long_to_double(uint64_t src, uint32_t csr, bool *inexact)
+{
+	uint64_t mag, bits = 0;
 
 	const bool neg = (src >> 63) != 0;
 	mag = neg ? -src : src;	/* unsigned, including INT64_MIN */
@@ -126,16 +137,16 @@ mips_cvt_d_l(uint32_t insn, struct trapframe *tf, uint32_t csr)
 			uint64_t half = UINT64_C(1) << (shift - 1);
 			uint64_t rem = mag & ((half << 1) - 1);
 			frac = mag >> shift;
-			inexact = rem != 0;
+			*inexact = rem != 0;
 			switch (csr & MIPS_FCSR_RM) {
 			case MIPS_FCSR_RM_RN:
 				frac += rem > half || (rem == half && (frac & 1));
 				break;
 			case MIPS_FCSR_RM_RP:
-				frac += inexact && !neg;
+				frac += *inexact && !neg;
 				break;
 			case MIPS_FCSR_RM_RM:
-				frac += inexact && neg;
+				frac += *inexact && neg;
 				break;
 			}
 		}
@@ -144,7 +155,45 @@ mips_cvt_d_l(uint32_t insn, struct trapframe *tf, uint32_t csr)
 		    (((uint64_t)(exp + 1022) << 52) + frac);
 	}
 
+	return bits;
+}
+
+void
+mips_convert_long(uint32_t insn, struct trapframe *tf, uint32_t csr)
+{
+	struct lwp *l = curlwp;
+	struct pcb *pcb = lwp_getpcb(l);
+	struct fpreg *fp = &pcb->pcb_fpregs;
+	struct fpreg_oabi *pairs = (struct fpreg_oabi *)(void *)fp;
+	const unsigned fs = (insn >> 11) & 31, fd = (insn >> 6) & 31;
+	const bool wide = (tf->tf_regs[_R_SR] & MIPS3_SR_FR) != 0;
+	uint64_t src, bits;
+	bool inexact = false, invalid = false;
+
+	if (!wide && ((fs | fd) & 1)) {
+		mips_fpuillinst(l, insn);
+		return;
+	}
+	fpu_save(l);
+	fpu_discard(l);
+	if (wide)
+		src = fp->r_regs[fs];
+	else
+		src = (uint32_t)pairs->r_regs[fs] |
+		    (uint64_t)(uint32_t)pairs->r_regs[fs + 1] << 32;
+
+	/* fp.S dispatches CVT.D.L (0x21) and TRUNC.L.D (0x09) here. */
+	if ((insn & 63) == 0x09)
+		bits = trunc_double_to_long(src, &inexact, &invalid);
+	else
+		bits = long_to_double(src, csr, &inexact);
+
 	csr &= ~MIPS_FCSR_CAUSE;
+	if (invalid) {
+		csr |= MIPS_FCSR_CAUSE_V;
+		if ((csr & MIPS_FCSR_ENABLES_V) == 0)
+			csr |= MIPS_FCSR_FLAGS_V;
+	}
 	if (inexact) {
 		csr |= MIPS_FCSR_CAUSE_I;
 		if ((csr & MIPS_FCSR_ENABLES_I) == 0)
@@ -154,7 +203,8 @@ mips_cvt_d_l(uint32_t insn, struct trapframe *tf, uint32_t csr)
 		fp->r_regs[32] = csr;
 	else
 		pairs->r_regs[32] = csr;
-	if (inexact && (csr & MIPS_FCSR_ENABLES_I)) {
+	if ((inexact && (csr & MIPS_FCSR_ENABLES_I)) ||
+	    (invalid && (csr & MIPS_FCSR_ENABLES_V))) {
 		mips_fpuexcept(l, csr);
 		return;
 	}
