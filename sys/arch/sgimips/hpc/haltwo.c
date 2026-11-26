@@ -350,7 +350,7 @@ haltwo_attach(device_t parent, device_t self, void *aux)
 	    0x8208844);
 
 	/* Unmute output */
-	/* XXX Add mute/unmute support to mixer ops? XXX */
+	sc->sc_mute = false;
 	haltwo_write_indirect(sc, HAL2_IREG_DAC_C2, 0, 0);
 
 	/* Set master volume to zero */
@@ -478,6 +478,16 @@ haltwo_set_port(void *v, mixer_ctrl_t *mc)
 	struct haltwo_softc *sc;
 	int lval, rval;
 
+	sc = v;
+	if (mc->dev == HALTWO_MASTER_MUTE) {
+		if (mc->type != AUDIO_MIXER_ENUM ||
+		    (mc->un.ord != 0 && mc->un.ord != 1))
+			return EINVAL;
+		sc->sc_mute = mc->un.ord != 0;
+		haltwo_write_indirect(sc, HAL2_IREG_DAC_C2,
+		    sc->sc_mute ? HAL2_DAC_C2_MUTE : 0, 0);
+		return 0;
+	}
 	if (mc->type != AUDIO_MIXER_VALUE)
 		return EINVAL;
 
@@ -489,7 +499,6 @@ haltwo_set_port(void *v, mixer_ctrl_t *mc)
 	} else
 		return EINVAL;
 
-	sc = v;
 	switch (mc->dev) {
 	case HALTWO_MASTER_VOL:
 		sc->sc_vol_left = lval;
@@ -514,9 +523,15 @@ haltwo_get_port(void *v, mixer_ctrl_t *mc)
 	struct haltwo_softc *sc;
 	int l, r;
 
+	sc = v;
+	if (mc->dev == HALTWO_MASTER_MUTE) {
+		if (mc->type != AUDIO_MIXER_ENUM)
+			return EINVAL;
+		mc->un.ord = sc->sc_mute;
+		return 0;
+	}
 	switch (mc->dev) {
 	case HALTWO_MASTER_VOL:
-		sc = v;
 		l = sc->sc_vol_left;
 		r = sc->sc_vol_right;
 		break;
@@ -545,11 +560,25 @@ haltwo_query_devinfo(void *v, mixer_devinfo_t *dev)
 	case HALTWO_MASTER_VOL:
 		dev->type = AUDIO_MIXER_VALUE;
 		dev->mixer_class = HALTWO_OUTPUT_CLASS;
-		dev->prev = dev->next = AUDIO_MIXER_LAST;
+		dev->prev = AUDIO_MIXER_LAST;
+		dev->next = HALTWO_MASTER_MUTE;
 		strcpy(dev->label.name, AudioNmaster);
 		dev->un.v.num_channels = 2;
 		dev->un.v.delta = 16;
 		strcpy(dev->un.v.units.name, AudioNvolume);
+		break;
+
+	case HALTWO_MASTER_MUTE:
+		dev->type = AUDIO_MIXER_ENUM;
+		dev->mixer_class = HALTWO_OUTPUT_CLASS;
+		dev->prev = HALTWO_MASTER_VOL;
+		dev->next = AUDIO_MIXER_LAST;
+		strcpy(dev->label.name, AudioNmute);
+		dev->un.e.num_mem = 2;
+		strcpy(dev->un.e.member[0].label.name, AudioNoff);
+		dev->un.e.member[0].ord = 0;
+		strcpy(dev->un.e.member[1].label.name, AudioNon);
+		dev->un.e.member[1].ord = 1;
 		break;
 
 	/* Mixer classes */

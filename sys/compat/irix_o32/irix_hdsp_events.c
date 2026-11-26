@@ -19,7 +19,6 @@
 #define EVENT_DESELECT	113
 #define EVENT_FLUSH	116
 #define EVENT_PENDING	118
-#define GAIN_MASK	(UINT64_C(1) << (AL_GAIN & 63))
 
 static const uint32_t resources[] = {
 	AL_SYSTEM, INDY_SUBSYSTEM, ANALOG_OUT, AL_DEFAULT_OUTPUT, SPEAKER
@@ -184,7 +183,7 @@ irix_hdsp_events_fini(void)
 }
 
 void
-irix_hdsp_gain_changed(void)
+irix_hdsp_changed(uint32_t param, uint32_t value)
 {
 	struct hdsp_queue *q;
 	struct timespec now;
@@ -193,15 +192,16 @@ irix_hdsp_gain_changed(void)
 	mutex_enter(&queue_lock);
 	LIST_FOREACH(q, &queues, entries) {
 		for (unsigned i = 0; i < __arraycount(resources); i++) {
-			if (!(q->masks[i] & GAIN_MASK))
+			if (!(q->masks[i] & (UINT64_C(1) << (param & 63))))
 				continue;
 			if (q->tail - q->head == QUEUE_SIZE)
 				q->head++;
 			q->events[q->tail++ % QUEUE_SIZE] = (struct hdsp_event){
 			    .source = SPEAKER, .resource = resources[i],
-			    .param = AL_GAIN, .subsystem = INDY_SUBSYSTEM,
+			    .param = param, .subsystem = INDY_SUBSYSTEM,
 			    .time = (uint64_t)now.tv_sec * 1000000000 + now.tv_nsec,
-			    .data = {0, 2} };
+			    .value = (uint64_t)value << 32,
+			    .data = {0, param == AL_GAIN ? 2 : 1} };
 			selnotify(&q->sel, POLLIN | POLLRDNORM, 0);
 		}
 	}

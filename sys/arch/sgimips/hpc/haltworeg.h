@@ -74,6 +74,12 @@
 #define  HAL2_C1_CLKID_SHIFT		3
 #define  HAL2_C1_DATAT_SHIFT		8
 
+/* Mixer indices used by HAL2 and the IRIX audio adapter. */
+#define HALTWO_MASTER_VOL	0
+#define HALTWO_OUTPUT_CLASS	1
+#define HALTWO_MASTER_MUTE	2
+
 #define HAL2_IREG_DAC_C2		0x1408
+#define  HAL2_DAC_C2_MUTE	0x0400
 
 #endif

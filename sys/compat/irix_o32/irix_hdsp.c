@@ -1,6 +1,7 @@
 /* IRIX Audio Library master-device controls for the native Indy HAL2 mixer. */
 #include <sys/param.h>
 #include <sys/audioio.h>
+#include <sgimips/hpc/haltworeg.h>
 #include <sys/atomic.h>
 #include <sys/kmem.h>
 #include <sys/fcntl.h>
@@ -80,6 +81,7 @@ static const struct {
 	{ AL_PARAMS, "Resource Parameters", 3, 0x12, 64, 4 },
 	{ AL_GAIN, "Gain", 1, 0x21, 2, 11 },
 	{ AL_GAIN_REF, "Gain Reference", 2, 0x12, 1, 1 },
+	{ AL_MUTE, "Mute Control", 2, 0x12, 1, 15 },
 	{ AL_LABEL, "Resource Label", 4, 0x80, 32, 1 },
 	{ AL_SHORT_NAME, "Short Resource Name", 4, 0x80, 32, 1 },
 };
@@ -278,6 +280,10 @@ query_values(struct al_query *q, register_t *rval)
 			values[0].word[0] = SPEAKER;
 			count = 1;
 		}
+	} else if (q->param == AL_MUTE &&
+	    (is_output(q->resource) || q->resource == SPEAKER)) {
+		values[1].word[0] = 1;
+		count = 2;
 	} else if (has_control(q->resource, AL_PARAMS) && q->param == AL_PARAMS) {
 		count = 0;
 		for (size_t i = 0; i < __arraycount(controls); i++) {
@@ -333,7 +339,7 @@ static int
 param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 {
 	int64_t gain[2];
-	mixer_ctrl_t control = { .dev = 0, .type = AUDIO_MIXER_VALUE };
+	mixer_ctrl_t control = { .dev = HALTWO_MASTER_VOL, .type = AUDIO_MIXER_VALUE };
 	void *ptr = (void *)(intptr_t)(int32_t)pv->value.word[0];
 	const char *s;
 	uint32_t crystal;
@@ -364,7 +370,8 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 		pv->used = 1;
 		return 0;
 	}
-	if (set && (pv->param != AL_GAIN || !has_control(resource, AL_GAIN))) {
+	if (set && ((pv->param != AL_GAIN && pv->param != AL_MUTE) ||
+	    !has_control(resource, pv->param))) {
 		pv->used = -1;
 		return 0;
 	}
@@ -451,6 +458,27 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 		if (pv->size <= 0)
 			return 0;
 		return copyout(s, ptr, MIN(pv->size, pv->used));
+	case AL_MUTE:
+		control.dev = HALTWO_MASTER_MUTE;
+		control.type = AUDIO_MIXER_ENUM;
+		if (set && pv->value.word[0] > 1) {
+			pv->used = -1;
+			return 0;
+		}
+		error = (*fp->f_ops->fo_ioctl)(fp, AUDIO_MIXER_READ, &control);
+		if (error)
+			return error;
+		if (set && (uint32_t)control.un.ord != pv->value.word[0]) {
+			control.un.ord = pv->value.word[0];
+			error = (*fp->f_ops->fo_ioctl)(fp, AUDIO_MIXER_WRITE, &control);
+			if (error)
+				return error;
+			irix_hdsp_changed(AL_MUTE, control.un.ord);
+		}
+		pv->used = 1;
+		pv->value.fixed = 0;
+		pv->value.word[0] = control.un.ord;
+		return 0;
 	case AL_GAIN:
 		if (pv->size < 0 || (set && pv->size != 2)) {
 			pv->used = -1;
@@ -470,7 +498,7 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 			return error;
 		pv->used = 2;
 		if (set)
-			irix_hdsp_gain_changed();
+			irix_hdsp_changed(AL_GAIN, 0);
 		if (set || pv->size == 0)
 			return 0;
 		for (unsigned i = 0; i < 2; i++)

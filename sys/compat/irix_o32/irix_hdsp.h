@@ -8,6 +8,7 @@
 #define INDY_SUBSYSTEM 25
 #define AL_PARAM(n) (0x10000000U | (n))
 #define AL_GAIN AL_PARAM(25)
+#define AL_MUTE AL_PARAM(29)
 
 int irix_hdsp_ioctl(int, uint32_t, void *, register_t *);
 
@@ -16,7 +17,7 @@ int irix_hdsp_events_init(void);
 int irix_hdsp_events_quiesce(void);
 void irix_hdsp_events_resume(void);
 void irix_hdsp_events_fini(void);
-void irix_hdsp_gain_changed(void);
+void irix_hdsp_changed(uint32_t, uint32_t);
 int irix_hdsp_port_open(int);
 void irix_hdsp_port_release(void);
 int irix_hdsp_pcm_ioctl(int, uint32_t, void *, register_t *);

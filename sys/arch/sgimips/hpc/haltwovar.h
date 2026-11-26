@@ -35,10 +35,6 @@
 /* XXX Quite arbitrary? XXX */
 #define HALTWO_MAX_DMASEGS	16
 
-/* Mixer indices */
-#define HALTWO_MASTER_VOL	0
-#define HALTWO_OUTPUT_CLASS	1
-
 struct haltwo_dmabuf {
 	bus_dmamap_t dma_map;
 	bus_dma_segment_t dma_segs[HALTWO_MAX_DMASEGS];
@@ -78,6 +74,7 @@ struct haltwo_softc {
 #endif
 	uint8_t sc_vol_left;
 	uint8_t sc_vol_right;
+	bool sc_mute;
 
 	bus_space_handle_t sc_ctl_sh;
 	bus_space_handle_t sc_aes_sh;
