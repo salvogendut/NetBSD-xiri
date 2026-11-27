@@ -133,6 +133,8 @@ extern kmutex_t uvm_kentry_lock;
 #define UVM_ET_COPYONWRITE 	0x04	/* copy_on_write */
 #define UVM_ET_NEEDSCOPY	0x08	/* needs_copy */
 
+#define UVM_ET_FILEGROW		0x10	/* shared file may grow on user fault */
+
 #define UVM_ET_ISOBJ(E)		(((E)->etype & UVM_ET_OBJ) != 0)
 #define UVM_ET_ISSUBMAP(E)	(((E)->etype & UVM_ET_SUBMAP) != 0)
 #define UVM_ET_ISCOPYONWRITE(E)	(((E)->etype & UVM_ET_COPYONWRITE) != 0)

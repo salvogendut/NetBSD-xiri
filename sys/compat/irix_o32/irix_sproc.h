@@ -80,6 +80,6 @@ void irix_share_child(struct lwp *);
 bool irix_share_single(struct proc *);
 int irix_local_plan(const struct irix_localset *, vaddr_t, vaddr_t, bool,
     struct irix_localset *);
-int irix_share_mmap(struct lwp *, struct sys_mmap_args *, register_t *);
+int irix_share_mmap(struct lwp *, struct sys_mmap_args *, register_t *, bool);
 
 #endif

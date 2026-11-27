@@ -358,7 +358,8 @@ irix_procblk(struct lwp *l, const void *args, register_t *rval)
 }
 
 int
-irix_share_mmap(struct lwp *l, struct sys_mmap_args *args, register_t *rval)
+irix_share_mmap(struct lwp *l, struct sys_mmap_args *args, register_t *rval,
+    bool filegrow)
 {
 	struct irix_process *ip = l->l_proc->p_emuldata;
 	struct irix_share *g = ip->share;
@@ -368,7 +369,7 @@ irix_share_mmap(struct lwp *l, struct sys_mmap_args *args, register_t *rval)
 	int error;
 
 	if (g == NULL)
-		return sys_mmap(l, args, rval);
+		return uvm_mmapfile(l, args, rval, filegrow);
 	mutex_enter(&g->lock);
 	if (g->count > 1 && (SCARG(args, flags) & MAP_FIXED)) {
 		error = EOPNOTSUPP;
@@ -383,7 +384,7 @@ irix_share_mmap(struct lwp *l, struct sys_mmap_args *args, register_t *rval)
 		error = ENOMEM;
 		goto out;
 	}
-	error = sys_mmap(l, args, rval);
+	error = uvm_mmapfile(l, args, rval, filegrow);
 	if (error || peer == NULL)
 		goto out;
 	address = *rval;

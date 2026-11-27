@@ -125,6 +125,7 @@
 #include <mips/locore.h>
 #include <mips/regnum.h>
 #include <mips/userret.h>
+#include <mips/trap.h>
 #include <compat/irix_o32/irix_errno.h>
 #include <compat/irix_o32/irix_errno_map.h>
 
@@ -1874,7 +1875,7 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	int held_fd = -1, error;
 	struct irix_process *ip = l->l_proc->p_emuldata;
 	struct irix_localset next;
-	bool local_plan = false;
+	bool local_plan = false, filegrow = false;
 
 	/* IRIX SHARED=0x1, PRIVATE=0x2, FIXED=0x10, AUTOGROW=0x40,
 	 * LOCAL=0x80, AUTORESRV=0x100. No other foreign flags reach
@@ -1913,12 +1914,14 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 
 		/* /dev/zero has no file extent to grow. Native mmap converts
 		 * this device to anonymous memory, retaining the sharing type.
-		 * Identify the vnode, including aliases, never its pathname.
-		 * Regular-file AUTOGROW requires fault-time extension (shared)
-		 * or private pages past EOF; neither is implemented here. */
+		 * Shared regular files are extended by irix_trapsignal when
+		 * the first user access to a page would otherwise fault. */
 		if ((fp = fd_getfile(fd)) == NULL)
 			return EBADF;
-		if (fp->f_type != DTYPE_VNODE ||
+		if (fp->f_type == DTYPE_VNODE && fp->f_vnode->v_type == VREG &&
+		    type == 0x1) {
+			filegrow = true;
+		} else if (fp->f_type != DTYPE_VNODE ||
 		    fp->f_vnode->v_type != VCHR ||
 		    fp->f_vnode->v_rdev != zerodev) {
 			fd_putfile(fd);
@@ -1946,7 +1949,7 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, pos) = SCARG(uap, pos); /* signed 32-bit to native off_t */
 	if (ip->prda_window != 0)
 		rw_enter(&ip->maplock, RW_WRITER);
-	error = irix_share_mmap(l, &native, rval);
+	error = irix_share_mmap(l, &native, rval, filegrow);
 	if (ip->prda_window != 0)
 		rw_exit(&ip->maplock);
 	if (error == 0) {
@@ -3962,10 +3965,80 @@ irix_proc_exit(struct proc *p)
 	kmem_free(ip, sizeof(*ip));
 }
 
+/*
+ * Handle only a user TLB miss which UVM attributed to the end of a
+ * file. This runs after UVM dropped its locks, outside filesystem I/O.
+ * Take a reference to the object of the faulting entry while the map
+ * is stable. Never hold a map lock across a vnode operation. uvm_fault
+ * checks the current mapping again before the instruction can resume.
+ */
+static bool
+irix_grow_fault(struct lwp *l, const ksiginfo_t *ksi)
+{
+	struct proc *p = l->l_proc;
+	struct vm_map *map = &p->p_vmspace->vm_map;
+	vaddr_t va = trunc_page((vaddr_t)ksi->ksi_addr);
+	struct vm_map_entry *entry;
+	struct vnode *vp;
+	uint64_t offset;
+	vm_prot_t access;
+	struct vattr attr;
+	int error;
+
+	if (ksi->ksi_signo != SIGBUS || ksi->ksi_code != BUS_ADRERR)
+		return false;
+	switch (ksi->ksi_trap) {
+	case T_TLB_LD_MISS:
+		access = VM_PROT_READ;
+		break;
+	case T_TLB_MOD:
+	case T_TLB_ST_MISS:
+		access = VM_PROT_WRITE;
+		break;
+	default:
+		return false;
+	}
+
+	vm_map_lock_read(map);
+	if (!uvm_map_lookup_entry(map, va, &entry) ||
+	    (entry->etype & UVM_ET_FILEGROW) == 0 ||
+	    (entry->protection & access) == 0) {
+		vm_map_unlock_read(map);
+		return false;
+	}
+	vp = (struct vnode *)entry->object.uvm_obj;
+	offset = entry->offset + (va - entry->start);
+	vref(vp);
+	vm_map_unlock_read(map);
+
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	error = VOP_GETATTR(vp, &attr, l->l_cred);
+	if (error == 0 && offset >= attr.va_size) {
+		/* vn_mmap already checked the offset plus mapping length. */
+		uint64_t end = offset + PAGE_SIZE;
+		if (end > p->p_rlimit[RLIMIT_FSIZE].rlim_cur)
+			error = EFBIG;
+		else if ((attr.va_flags & (IMMUTABLE|APPEND|SF_SNAPSHOT)) != 0)
+			error = EPERM;
+		else if ((error = vn_writechk(vp)) == 0) {
+			vattr_null(&attr);
+			attr.va_size = end;
+			error = VOP_SETATTR(vp, &attr, l->l_cred);
+		}
+	}
+	vput(vp);
+
+	/* Resolve the actual access. An unrelated pager error must still
+	 * deliver a signal even if another fault already grew this file. */
+	return error == 0 && uvm_fault(map, va, access) == 0;
+}
+
 static void
 irix_trapsignal(struct lwp *l, ksiginfo_t *ksi)
 {
 
+	if (irix_grow_fault(l, ksi))
+		return;
 	irix_prda_sigmask(l);
 	trapsignal(l, ksi);
 }

@@ -1311,6 +1311,12 @@ uvm_map_enter(struct vm_map *map, const struct uvm_map_args *args,
 	else
 		newetype = 0;
 
+	if (flags & UVM_FLAG_FILEGROW) {
+		KASSERT(uobj && UVM_OBJ_IS_VNODE(uobj));
+		KASSERT((flags & UVM_FLAG_COPYONW) == 0);
+		newetype |= UVM_ET_FILEGROW;
+	}
+
 	if (flags & UVM_FLAG_COPYONW) {
 		newetype |= UVM_ET_COPYONWRITE;
 		if ((flags & UVM_FLAG_OVERLAY) == 0)

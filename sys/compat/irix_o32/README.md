@@ -838,21 +838,27 @@ halt cleanly. Graphical login persistence and catalog actions remain open.
 See Xiri's 2026-11-01-irix-installer and irix-freeware reports.
 
 
-### Shared mmap and zero-device AUTOGROW
+### Shared mmap and AUTOGROW
 
-The mmap adapter now accepts IRIX SHARED and translates it explicitly to native
-MAP_SHARED. AUTOGROW is accepted only for the native zero character device,
-identified by vnode type/device number; symlink aliases qualify and a regular
-file named zero does not. A descriptor reference remains held through sys_mmap
-so a concurrent close cannot substitute another file after validation. Native
-mmap converts the device to anonymous memory, providing shared fork visibility,
-private COW and lifetime beyond descriptor close. No new core hook is added.
+The mmap adapter translates IRIX SHARED to native MAP_SHARED and holds
+the descriptor reference until the map has been created. Native mmap
+converts the zero character device and its aliases to anonymous memory.
+These mappings have shared fork visibility, private COW and lifetime
+beyond descriptor close.
 
-Regular-file AUTOGROW remains EINVAL: the paired 6.5.22m reference keeps a
-17-byte file unchanged at mmap, then extends it to 12288 on either a shared
-read or store at offset8192. Private AUTOGROW supplies pages without changing
-the backing file; absent AUTOGROW, either mapping faults with SIGBUS. Native
-plain shared file mappings retain normal permissions and EOF behavior.
+For a shared regular file opened read/write, AUTOGROW tags its VM entry.
+A user load or store that faults on a page wholly beyond EOF extends the
+file to the end of that native page. Creation of the mapping has no effect
+on file size. The module obtains a vnode reference under the map lock,
+serializes growth under the vnode lock, checks the file-size limit and
+filesystem permissions, and retries the VM access. The normal trap path
+delivers any remaining fault. Native mmaps use the ordinary EOF policy.
+
+IRIX 6.5.22f and 6.5.30f grow a 17-byte file to 12288 bytes on a read
+or store at offset 8192 with 4096-byte pages. Unflagged mappings signal
+SIGBUS. Original IRIX also provides private zero-filled pages past EOF.
+Private regular-file AUTOGROW and a kernel copy as the first access to a
+missing page remain outside this implementation.
 Native zero-device access policy, page alignment, stricter invalid flags,
 empty/bad-protection errors and signed 32-bit offsets remain explicit limits.
 AUTORESRV does not establish IRIX logical-swap accounting/exhaustion behavior;
@@ -1507,4 +1513,4 @@ into both slots of a stereo port, as on the original Indy. Setting
 Sound Editor also uses IRIX `fcntl` commands 10 and 11 to size a scratch
 file. Both use the caller's flock layout and set EOF relative to the file
 start, current offset or end. The subsequent file-backed
-`MAP_SHARED | MAP_AUTOGROW` requires fault-time extension and remains open.
+`MAP_SHARED | MAP_AUTOGROW` uses the shared-file fault handling described above.

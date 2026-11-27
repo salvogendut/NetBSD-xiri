@@ -58,6 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_mmap.c,v 1.189 2026/03/21 03:17:25 yamt Exp $");
 #include <sys/resourcevar.h>
 #include <sys/mman.h>
 #include <sys/pax.h>
+#include <sys/vnode.h>
 
 #include <sys/syscallargs.h>
 
@@ -65,7 +66,7 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_mmap.c,v 1.189 2026/03/21 03:17:25 yamt Exp $");
 #include <uvm/uvm_device.h>
 
 static int uvm_mmap(struct vm_map *, vaddr_t *, vsize_t, vm_prot_t, vm_prot_t,
-    int, int, struct uvm_object *, voff_t, vsize_t);
+    int, int, struct uvm_object *, voff_t, vsize_t, uvm_flag_t);
 
 static int
 range_test(const struct vm_map *map, vaddr_t addr, vsize_t size, bool ismmap)
@@ -296,6 +297,14 @@ sys_mmap(struct lwp *l, const struct sys_mmap_args *uap, register_t *retval)
 		syscallarg(long) pad;
 		syscallarg(off_t) pos;
 	} */
+	return uvm_mmapfile(l, uap, retval, false);
+}
+
+/* Only a kernel caller can opt in to fault-time file growth. */
+int
+uvm_mmapfile(struct lwp *l, const struct sys_mmap_args *uap, register_t *retval,
+    bool filegrow)
+{
 	struct proc *p = l->l_proc;
 	vaddr_t addr;
 	off_t pos;
@@ -326,6 +335,8 @@ sys_mmap(struct lwp *l, const struct sys_mmap_args *uap, register_t *retval)
 	if ((flags & (MAP_SHARED|MAP_PRIVATE)) == (MAP_SHARED|MAP_PRIVATE))
 		return EINVAL;
 
+	if (filegrow && (flags & (MAP_ANON | MAP_SHARED)) != MAP_SHARED)
+		return EINVAL;
 	if (size == 0 && (flags & MAP_ANON) == 0)
 		return EINVAL;
 
@@ -394,11 +405,18 @@ sys_mmap(struct lwp *l, const struct sys_mmap_args *uap, register_t *retval)
 		if ((fp = fd_getfile(fd)) == NULL)
 			return EBADF;
 
+		if (filegrow && (fp->f_type != DTYPE_VNODE ||
+		    fp->f_vnode->v_type != VREG ||
+		    (fp->f_flag & (FREAD|FWRITE)) != (FREAD|FWRITE))) {
+			error = EACCES;
+			goto out;
+		}
 		if (fp->f_ops->fo_mmap == NULL) {
 			error = ENODEV;
 			goto out;
 		}
-		error = (*fp->f_ops->fo_mmap)(fp, &pos, size, prot, &flags,
+		error = (*fp->f_ops->fo_mmap)(fp, &pos, size,
+		    filegrow ? prot | VM_PROT_WRITE : prot, &flags,
 		    &advice, &uobj, &maxprot);
 		if (error) {
 			goto out;
@@ -444,14 +462,16 @@ sys_mmap(struct lwp *l, const struct sys_mmap_args *uap, register_t *retval)
 			(*uobj->pgops->pgo_reference)(uobj);
 	}
 	error = uvm_mmap(&p->p_vmspace->vm_map, &addr, size, prot, maxprot,
-	    flags, advice, uobj, pos, p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
+	    flags, advice, uobj, pos, p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur,
+	    filegrow ? UVM_FLAG_FILEGROW : 0);
 	if (addrhint) {
 		if (error) {
 			addr = defaddr;
 			pax_aslr_mmap(l, &addr, orig_addr, flags);
 			error = uvm_mmap(&p->p_vmspace->vm_map, &addr, size,
 			    prot, maxprot, flags, advice, uobj, pos,
-			    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
+			    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur,
+			    filegrow ? UVM_FLAG_FILEGROW : 0);
 		} else if (uobj) {
 			/* Release the exta reference we took.  */
 			(*uobj->pgops->pgo_detach)(uobj);
@@ -879,11 +899,10 @@ sys_munlockall(struct lwp *l, const void *v, register_t *retval)
 static int
 uvm_mmap(struct vm_map *map, vaddr_t *addr, vsize_t size, vm_prot_t prot,
     vm_prot_t maxprot, int flags, int advice, struct uvm_object *uobj,
-    voff_t foff, vsize_t locklimit)
+    voff_t foff, vsize_t locklimit, uvm_flag_t uvmflag)
 {
 	vaddr_t align = 0;
 	int error;
-	uvm_flag_t uvmflag = 0;
 
 	/*
 	 * check params
@@ -1049,7 +1068,7 @@ uvm_mmap_dev(struct proc *p, void **addrp, size_t len, dev_t dev,
 
 	error = uvm_mmap(&p->p_vmspace->vm_map, (vaddr_t *)addrp,
 	    (vsize_t)len, prot, prot, flags, UVM_ADV_RANDOM, uobj, off,
-	    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
+	    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur, 0);
 	return error;
 }
 
@@ -1069,6 +1088,6 @@ uvm_mmap_anon(struct proc *p, void **addrp, size_t len)
 
 	error = uvm_mmap(&p->p_vmspace->vm_map, (vaddr_t *)addrp,
 	    (vsize_t)len, prot, prot, flags, UVM_ADV_NORMAL, NULL, 0,
-	    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
+	    p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur, 0);
 	return error;
 }

@@ -135,6 +135,8 @@
 #define UVM_FLAG_COLORMATCH	0x04000000 /* match color given in off */
 #define UVM_FLAG_UNMAP		0x08000000 /* unmap existing entries */
 
+#define UVM_FLAG_FILEGROW	0x10000000 /* user faults may extend backing file */
+
 #define UVM_FLAG_BITS "\177\020\
 F\0\3\
 :\0PROT=NONE\0\
@@ -177,6 +179,7 @@ b\27WAITVA\0\
 b\30VAONLY\0\
 b\31COLORMATCH\0\
 b\32UNMAP\0\
+b\34FILEGROW\0\
 "
 
 /* macros to extract info */
@@ -760,6 +763,9 @@ void			uvm_update_uvmexp(void);
 /* uvm_mmap.c */
 int			uvm_mmap_dev(struct proc *, void **, size_t, dev_t,
 			    off_t);
+struct sys_mmap_args;
+int			uvm_mmapfile(struct lwp *, const struct sys_mmap_args *,
+			    register_t *, bool);
 int			uvm_mmap_anon(struct proc *, void **, size_t);
 vaddr_t			uvm_default_mapaddr(struct proc *, vaddr_t, vsize_t,
 			    int);
