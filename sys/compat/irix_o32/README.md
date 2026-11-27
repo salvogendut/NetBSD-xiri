@@ -321,7 +321,19 @@ cumulative user, kernel, interrupt and idle time in IRIX 100 Hz units.
 `MPSA_RMINFO` exports native page counts for physical, free, available,
 swap-backed and file-cache memory. Activity fields without a native mapping
 are zero. The per-CPU query accepts the CPU record. The two 32-bit ABIs
-share the same layouts. `SGI_INVENT` exposes one main-memory record in MiB.
+share the same layouts. `SGI_INVENT` exposes main memory in MiB and the
+attached LUN-zero SCSI `cd0`, including its bus, target and removable flag.
+The optical record is available with an empty tray. IRIX `DS_ENTER` accepts
+flat read buffers on a readable native CD descriptor. It translates the
+CD player's inquiry, TOC, subchannel, seek and digital sector reads through
+the native SCSI driver. Data-out and unsupported commands fail.
+
+CD Player's playback worker requests nondegrading priority 39 with
+`sysmp(MP_SCHED, NDPRI, 0, 39)`. This maps to NetBSD's lowest round-robin
+priority (`SCHED_RR`, 0). The worker inherits the scheduling class of its
+parent. Root can grant that class to a specific open player before Play
+with `schedctl -C SCHED_RR -P 0 -p PID`. Changing scheduling class follows
+NetBSD's ordinary authorization rules.
 
 Native non-fixed mmap now accepts the supplied user-space hint
 while preserving all previous flag, length, protection and offset checks.
@@ -927,7 +939,9 @@ BLOCK and SFDS. Separate native vmspaces retain private PRDA/LOCAL mappings;
 fork temporarily shares other backing and restores both maps' original
 inheritance before user execution. Nonfixed mmap reserves an exact free
 peer range and extracts shared backing; failure rolls back owned mappings.
-SFDS uses native descriptor sharing. Other sharing flags remain unsupported.
+SFDS uses native descriptor sharing. Sound Editor uses the complete sharing
+mask (0x7f). CD Player uses the same mask with independent credentials (0x5f).
+Both use native shared cwd and umask and the same two-member limit.
 
 A group mutex/cv owns membership and pending parent release. Explicit unblock
 releases PR_BLOCK. Armed UNBLKONEXEC releases on successful exec or exit;

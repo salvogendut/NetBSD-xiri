@@ -53,6 +53,7 @@
 #define PR_SPROC 0x01U
 #define PR_SFDS 0x02U
 #define PR_SDIR 0x04U
+#define PR_SID 0x20U
 #define PR_SADDR 0x40U
 #define PR_SALL 0x7fU
 #define PR_BLOCK 0x01000000U
@@ -481,6 +482,7 @@ irix_spawn(struct lwp *l, uint32_t entry, uint32_t flags, uint32_t argument,
 	 */
 	if ((flags & ~(PR_NOLIBC | PR_BLOCK | PR_SALL)) != 0 ||
 	    ((flags & PR_SALL) != PR_SALL &&
+	     (flags & PR_SALL) != (PR_SALL & ~PR_SID) &&
 	     (flags & ~(PR_NOLIBC | PR_BLOCK | PR_SADDR | PR_SFDS)) != 0))
 		return EOPNOTSUPP;
 	if (!irix_share_single(p) || ip->threads || ip->stack_top != 0 ||

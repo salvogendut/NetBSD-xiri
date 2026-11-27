@@ -99,6 +99,7 @@
 #include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
+#include <sys/sched.h>
 #include <sys/protosw.h>
 #include <sys/resourcevar.h>
 #include <sys/select.h>
@@ -160,6 +161,7 @@ irix_pointer(uint32_t value)
 #include <compat/irix_o32/irix_signal.h>
 #include <compat/irix_o32/irix_tty.h>
 #include <compat/irix_o32/irix_hdsp.h>
+#include <compat/irix_o32/irix_cdrom.h>
 
 static void irix_prda_sigmask(struct lwp *);
 
@@ -611,24 +613,27 @@ irix_inventory(const struct irix_o32_syssgi_args *uap, register_t *rval)
 	struct {
 		uint32_t next;
 		int32_t class, type, controller, unit, state;
-	} memory = {
-		.class = 3, .type = 9,	/* INV_MEMORY, INV_MAIN_MB */
-		.state = howmany((uint64_t)physmem, (1024 * 1024) / PAGE_SIZE)
+	} records[2] = {
+		{ .class = 3, .type = 9,	/* INV_MEMORY, INV_MAIN_MB */
+		  .state = howmany((uint64_t)physmem, (1024 * 1024) / PAGE_SIZE) },
+		{ .class = 9, .type = 5 }	/* INV_SCSI, INV_CDROM */
 	};
+	size_t count;
 
-	CTASSERT(sizeof(memory) == 24);
+	CTASSERT(sizeof(records[0]) == 24);
 	switch (SCARG(uap, arg1)) {
 	case 1:			/* SGI_INV_SIZEOF */
-		*rval = sizeof(memory);
+		*rval = sizeof(records[0]);
 		return 0;
 	case 2:			/* SGI_INV_READ */
-		if (SCARG(uap, arg3) < sizeof(memory)) {
-			*rval = 0;
-			return 0;
-		}
-		*rval = sizeof(memory);
-		return copyout(&memory, irix_pointer(SCARG(uap, arg2)),
-		    sizeof(memory));
+		count = 1;
+		if (irix_cdrom_inventory(&records[1].controller, &records[1].unit,
+		    &records[1].state))
+			count++;
+		count = uimin(count, SCARG(uap, arg3) / sizeof(records[0]));
+		*rval = count * sizeof(records[0]);
+		return *rval ? copyout(records, irix_pointer(SCARG(uap, arg2)),
+		    *rval) : 0;
 	default:
 		return EINVAL;
 	}
@@ -2083,7 +2088,7 @@ struct irix_o32_sysmp_args {
 enum {
 	IRIX_MP_NPROCS = 1, IRIX_MP_NAPROCS = 2,
 	IRIX_MP_SASZ = 9, IRIX_MP_SAGET = 10, IRIX_MP_PGSIZE = 14,
-	IRIX_MP_SAGET1 = 15,
+	IRIX_MP_SCHED = 13, IRIX_MP_SAGET1 = 15,
 	IRIX_MPSA_SINFO = 1, IRIX_MPSA_RMINFO = 8
 };
 
@@ -2144,6 +2149,31 @@ irix_sysmp_memory(struct irix_rminfo *rm)
 	rm->dchunkpages = MIN(MAX(INT64_C(0), dirty), rm->chunkpages);
 }
 
+/* SGI CD Player requests the lowest nondegrading real-time priority.
+ * Use the native scheduler, including its credential check. Only change
+ * the calling worker and never overwrite an unrelated real-time policy. */
+static int
+irix_ndpri(struct lwp *l, uint32_t pid, uint32_t priority, register_t *rval)
+{
+	struct sched_param param;
+	int policy, error;
+
+	if (pid != 0 || (priority != 39 && priority != 0))
+		return EOPNOTSUPP;
+	error = do_sched_getparam(0, l->l_lid, &policy, &param);
+	if (error)
+		return error;
+	if (policy != SCHED_OTHER &&
+	    (policy != SCHED_RR || param.sched_priority != 0))
+		return EOPNOTSUPP;
+	*rval = policy == SCHED_RR ? 39 : 0;
+	if (priority == *rval)
+		return 0;
+	param.sched_priority = priority ? 0 : PRI_NONE;
+	return do_sched_setparam(0, l->l_lid,
+	    priority ? SCHED_RR : SCHED_OTHER, &param);
+}
+
 static int
 irix_o32_sysmp(struct lwp *l, const void *args, register_t *rval)
 {
@@ -2157,6 +2187,10 @@ irix_o32_sysmp(struct lwp *l, const void *args, register_t *rval)
 	int cpuid = -1;
 
 	switch (command) {
+	case IRIX_MP_SCHED:
+		if (selector != 1)	/* NDPRI */
+			return EOPNOTSUPP;
+		return irix_ndpri(l, SCARG(uap, arg2), SCARG(uap, arg3), rval);
 	case IRIX_MP_NPROCS:
 		*rval = ncpu;
 		return 0;
@@ -3178,6 +3212,8 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	int32_t foreign_count;
 
 	CTASSERT(sizeof(available) == sizeof(foreign_count));
+	if (SCARG(uap, command) == IRIX_DS_ENTER)
+		return irix_cdrom_enter(SCARG(uap, fd), irix_pointer(SCARG(uap, data)));
 	if (SCARG(uap, command) == 101 || SCARG(uap, command) == 110 ||
 	    SCARG(uap, command) == 112 || SCARG(uap, command) == 113 ||
 	    SCARG(uap, command) == 116 || SCARG(uap, command) == 118)
