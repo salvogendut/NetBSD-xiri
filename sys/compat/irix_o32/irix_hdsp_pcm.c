@@ -103,8 +103,14 @@ transfer(void *arg)
 			size_t n = bytes / sizeof(*samples);
 			p->cursor = (cursor + n) % p->slots;
 			if (p->record) {
-				for (size_t i = 0; i < n; i++)
-					p->ring->pcm[cursor+i] = (int32_t)samples[i] * 256;
+				/* SGI's standard mono microphone feeds the left
+				 * converter into both slots of the stereo port. */
+				bool stereo = irix_hdsp_microphone_channels() == 2;
+				for (size_t i = 0; i < n; i += 2) {
+					p->ring->pcm[cursor + i] = (int32_t)samples[i] * 256;
+					p->ring->pcm[cursor + i + 1] =
+					    (int32_t)samples[i + (stereo ? 1 : 0)] * 256;
+				}
 				atomic_store_release(&p->ring->tail, p->cursor);
 				selnotify(&p->sel, POLLIN | POLLRDNORM, 0);
 			} else {

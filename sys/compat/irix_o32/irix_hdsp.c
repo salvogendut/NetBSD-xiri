@@ -89,6 +89,13 @@ static const struct {
 
 /* The virtual output clock feeds NetBSD per-track sample-rate conversion. */
 static unsigned playback_rate, record_rate;
+static unsigned stereo_microphone;
+
+unsigned
+irix_hdsp_microphone_channels(void)
+{
+	return atomic_load_relaxed(&stereo_microphone) ? 2 : 1;
+}
 
 unsigned
 irix_hdsp_rate(bool record)
@@ -263,7 +270,9 @@ param_info(uint32_t resource, uint32_t param, struct al_info *info, bool capture
 			info->max_delta.fixed = gain_db(2);
 			info->special = 2; /* negative infinity represents silence */
 			break;
-		case AL_CHANNELS: info->initial.word[0] = 2; break;
+		case AL_CHANNELS:
+			info->initial.word[0] = resource == MICROPHONE ? 1 : 2;
+			break;
 		case AL_TYPE:
 			info->initial.word[0] = resource_type(resource);
 			break;
@@ -414,6 +423,16 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set, bool capt
 		pv->used = 1;
 		return 0;
 	}
+	if (set && resource == MICROPHONE && pv->param == AL_CHANNELS) {
+		unsigned channels = pv->value.word[0];
+		if (channels != 1 && channels != 2) {
+			pv->used = -1;
+			return 0;
+		}
+		atomic_store_relaxed(&stereo_microphone, channels == 2);
+		pv->used = 1;
+		return 0;
+	}
 	if (set && ((pv->param != AL_GAIN && pv->param != AL_MUTE) ||
 	    !has_control(resource, pv->param))) {
 		pv->used = -1;
@@ -483,7 +502,8 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set, bool capt
 		pv->used = 1;
 		return 0;
 	case AL_CHANNELS:
-		pv->value.word[0] = 2;
+		pv->value.word[0] = resource == MICROPHONE ?
+		    irix_hdsp_microphone_channels() : 2;
 		pv->used = 1;
 		return 0;
 	case AL_GAIN_REF:

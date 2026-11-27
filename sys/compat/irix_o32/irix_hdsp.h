@@ -24,5 +24,6 @@ int irix_hdsp_port_open(int);
 void irix_hdsp_port_release(void);
 int irix_hdsp_pcm_ioctl(int, uint32_t, void *, register_t *);
 unsigned irix_hdsp_rate(bool);
+unsigned irix_hdsp_microphone_channels(void);
 
 #endif

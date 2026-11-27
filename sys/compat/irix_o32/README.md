@@ -1500,6 +1500,9 @@ Both original SGI command-line clients, `sfrecord` and `sfplay`, work with
 the captured HAL2 microphone on the 6.5.22f and 6.5.30f emulated Indys.
 Input and output have independent sample rates. The default analog input
 uses the microphone and the recording port checks native device permissions.
+The microphone interface defaults to one channel, copying the left sample
+into both slots of a stereo port, as on the original Indy. Setting
+`AL_CHANNELS` on that interface to two preserves both input channels.
 
 Sound Editor also uses IRIX `fcntl` commands 10 and 11 to size a scratch
 file. Both use the caller's flock layout and set EOF relative to the file
