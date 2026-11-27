@@ -65,14 +65,22 @@ MODULE_HOOK(haltwo_mute_hook, void, (bool));
 
 #define HAL2_IREG_DMA_PORT_EN		0x9104
 #define  HAL2_DMA_PORT_EN_CODECTX	0x08
+#define  HAL2_DMA_PORT_EN_CODECR	0x10
 
 #define HAL2_IREG_DMA_END		0x9108
 #define  HAL2_DMA_END_CODECTX		0x08
+#define  HAL2_DMA_END_CODECR		0x10
 
 #define HAL2_IREG_DMA_DRV		0x910C
 
 #define HAL2_IREG_BRES1_C1		0x2104
 #define HAL2_IREG_BRES1_C2		0x2108
+
+#define HAL2_IREG_BRES2_C1		0x2204
+#define HAL2_IREG_BRES2_C2		0x2208
+#define HAL2_IREG_ADC_C1		0x1504
+#define HAL2_IREG_ADC_C2		0x1508
+#define  HAL2_ADC_C2_MIC		0x0300	/* left and right microphone */
 
 #define HAL2_IREG_DAC_C1		0x1404
 #define  HAL2_C1_DMA_SHIFT		0

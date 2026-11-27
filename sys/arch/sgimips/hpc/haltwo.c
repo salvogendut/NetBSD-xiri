@@ -100,7 +100,7 @@ static const struct audio_device haltwo_device = {
 };
 
 static const struct audio_format haltwo_formats = {
-	.mode		= AUMODE_PLAY,
+	.mode		= AUMODE_PLAY | AUMODE_RECORD,
 	.encoding	= AUDIO_ENCODING_SLINEAR_NE,
 	.validbits	= 16,
 	.precision	= 16,
@@ -180,7 +180,7 @@ haltwo_init_codec(struct haltwo_softc *sc, struct haltwo_codec *codec)
 	err = bus_dmamap_create(sc->sc_dma_tag, allocsz, 1, PAGE_SIZE, 0,
 	    BUS_DMA_NOWAIT, &codec->dma_map);
 	if (err)
-		goto out_free;
+		goto out_unmap;
 
 	err = bus_dmamap_load(sc->sc_dma_tag, codec->dma_map, codec->dma_descs,
 	    allocsz, NULL, BUS_DMA_NOWAIT);
@@ -196,12 +196,24 @@ haltwo_init_codec(struct haltwo_softc *sc, struct haltwo_codec *codec)
 
 out_destroy:
 	bus_dmamap_destroy(sc->sc_dma_tag, codec->dma_map);
+out_unmap:
+	bus_dmamem_unmap(sc->sc_dma_tag, codec->dma_descs, allocsz);
 out_free:
 	bus_dmamem_free(sc->sc_dma_tag, &codec->dma_seg, rseg);
 out:
 	DPRINTF(("haltwo_init_codec failed: %d\n",err));
 
 	return err;
+}
+
+static void
+haltwo_fini_codec(struct haltwo_softc *sc, struct haltwo_codec *codec)
+{
+	bus_dmamap_unload(sc->sc_dma_tag, codec->dma_map);
+	bus_dmamap_destroy(sc->sc_dma_tag, codec->dma_map);
+	bus_dmamem_unmap(sc->sc_dma_tag, codec->dma_descs,
+	    sizeof(struct hpc_dma_desc) * HALTWO_MAX_DMASEGS);
+	bus_dmamem_free(sc->sc_dma_tag, &codec->dma_seg, 1);
 }
 
 static void
@@ -326,20 +338,25 @@ haltwo_attach(device_t parent, device_t self, void *aux)
 
 	rev = haltwo_read(sc, ctl, HAL2_REG_CTL_REV);
 
-	if (cpu_intr_establish(haa->ha_irq, IPL_AUDIO, haltwo_intr, sc)
-	    == NULL) {
-		aprint_error(": unable to establish interrupt\n");
-		return;
-	}
-
 	aprint_naive(": Audio controller\n");
 
 	aprint_normal(": HAL2 revision %d.%d.%d\n", (rev & 0x7000) >> 12,
 	    (rev & 0x00F0) >> 4, rev & 0x000F);
 
 	if (haltwo_init_codec(sc, &sc->sc_dac)) {
-		aprint_error(
-		    "haltwo_attach: unable to create DMA descriptor list\n");
+		aprint_error_dev(self, "unable to allocate playback descriptors\n");
+		return;
+	}
+	if (haltwo_init_codec(sc, &sc->sc_adc)) {
+		aprint_error_dev(self, "unable to allocate capture descriptors\n");
+		haltwo_fini_codec(sc, &sc->sc_dac);
+		return;
+	}
+	if (cpu_intr_establish(haa->ha_irq, IPL_AUDIO, haltwo_intr, sc)
+	    == NULL) {
+		aprint_error(": unable to establish interrupt\n");
+		haltwo_fini_codec(sc, &sc->sc_adc);
+		haltwo_fini_codec(sc, &sc->sc_dac);
 		return;
 	}
 
@@ -348,6 +365,9 @@ haltwo_attach(device_t parent, device_t self, void *aux)
 	    0x8208844);
 	bus_space_write_4(haa->ha_st, haa->ha_sh, HPC3_PBUS_CH1_CFGDMA,
 	    0x8208844);
+
+	/* Route the microphone to codec B at unity ADC gain. */
+	haltwo_write_indirect(sc, HAL2_IREG_ADC_C2, HAL2_ADC_C2_MIC, 1);
 
 	/* Unmute output */
 	sc->sc_mute = false;
@@ -376,13 +396,16 @@ haltwo_intr(void *v)
 
 	mutex_spin_enter(&sc->sc_intr_lock);
 
-	if (bus_space_read_4(sc->sc_st, sc->sc_dma_sh, HPC3_PBUS_CH0_CTL)
-	    & HPC3_PBUS_DMACTL_IRQ) {
-		sc->sc_dac.intr(sc->sc_dac.intr_arg);
-
-		ret = 1;
-	} else
-		DPRINTF(("haltwo_intr: Huh?\n"));
+	for (unsigned ch = 0; ch < 2; ch++) {
+		struct haltwo_codec *codec = ch ? &sc->sc_adc : &sc->sc_dac;
+		unsigned ctl = ch ? HPC3_PBUS_CH1_CTL : HPC3_PBUS_CH0_CTL;
+		if (bus_space_read_4(sc->sc_st, sc->sc_dma_sh, ctl) &
+		    HPC3_PBUS_DMACTL_IRQ) {
+			if (codec->intr != NULL)
+				codec->intr(codec->intr_arg);
+			ret = 1;
+		}
+	}
 
 	mutex_spin_exit(&sc->sc_intr_lock);
 
@@ -402,34 +425,29 @@ haltwo_set_format(void *v, int setmode,
 		  audio_filter_reg_t *pfil, audio_filter_reg_t *rfil)
 {
 	struct haltwo_softc *sc;
-	int inc;
-	uint16_t tmp;
+	uint16_t endian;
 
 	sc = v;
-	inc = 4;
-
-	/* Setup samplerate to HW */
-	haltwo_write_indirect(sc, HAL2_IREG_BRES1_C1,
-	    play->sample_rate == 44100 ? 1 : 0, 0);
-	/* XXX Documentation disagrees but this seems to work XXX */
-	haltwo_write_indirect(sc, HAL2_IREG_BRES1_C2, inc, 0xFFFF);
-
-	/* Setup endianness to HW */
-	haltwo_read_indirect(sc, HAL2_IREG_DMA_END, &tmp, NULL);
-	if (play->encoding == AUDIO_ENCODING_SLINEAR_LE)
-		tmp |= HAL2_DMA_END_CODECTX;
-	else
-		tmp &= ~HAL2_DMA_END_CODECTX;
-	haltwo_write_indirect(sc, HAL2_IREG_DMA_END, tmp, 0);
-
-	/* Set PBUS channel, Bresenham clock source, number of channels to HW */
-	haltwo_write_indirect(sc, HAL2_IREG_DAC_C1,
-	    (0 << HAL2_C1_DMA_SHIFT) |
-	    (1 << HAL2_C1_CLKID_SHIFT) |
-	    (play->channels << HAL2_C1_DATAT_SHIFT), 0);
-
-	DPRINTF(("%s: hw_encoding = %d hw_channels = %d\n", __func__,
-	    play->encoding, play->channels));
+	haltwo_read_indirect(sc, HAL2_IREG_DMA_END, &endian, NULL);
+	for (unsigned ch = 0; ch < 2; ch++) {
+		const audio_params_t *params = ch ? rec : play;
+		if (!(setmode & (ch ? AUMODE_RECORD : AUMODE_PLAY)))
+			continue;
+		unsigned c1 = ch ? HAL2_IREG_BRES2_C1 : HAL2_IREG_BRES1_C1;
+		unsigned c2 = ch ? HAL2_IREG_BRES2_C2 : HAL2_IREG_BRES1_C2;
+		unsigned codec = ch ? HAL2_IREG_ADC_C1 : HAL2_IREG_DAC_C1;
+		uint16_t bit = ch ? HAL2_DMA_END_CODECR : HAL2_DMA_END_CODECTX;
+		haltwo_write_indirect(sc, c1, params->sample_rate == 44100, 0);
+		haltwo_write_indirect(sc, c2, 4, 0xffff);
+		if (params->encoding == AUDIO_ENCODING_SLINEAR_LE)
+			endian |= bit;
+		else
+			endian &= ~bit;
+		haltwo_write_indirect(sc, codec, (ch << HAL2_C1_DMA_SHIFT) |
+		    ((ch + 1) << HAL2_C1_CLKID_SHIFT) |
+		    (params->channels << HAL2_C1_DATAT_SHIFT), 0);
+	}
+	haltwo_write_indirect(sc, HAL2_IREG_DMA_END, endian, 0);
 
 	return 0;
 }
@@ -445,23 +463,31 @@ haltwo_round_blocksize(void *v, int blocksize,
 }
 
 static int
+haltwo_halt(struct haltwo_softc *sc, bool record)
+{
+	struct haltwo_codec *codec = record ? &sc->sc_adc : &sc->sc_dac;
+	unsigned ctl = record ? HPC3_PBUS_CH1_CTL : HPC3_PBUS_CH0_CTL;
+	uint16_t enabled;
+	uint16_t bit = record ? HAL2_DMA_PORT_EN_CODECR : HAL2_DMA_PORT_EN_CODECTX;
+
+	haltwo_read_indirect(sc, HAL2_IREG_DMA_PORT_EN, &enabled, NULL);
+	haltwo_write_indirect(sc, HAL2_IREG_DMA_PORT_EN, enabled & ~bit, 0);
+	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, ctl, HPC3_PBUS_DMACTL_ACT_LD);
+	(void)bus_space_read_4(sc->sc_st, sc->sc_dma_sh, ctl);
+	codec->intr = NULL;
+	return 0;
+}
+
+static int
 haltwo_halt_output(void *v)
 {
-	struct haltwo_softc *sc;
-
-	sc = v;
-	/* Disable PBUS DMA */
-	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, HPC3_PBUS_CH0_CTL,
-	    HPC3_PBUS_DMACTL_ACT_LD);
-
-	return 0;
+	return haltwo_halt(v, false);
 }
 
 static int
 haltwo_halt_input(void *v)
 {
-
-	return ENXIO;
+	return haltwo_halt(v, true);
 }
 
 static int
@@ -625,7 +651,7 @@ haltwo_alloc_dmamem(struct haltwo_softc *sc, size_t size,
 	err = bus_dmamap_create(sc->sc_dma_tag, p->size, HALTWO_MAX_DMASEGS,
 	    PAGE_SIZE, 0, BUS_DMA_WAITOK, &p->dma_map);
 	if (err)
-		goto out_free;
+		goto out_unmap;
 
 	err = bus_dmamap_load(sc->sc_dma_tag, p->dma_map, p->kern_addr,
 	    p->size, NULL, BUS_DMA_WAITOK);
@@ -636,6 +662,8 @@ haltwo_alloc_dmamem(struct haltwo_softc *sc, size_t size,
 
 out_destroy:
 	bus_dmamap_destroy(sc->sc_dma_tag, p->dma_map);
+out_unmap:
+	bus_dmamem_unmap(sc->sc_dma_tag, p->kern_addr, p->size);
 out_free:
 	bus_dmamem_free(sc->sc_dma_tag, p->dma_segs, p->dma_segcount);
 out:
@@ -674,6 +702,10 @@ haltwo_free(void *v, void *addr, size_t size)
 	for (pp = &sc->sc_dma_bufs; (p = *pp) != NULL; pp = &p->next) {
 		if (p->kern_addr == addr) {
 			*pp = p->next;
+			bus_dmamap_unload(sc->sc_dma_tag, p->dma_map);
+			bus_dmamap_destroy(sc->sc_dma_tag, p->dma_map);
+			bus_dmamem_unmap(sc->sc_dma_tag, p->kern_addr, p->size);
+			bus_dmamem_free(sc->sc_dma_tag, p->dma_segs, p->dma_segcount);
 			kmem_free(p, sizeof(*p));
 			return;
 		}
@@ -686,101 +718,58 @@ static int
 haltwo_get_props(void *v)
 {
 
-	return AUDIO_PROP_PLAYBACK;
+	return AUDIO_PROP_PLAYBACK | AUDIO_PROP_CAPTURE | AUDIO_PROP_FULLDUPLEX;
 }
 
 static int
-haltwo_trigger_output(void *v, void *start, void *end, int blksize,
-		void (*intr)(void *), void *intrarg, const audio_params_t *param)
+haltwo_trigger(struct haltwo_softc *sc, bool record, void *start, void *end,
+    int blksize, void (*intr)(void *), void *intrarg, const audio_params_t *param)
 {
-	struct haltwo_softc *sc;
 	struct haltwo_dmabuf *p;
+	struct haltwo_codec *codec = record ? &sc->sc_adc : &sc->sc_dac;
+	unsigned ctl = record ? HPC3_PBUS_CH1_CTL : HPC3_PBUS_CH0_CTL;
+	unsigned dp = record ? HPC3_PBUS_CH1_DP : HPC3_PBUS_CH0_DP;
+	uint16_t bit = record ? HAL2_DMA_PORT_EN_CODECR : HAL2_DMA_PORT_EN_CODECTX;
 	uint16_t tmp;
-	uint32_t ctrl;
-	unsigned int fifobeg, fifoend, highwater;
+	unsigned fifobeg = record ? 2 : 0;
+	unsigned fifoend = fifobeg + param->channels;
+	unsigned highwater = param->channels * 2;
 
-	DPRINTF(("haltwo_trigger_output start = %p end = %p blksize = %d"
-	    " param = %p\n", start, end, blksize, param));
-	sc = v;
 	for (p = sc->sc_dma_bufs; p != NULL; p = p->next)
 		if (p->kern_addr == start)
 			break;
-
-	if (p == NULL) {
-		printf("haltwo_trigger_output: buffer not in list\n");
-
+	if (p == NULL)
 		return EINVAL;
-	}
 
-	/* Disable PBUS DMA */
-	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, HPC3_PBUS_CH0_CTL,
-	    HPC3_PBUS_DMACTL_ACT_LD);
-
-	/* Disable HAL2 codec DMA */
-	haltwo_read_indirect(sc, HAL2_IREG_DMA_PORT_EN, &tmp, NULL);
-	haltwo_write_indirect(sc, HAL2_IREG_DMA_PORT_EN,
-	    tmp & ~HAL2_DMA_PORT_EN_CODECTX, 0);
-
-	haltwo_setup_dma(sc, &sc->sc_dac, p, (char *)end - (char *)start,
+	haltwo_halt(sc, record);
+	haltwo_setup_dma(sc, codec, p, (char *)end - (char *)start,
 	    blksize, intr, intrarg);
-
-	highwater = (param->channels * 4) >> 1;
-	fifobeg = 0;
-	fifoend = (param->channels * 8) >> 3;
-
-	DPRINTF(("haltwo_trigger_output: hw_channels = %d highwater = %d"
-	    " fifobeg = %d fifoend = %d\n", param->channels, highwater,
-	    fifobeg, fifoend));
-
-	ctrl = HPC3_PBUS_DMACTL_RT
-	    | HPC3_PBUS_DMACTL_ACT_LD
-	    | (highwater << HPC3_PBUS_DMACTL_HIGHWATER_SHIFT)
-	    | (fifobeg << HPC3_PBUS_DMACTL_FIFOBEG_SHIFT)
-	    | (fifoend << HPC3_PBUS_DMACTL_FIFOEND_SHIFT);
-
-	/* Using PBUS CH0 for DAC DMA */
-	haltwo_write_indirect(sc, HAL2_IREG_DMA_DRV, 1, 0);
-
-	/* HAL2 is ready for action, now setup PBUS for DMA transfer */
-	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, HPC3_PBUS_CH0_DP,
-	    sc->sc_dac.dma_seg.ds_addr);
-	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, HPC3_PBUS_CH0_CTL,
-	    ctrl | HPC3_PBUS_DMACTL_ACT);
-
-	/* Both HAL2 and PBUS have been setup, now start it up */
+	haltwo_read_indirect(sc, HAL2_IREG_DMA_DRV, &tmp, NULL);
+	haltwo_write_indirect(sc, HAL2_IREG_DMA_DRV, tmp | (record ? 2 : 1), 0);
+	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, dp, codec->dma_seg.ds_addr);
+	bus_space_write_4(sc->sc_st, sc->sc_dma_sh, ctl,
+	    HPC3_PBUS_DMACTL_RT | HPC3_PBUS_DMACTL_ACT_LD | HPC3_PBUS_DMACTL_ACT |
+	    (record ? HPC3_PBUS_DMACTL_RECEIVE : 0) |
+	    (highwater << HPC3_PBUS_DMACTL_HIGHWATER_SHIFT) |
+	    (fifobeg << HPC3_PBUS_DMACTL_FIFOBEG_SHIFT) |
+	    (fifoend << HPC3_PBUS_DMACTL_FIFOEND_SHIFT));
 	haltwo_read_indirect(sc, HAL2_IREG_DMA_PORT_EN, &tmp, NULL);
-	haltwo_write_indirect(sc, HAL2_IREG_DMA_PORT_EN,
-	    tmp | HAL2_DMA_PORT_EN_CODECTX, 0);
-
+	haltwo_write_indirect(sc, HAL2_IREG_DMA_PORT_EN, tmp | bit, 0);
 	return 0;
 }
 
 static int
-haltwo_trigger_input(void *v, void *start, void *end, int blksize,
-		void (*intr)(void *), void *intrarg, const audio_params_t *param)
+haltwo_trigger_output(void *v, void *start, void *end, int blksize,
+    void (*intr)(void *), void *intrarg, const audio_params_t *param)
 {
-	struct haltwo_softc *sc;
-	struct haltwo_dmabuf *p;
+	return haltwo_trigger(v, false, start, end, blksize, intr, intrarg, param);
+}
 
-	DPRINTF(("haltwo_trigger_input start = %p end = %p blksize = %d\n",
-	    start, end, blksize));
-	sc = v;
-	for (p = sc->sc_dma_bufs; p != NULL; p = p->next)
-		if (p->kern_addr == start)
-			break;
-
-	if (p == NULL) {
-		printf("haltwo_trigger_input: buffer not in list\n");
-
-		return EINVAL;
-	}
-
-#if 0
-	haltwo_setup_dma(sc, &sc->sc_adc, p, (char *)end - (char *)start,
-	    blksize, intr, intrarg);
-#endif
-
-	return ENXIO;
+static int
+haltwo_trigger_input(void *v, void *start, void *end, int blksize,
+    void (*intr)(void *), void *intrarg, const audio_params_t *param)
+{
+	return haltwo_trigger(v, true, start, end, blksize, intr, intrarg, param);
 }
 
 static void

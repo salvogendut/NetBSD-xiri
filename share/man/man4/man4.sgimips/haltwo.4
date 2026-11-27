@@ -27,7 +27,7 @@
 .\"
 .\" <<Id: LICENSE_GC,v 1.1 2001/10/01 23:24:05 cgd Exp>>
 .\"
-.Dd February 17, 2017
+.Dd November 27, 2026
 .Dt HALTWO 4 sgimips
 .Os
 .Sh NAME
@@ -38,6 +38,8 @@
 .Sh DESCRIPTION
 .Nm
 is the audio controller found on the Indy and Indigo2 machines.
+The driver supports simultaneous stereo playback and microphone recording
+at 16-bit precision at 44100 or 48000 Hz.
 .Sh SEE ALSO
 .Xr audio 4 ,
 .Xr sgimips/hpc 4
@@ -47,4 +49,5 @@ The
 driver first appeared in
 .Nx 2.0 .
 .Sh CAVEATS
-The driver lacks support for most mixer operations and recording.
+The driver provides output volume and mute controls.
+Microphone gain and input selection are fixed.

@@ -69,9 +69,7 @@ struct haltwo_softc {
 	struct haltwo_dmabuf *sc_dma_bufs;
 
 	struct haltwo_codec sc_dac;
-#if 0
 	struct haltwo_codec sc_adc;
-#endif
 	uint8_t sc_vol_left;
 	uint8_t sc_vol_right;
 	bool sc_mute;
