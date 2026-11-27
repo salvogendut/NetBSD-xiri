@@ -3,7 +3,9 @@
 
 #define AL_SYSTEM 11
 #define AL_DEFAULT_OUTPUT 10
+#define ANALOG_IN 5
 #define ANALOG_OUT 6
+#define MICROPHONE 19
 #define SPEAKER 22
 #define INDY_SUBSYSTEM 25
 #define AL_PARAM(n) (0x10000000U | (n))
@@ -21,6 +23,6 @@ void irix_hdsp_changed(uint32_t, uint32_t);
 int irix_hdsp_port_open(int);
 void irix_hdsp_port_release(void);
 int irix_hdsp_pcm_ioctl(int, uint32_t, void *, register_t *);
-unsigned irix_hdsp_rate(void);
+unsigned irix_hdsp_rate(bool);
 
 #endif

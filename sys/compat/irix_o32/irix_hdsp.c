@@ -35,6 +35,7 @@
 #define AL_SUBSYSTEM AL_PARAM(30)
 #define AL_LABEL AL_PARAM(31)
 #define AL_SHORT_NAME AL_PARAM(36)
+#define AL_INPUT_PRESENT AL_PARAM(40)
 #define AL_VERSION AL_PARAM(43)
 #define CRYSTAL_44100 13
 #define CRYSTAL_48000 14
@@ -87,19 +88,36 @@ static const struct {
 };
 
 /* The virtual output clock feeds NetBSD per-track sample-rate conversion. */
-static unsigned playback_rate;
+static unsigned playback_rate, record_rate;
 
 unsigned
-irix_hdsp_rate(void)
+irix_hdsp_rate(bool record)
 {
-	unsigned rate = atomic_load_relaxed(&playback_rate);
-	return rate;
+	return record ? atomic_load_relaxed(&record_rate) : atomic_load_relaxed(&playback_rate);
 }
 
 static bool
 is_output(uint32_t id)
 {
 	return id == ANALOG_OUT || id == AL_DEFAULT_OUTPUT;
+}
+
+static bool
+is_input(uint32_t id)
+{
+	return id == ANALOG_IN || id == AL_DEFAULT_INPUT;
+}
+
+static uint32_t
+resource_type(uint32_t id)
+{
+	if (is_input(id))
+		return 0x2000001b;
+	if (id == MICROPHONE)
+		return 0x2000000d;
+	if (id == SPEAKER)
+		return 0x20000011;
+	return (id == CRYSTAL_44100 || id == CRYSTAL_48000) ? CRYSTAL_TYPE : OUTPUT_TYPE;
 }
 
 /* Express the eight-bit analog gain as 20*log10(level) in signed 32.32 dB.
@@ -154,15 +172,15 @@ is_crystal(uint32_t id)
 }
 
 static int
-hardware_clock(file_t *fp, uint32_t *resource, unsigned *rate)
+hardware_clock(file_t *fp, bool record, uint32_t *resource, unsigned *rate)
 {
 	audio_info_t format;
 	int error = (*fp->f_ops->fo_ioctl)(fp, AUDIO_GETFORMAT, &format);
 	if (error)
 		return error;
-	*rate = atomic_load_relaxed(&playback_rate);
+	*rate = irix_hdsp_rate(record);
 	if (*rate == 0)
-		*rate = format.play.sample_rate;
+		*rate = record ? format.record.sample_rate : format.play.sample_rate;
 	switch (*rate) {
 	case 44100: *resource = CRYSTAL_44100; return 0;
 	case 48000: *resource = CRYSTAL_48000; return 0;
@@ -173,6 +191,12 @@ hardware_clock(file_t *fp, uint32_t *resource, unsigned *rate)
 static bool
 has_control(uint32_t resource, uint32_t param)
 {
+	if (is_input(resource) || resource == MICROPHONE) {
+		if (is_input(resource) && (param == AL_INTERFACE || param == AL_MASTER_CLOCK || param == AL_RATE))
+			return true;
+		return param == AL_TYPE || param == AL_NAME || param == AL_LABEL ||
+		    param == AL_SHORT_NAME || param == AL_PARAMS || param == AL_CHANNELS;
+	}
 	if (is_crystal(resource))
 		return param == AL_TYPE || param == AL_NAME || param == AL_LABEL ||
 		    param == AL_SHORT_NAME || param == AL_PARAMS;
@@ -182,7 +206,7 @@ has_control(uint32_t resource, uint32_t param)
 }
 
 static int
-param_info(uint32_t resource, uint32_t param, struct al_info *info)
+param_info(uint32_t resource, uint32_t param, struct al_info *info, bool capture)
 {
 	memset(info, 0, sizeof(*info));
 	info->resource = resource;
@@ -205,7 +229,7 @@ param_info(uint32_t resource, uint32_t param, struct al_info *info)
 		case AL_DEFAULT_OUTPUT:
 			name = param == AL_DEFAULT_INPUT ? "Default Input" : "Default Output";
 			info->initial.word[0] = param == AL_DEFAULT_INPUT ?
-			    AL_NULL_RESOURCE : ANALOG_OUT;
+			    (capture ? ANALOG_IN : AL_NULL_RESOURCE) : ANALOG_OUT;
 			info->ops = 5;	/* get, query choices */
 			break;
 		case AL_MAX_SETSIZE:
@@ -220,7 +244,8 @@ param_info(uint32_t resource, uint32_t param, struct al_info *info)
 		strlcpy(info->name, name, sizeof(info->name));
 		return 0;
 	}
-	if (!is_output(resource) && resource != SPEAKER && !is_crystal(resource))
+	if (!has_control(resource, AL_PARAMS) ||
+	    (!capture && (is_input(resource) || resource == MICROPHONE)))
 		return ENODEV;
 	for (size_t i = 0; i < __arraycount(controls); i++) {
 		if (controls[i].param != param || !has_control(resource, param))
@@ -240,15 +265,14 @@ param_info(uint32_t resource, uint32_t param, struct al_info *info)
 			break;
 		case AL_CHANNELS: info->initial.word[0] = 2; break;
 		case AL_TYPE:
-			info->initial.word[0] = is_crystal(resource) ? CRYSTAL_TYPE :
-			    resource == SPEAKER ? 0x20000011 : OUTPUT_TYPE;
+			info->initial.word[0] = resource_type(resource);
 			break;
 		case AL_MASTER_CLOCK: info->initial.word[0] = CRYSTAL_48000; break;
 		case AL_RATE:
 			info->initial.fixed = info->maximum.fixed = INT64_C(48000) << 32;
 			info->minimum.fixed = INT64_C(44100) << 32;
 			break;
-		case AL_INTERFACE: info->initial.word[0] = SPEAKER; break;
+		case AL_INTERFACE: info->initial.word[0] = is_input(resource) ? MICROPHONE : SPEAKER; break;
 		case AL_GAIN_REF: info->initial.word[1] = 1; break;
 		}
 		return 0;
@@ -257,27 +281,34 @@ param_info(uint32_t resource, uint32_t param, struct al_info *info)
 }
 
 static int
-query_values(struct al_query *q, register_t *rval)
+query_values(struct al_query *q, register_t *rval, bool capture)
 {
 	union al_value values[__arraycount(controls)] = { 0 };
 	size_t count;
 
 	if (q->version != 7 || q->count < 0)
 		return EINVAL;
-	if (q->resource == AL_SYSTEM && (q->param == AL_DEVICES ||
-	    q->param == AL_DEFAULT_OUTPUT)) {
+	if (!capture && (is_input(q->resource) || q->resource == MICROPHONE))
+		return ENODEV;
+	if (q->resource == AL_SYSTEM && q->param == AL_DEVICES) {
+		count = 0;
+		if (capture)
+			values[count++].word[0] = ANALOG_IN;
+		values[count++].word[0] = ANALOG_OUT;
+	} else if (q->resource == AL_SYSTEM && q->param == AL_DEFAULT_OUTPUT) {
 		values[0].word[0] = ANALOG_OUT;
 		count = 1;
 	} else if (q->resource == AL_SYSTEM && q->param == AL_DEFAULT_INPUT) {
-		count = 0;
-	} else if (is_output(q->resource) && (q->param == AL_INTERFACE ||
+		values[0].word[0] = ANALOG_IN;
+		count = capture;
+	} else if ((is_input(q->resource) || is_output(q->resource)) && (q->param == AL_INTERFACE ||
 	    q->param == AL_MASTER_CLOCK)) {
 		if (q->param == AL_MASTER_CLOCK) {
 			values[0].word[0] = CRYSTAL_44100;
 			values[1].word[0] = CRYSTAL_48000;
 			count = 2;
 		} else {
-			values[0].word[0] = SPEAKER;
+			values[0].word[0] = is_input(q->resource) ? MICROPHONE : SPEAKER;
 			count = 1;
 		}
 	} else if (q->param == AL_MUTE &&
@@ -303,13 +334,15 @@ query_values(struct al_query *q, register_t *rval)
 
 /* Resource paths are relative to the supplied scope, including that scope. */
 static int
-lookup_resource(void *address)
+lookup_resource(void *address, bool capture)
 {
 	struct {
 		char name[80];
 		uint32_t path[8], depth;
 	} req;
 	const uint32_t speaker[] = { AL_SYSTEM, INDY_SUBSYSTEM, ANALOG_OUT, SPEAKER };
+	const uint32_t microphone[] = { AL_SYSTEM, INDY_SUBSYSTEM, ANALOG_IN, MICROPHONE };
+	const uint32_t *path = speaker;
 	unsigned first = 0, last;
 	int error;
 
@@ -318,25 +351,33 @@ lookup_resource(void *address)
 		return error;
 	if (memchr(req.name, 0, sizeof(req.name)) == NULL)
 		return EINVAL;
-	while (first < __arraycount(speaker) && speaker[first] != req.path[0])
-		first++;
 	if (strcmp(req.name, "A2.Speaker") == 0 || strcmp(req.name, "Speaker") == 0 ||
 	    strcmp(req.name, "Headphone/Speakers") == 0)
 		last = 3;
 	else if (strcmp(req.name, "A2.AnalogOut") == 0 || strcmp(req.name, "AnalogOut") == 0 ||
 	    strcmp(req.name, "Analog Out") == 0)
 		last = 2;
-	else if (strcmp(req.name, "A2") == 0)
+	else if (capture && (strcmp(req.name, "A2.AnalogIn") == 0 ||
+	    strcmp(req.name, "AnalogIn") == 0 || strcmp(req.name, "Analog In") == 0)) {
+		path = microphone;
+		last = 2;
+	} else if (capture && (strcmp(req.name, "A2.Microphone") == 0 ||
+	    strcmp(req.name, "Microphone") == 0)) {
+		path = microphone;
+		last = 3;
+	} else if (strcmp(req.name, "A2") == 0)
 		last = 1;
 	else
 		last = 0;
+	while (first < __arraycount(speaker) && path[first] != req.path[0])
+		first++;
 	req.depth = last != 0 && first <= last ? last - first + 1 : 0;
-	memcpy(req.path, speaker + first, req.depth * sizeof(speaker[0]));
+	memcpy(req.path, path + first, req.depth * sizeof(speaker[0]));
 	return copyout(&req, address, sizeof(req));
 }
 
 static int
-param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
+param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set, bool capture)
 {
 	int64_t gain[2];
 	mixer_ctrl_t control = { .dev = HALTWO_MASTER_VOL, .type = AUDIO_MIXER_VALUE };
@@ -347,7 +388,7 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 	int error;
 
 	pv->used2 = 0;
-	if (set && is_output(resource) && (pv->param == AL_RATE ||
+	if (set && (is_output(resource) || is_input(resource)) && (pv->param == AL_RATE ||
 	    pv->param == AL_MASTER_CLOCK)) {
 		if (pv->param == AL_RATE) {
 			if (pv->value.fixed == (INT64_C(44100) << 32))
@@ -366,7 +407,10 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 			pv->used = -1;
 			return 0;
 		}
-		atomic_store_relaxed(&playback_rate, rate);
+		if (is_input(resource))
+			atomic_store_relaxed(&record_rate, rate);
+		else
+			atomic_store_relaxed(&playback_rate, rate);
 		pv->used = 1;
 		return 0;
 	}
@@ -380,7 +424,7 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 		pv->used = 1;
 		switch (pv->param) {
 		case AL_DEFAULT_OUTPUT: pv->value.word[0] = ANALOG_OUT; break;
-		case AL_DEFAULT_INPUT: pv->value.word[0] = AL_NULL_RESOURCE; break;
+		case AL_DEFAULT_INPUT: pv->value.word[0] = capture ? ANALOG_IN : AL_NULL_RESOURCE; break;
 		case AL_MAX_SETSIZE: pv->value.word[0] = 64; break;
 		case AL_VERSION: pv->value.word[0] = 6; break;
 		default: pv->used = -1;
@@ -402,6 +446,14 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 			return 0;
 		return copyout("A2", ptr, MIN(pv->size, pv->used));
 	}
+	/* Sound Editor asks for this together with AL_RATE. On an Indy the
+	 * internally clocked analog input reports present even during silence. */
+	if (!set && is_input(resource) && pv->param == AL_INPUT_PRESENT) {
+		pv->value.fixed = 0;
+		pv->value.word[0] = capture;
+		pv->used = 1;
+		return 0;
+	}
 	if (pv->param != AL_SUBSYSTEM && !has_control(resource, pv->param)) {
 		pv->used = -1;
 		return 0;
@@ -409,7 +461,7 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 	switch (pv->param) {
 	case AL_RATE:
 	case AL_MASTER_CLOCK:
-		error = hardware_clock(fp, &crystal, &rate);
+		error = hardware_clock(fp, is_input(resource), &crystal, &rate);
 		if (error)
 			return error;
 		if (pv->param == AL_RATE)
@@ -423,12 +475,11 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 		pv->used = 1;
 		return 0;
 	case AL_INTERFACE:
-		pv->value.word[0] = SPEAKER;
+		pv->value.word[0] = is_input(resource) ? MICROPHONE : SPEAKER;
 		pv->used = resource == SPEAKER ? -1 : 1;
 		return 0;
 	case AL_TYPE:
-		pv->value.word[0] = is_crystal(resource) ? CRYSTAL_TYPE :
-			    resource == SPEAKER ? 0x20000011 : OUTPUT_TYPE;
+		pv->value.word[0] = resource_type(resource);
 		pv->used = 1;
 		return 0;
 	case AL_CHANNELS:
@@ -448,6 +499,11 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 		else if (resource == CRYSTAL_48000)
 			s = pv->param == AL_NAME ? "A2.Crystal48Mclk" :
 			    pv->param == AL_LABEL ? "48 kHz Internal Clock" : "Crystal48Mclk";
+		else if (is_input(resource))
+			s = pv->param == AL_NAME ? "A2.AnalogIn" :
+			    pv->param == AL_LABEL ? "Analog In" : "AnalogIn";
+		else if (resource == MICROPHONE)
+			s = pv->param == AL_NAME ? "A2.Microphone" : "Microphone";
 		else if (resource == SPEAKER)
 			s = pv->param == AL_NAME ? "A2.Speaker" :
 			    pv->param == AL_LABEL ? "Headphone/Speakers" : "Speaker";
@@ -510,7 +566,7 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 }
 
 static int
-params(file_t *fp, void *address, bool set, register_t *rval)
+params(file_t *fp, void *address, bool set, register_t *rval, bool capture)
 {
 	struct al_pv *pv;
 	uint32_t count;
@@ -529,12 +585,13 @@ params(file_t *fp, void *address, bool set, register_t *rval)
 	if (error == 0 && (pv[0].param != count || pv[1].param != AL_RESOURCE))
 		error = EINVAL;
 	if (error == 0 && !is_output(pv[1].value.word[0]) &&
+	    !(capture && (is_input(pv[1].value.word[0]) || pv[1].value.word[0] == MICROPHONE)) &&
 	    pv[1].value.word[0] != AL_SYSTEM && pv[1].value.word[0] != SPEAKER &&
 	    pv[1].value.word[0] != INDY_SUBSYSTEM && !is_crystal(pv[1].value.word[0]))
 		error = ENODEV;
 	*rval = 0;
 	for (uint32_t i = 2; !error && i < count; i++) {
-		error = param_value(fp, pv[1].value.word[0], &pv[i], set);
+		error = param_value(fp, pv[1].value.word[0], &pv[i], set, capture);
 		if (pv[i].used >= 0)
 			(*rval)++;
 	}
@@ -584,6 +641,11 @@ irix_hdsp_ioctl(int fd, uint32_t cmd, void *address, register_t *rval)
 		error = ENODEV;
 		goto out;
 	}
+	int props;
+	error = fp->f_ops->fo_ioctl(fp, AUDIO_GETPROPS, &props);
+	if (error)
+		goto out;
+	bool capture = (props & AUDIO_PROP_CAPTURE) != 0;
 	*rval = 0;
 	switch (cmd) {
 	case 2: { /* FIND_MINOR: each open of this node clones a private port. */
@@ -593,20 +655,20 @@ irix_hdsp_ioctl(int fd, uint32_t cmd, void *address, register_t *rval)
 	}
 	case HDSP_SET_PARAMS:
 	case HDSP_GET_PARAMS:
-		error = params(fp, address, cmd == HDSP_SET_PARAMS, rval);
+		error = params(fp, address, cmd == HDSP_SET_PARAMS, rval, capture);
 		break;
 	case HDSP_QUERY_VALUES:
 		error = copyin(address, &query, sizeof(query));
 		if (!error)
-			error = query_values(&query, rval);
+			error = query_values(&query, rval, capture);
 		break;
 	case HDSP_LOOKUP:
-		error = lookup_resource(address);
+		error = lookup_resource(address, capture);
 		break;
 	case HDSP_GET_PARAM_INFO:
 		error = copyin(address, ids, sizeof(ids));
 		if (!error)
-			error = param_info(ids[0], ids[1], &info);
+			error = param_info(ids[0], ids[1], &info, capture);
 		if (!error)
 			error = copyout(&info, address, sizeof(info));
 		break;

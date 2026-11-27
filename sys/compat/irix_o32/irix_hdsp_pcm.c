@@ -1,4 +1,4 @@
-/* Original IRIX AL shared stereo playback ports on a NetBSD audio track. */
+/* Original IRIX AL shared stereo audio ports on a NetBSD audio track. */
 #include <sys/param.h>
 #include <sys/atomic.h>
 #include <sys/audioio.h>
@@ -20,7 +20,7 @@
 #include <compat/irix_o32/irix_hdsp.h>
 
 /* One extra stereo frame distinguishes full from empty. All indices count
- * channel samples. The consumer owns head, the application owns tail. */
+ * channel samples. The reader owns head and the writer owns tail. */
 struct ring {
 	uint32_t head, tail, request, fillpoint;
 	int32_t pcm[];
@@ -34,46 +34,63 @@ struct port {
 	size_t size;
 	file_t *audio;
 	lwp_t *worker;
-	uint32_t head, slots;
-	bool stereo, stop;
+	uint32_t cursor, slots;
+	bool stereo, record, stop;
 	int error;
 };
 
+/* The driver owns head during playback and tail during capture. Never use
+ * a user-written cursor to address kernel memory. Keep one frame empty. */
+static int
+available(struct port *p, uint32_t *count)
+{
+	uint32_t peer = p->record ? atomic_load_acquire(&p->ring->head) :
+	    atomic_load_acquire(&p->ring->tail);
+	if (peer >= p->slots || (peer & 1))
+		return EINVAL;
+	*count = (peer + p->slots - p->cursor +
+	    (p->record ? p->slots - 2 : 0)) % p->slots;
+	return 0;
+}
+
 static void
-consume(void *arg)
+transfer(void *arg)
 {
 	struct port *p = arg;
 	int16_t samples[1024];
 	for (;;) {
+		uint32_t count;
 		mutex_enter(&p->lock);
 		if (p->stop) {
 			mutex_exit(&p->lock);
 			break;
 		}
-		uint32_t tail = atomic_load_acquire(&p->ring->tail);
-		uint32_t head = p->head;
-		if (tail >= p->slots || (tail & 1)) {
-			p->error = EINVAL;
+		p->error = available(p, &count);
+		if (p->error) {
+			selnotify(&p->sel, POLLERR, 0);
 			mutex_exit(&p->lock);
 			break;
 		}
-		unsigned count = MIN(tail >= head ? tail - head : p->slots - head,
-		    __arraycount(samples));
+		uint32_t cursor = p->cursor;
+		count = MIN(count, p->slots - cursor);
+		count = MIN(count, __arraycount(samples));
 		mutex_exit(&p->lock);
 		if (!count) {
 			kpause("hdspidle", false, 1, NULL);
 			continue;
 		}
 		/* AL stores signed 24-bit PCM in the low 24 bits of each word. */
-		for (unsigned i = 0; i < count; i++)
-			samples[i] = (uint32_t)p->ring->pcm[head + i] >> 8;
+		if (!p->record)
+			for (unsigned i = 0; i < count; i++)
+				samples[i] = (uint32_t)p->ring->pcm[cursor + i] >> 8;
 		struct iovec iov = { samples, count * sizeof(*samples) };
 		struct uio uio = { .uio_iov = &iov, .uio_iovcnt = 1,
-		    .uio_resid = iov.iov_len, .uio_rw = UIO_WRITE,
+		    .uio_resid = iov.iov_len, .uio_rw = p->record ? UIO_READ : UIO_WRITE,
 		    .uio_vmspace = vmspace_kernel() };
 		off_t off = 0;
-		int error = p->audio->f_ops->fo_write(p->audio, &off, &uio,
-		    p->audio->f_cred, 0);
+		int error = p->record ?
+		    p->audio->f_ops->fo_read(p->audio, &off, &uio, p->audio->f_cred, 0) :
+		    p->audio->f_ops->fo_write(p->audio, &off, &uio, p->audio->f_cred, 0);
 		size_t bytes = count * sizeof(*samples) - uio.uio_resid;
 		mutex_enter(&p->lock);
 		if (bytes % (2 * sizeof(*samples)) || (error && error != EWOULDBLOCK)) {
@@ -83,13 +100,21 @@ consume(void *arg)
 			break;
 		}
 		if (bytes) {
-			p->head = (head + bytes / sizeof(*samples)) % p->slots;
-			atomic_store_release(&p->ring->head, p->head);
-			selnotify(&p->sel, POLLOUT | POLLWRNORM, 0);
+			size_t n = bytes / sizeof(*samples);
+			p->cursor = (cursor + n) % p->slots;
+			if (p->record) {
+				for (size_t i = 0; i < n; i++)
+					p->ring->pcm[cursor+i] = (int32_t)samples[i] * 256;
+				atomic_store_release(&p->ring->tail, p->cursor);
+				selnotify(&p->sel, POLLIN | POLLRDNORM, 0);
+			} else {
+				atomic_store_release(&p->ring->head, p->cursor);
+				selnotify(&p->sel, POLLOUT | POLLWRNORM, 0);
+			}
 		}
 		mutex_exit(&p->lock);
 		if (!bytes)
-			kpause("hdspplay", false, 1, NULL);
+			kpause("hdspio", false, 1, NULL);
 	}
 	kthread_exit(0);
 }
@@ -160,14 +185,12 @@ port_poll(file_t *fp, int events)
 	if (p->error)
 		ready = POLLERR;
 	else if (p->slots) {
-		uint32_t tail = atomic_load_acquire(&p->ring->tail);
-		if (tail >= p->slots || (tail & 1))
+		uint32_t count;
+		if (available(p, &count))
 			ready = POLLERR;
-		else {
-			uint32_t free = (p->head + p->slots - tail - 2 + p->slots) % p->slots;
-			if (free >= MAX(2, atomic_load_relaxed(&p->ring->fillpoint)))
-				ready = events & (POLLOUT | POLLWRNORM);
-		}
+		else if (p->slots - 2 - count >= MAX(2, atomic_load_relaxed(&p->ring->fillpoint)))
+			ready = events & (p->record ? (POLLIN | POLLRDNORM) :
+			    (POLLOUT | POLLWRNORM));
 	}
 	if (!ready)
 		selrecord(curlwp, &p->sel);
@@ -210,7 +233,9 @@ start_track(struct port *p, unsigned rate)
 	/* Open through VFS in the client's context for normal native device
 	 * permissions and audio(4) multiuser arbitration. Keep a file reference
 	 * independent of the application's descriptor table for the worker. */
-	error = fd_open("/dev/audio0", O_WRONLY | O_NONBLOCK | O_CLOEXEC | O_CLOFORK, 0, &fd);
+	int access = p->record ? O_RDONLY : O_WRONLY;
+	int flag = p->record ? FREAD : FWRITE;
+	error = fd_open("/dev/audio0", access | O_NONBLOCK | O_CLOEXEC | O_CLOFORK, 0, &fd);
 	if (error)
 		return error;
 	fp = fd_getfile(fd);
@@ -218,9 +243,9 @@ start_track(struct port *p, unsigned rate)
 		return EBADF;
 	if (fp->f_type != DTYPE_MISC || fp->f_ops->fo_name == NULL ||
 	    strcmp(fp->f_ops->fo_name, "audio") != 0 ||
-	    (fp->f_flag & (FWRITE | FNONBLOCK)) != (FWRITE | FNONBLOCK) ||
+	    (fp->f_flag & (flag | FNONBLOCK)) != (flag | FNONBLOCK) ||
 	    fp->f_ops->fo_stat(fp, &st) || minor(st.st_dev) != AUDIO_DEVICE) {
-		fd_putfile(fd);
+		(void)fd_close(fd);
 		return ENODEV;
 	}
 	mutex_enter(&fp->f_lock);
@@ -233,20 +258,21 @@ start_track(struct port *p, unsigned rate)
 	if (!error && rate == 0) {
 		error = fp->f_ops->fo_ioctl(fp, AUDIO_GETFORMAT, &info);
 		if (!error)
-			rate = info.play.sample_rate;
+			rate = p->record ? info.record.sample_rate : info.play.sample_rate;
 	}
 	if (!error) {
 		AUDIO_INITINFO(&info);
-		info.play.sample_rate = rate;
-		info.play.channels = 2;
-		info.play.precision = 16;
-		info.play.encoding = AUDIO_ENCODING_SLINEAR_BE;
+		audio_prinfo_t *track = p->record ? &info.record : &info.play;
+		track->sample_rate = rate;
+		track->channels = 2;
+		track->precision = 16;
+		track->encoding = AUDIO_ENCODING_SLINEAR_BE;
 		error = fp->f_ops->fo_ioctl(fp, AUDIO_SETINFO, &info);
 	}
 	if (!error) {
 		p->audio = fp;
 		error = kthread_create(PRI_NONE, KTHREAD_MPSAFE | KTHREAD_MUSTJOIN,
-		    NULL, consume, p, &p->worker, "xiripcm");
+		    NULL, transfer, p, &p->worker, "xiripcm");
 	}
 	if (error) {
 		p->audio = NULL;
@@ -290,13 +316,14 @@ irix_hdsp_pcm_ioctl(int fd, uint32_t cmd, void *arg, register_t *rval)
 		if (error)
 			break;
 		if (p->worker || !p->object || !p->stereo ||
-		    acquire.direction != 1 || acquire.locations < 8 ||
+		    acquire.direction > 1 || acquire.locations < 8 ||
 		    (acquire.locations & 1) || acquire.locations > p->size / 4) {
 			error = EINVAL;
 			break;
 		}
 		p->slots = acquire.locations - 4;
-		error = start_track(p, irix_hdsp_rate());
+		p->record = acquire.direction == 0;
+		error = start_track(p, irix_hdsp_rate(p->record));
 		if (error)
 			p->slots = 0;
 		break;
