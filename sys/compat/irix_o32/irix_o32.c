@@ -1981,9 +1981,6 @@ irix_o32_munmap(struct lwp *l, const void *args, register_t *rval)
 	struct irix_localset next;
 	int error;
 
-	if (!irix_share_single(l->l_proc))
-		return EOPNOTSUPP;
-
 	if ((int32_t)SCARG(uap, len) <= 0 ||
 	    ((vaddr_t)SCARG(uap, addr) & PAGE_MASK) != 0)
 		return EINVAL;
@@ -1991,6 +1988,9 @@ irix_o32_munmap(struct lwp *l, const void *args, register_t *rval)
 	SCARG(&native, len) = SCARG(uap, len);
 	if ((uint64_t)SCARG(uap, addr) + round_page((uint64_t)SCARG(uap, len)) > IRIX_MAXUSER_ADDRESS)
 		return EINVAL;
+	if (!irix_share_single(l->l_proc))
+		return irix_share_unmap(l, SCARG(uap, addr),
+		    SCARG(uap, addr) + round_page((vsize_t)SCARG(uap, len)));
 	error = irix_local_plan(&ip->local, SCARG(uap, addr),
 	    SCARG(uap, addr) + round_page((vsize_t)SCARG(uap, len)), false, &next);
 	if (error)

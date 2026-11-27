@@ -38,6 +38,7 @@
 #include <sys/mman.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/queue.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
 #include <sys/syscallargs.h>
@@ -49,8 +50,11 @@
 #include <mips/locore.h>
 #include <compat/irix_o32/irix_sproc.h>
 
-#define PR_SFDS 0x2U
+#define PR_SPROC 0x01U
+#define PR_SFDS 0x02U
+#define PR_SDIR 0x04U
 #define PR_SADDR 0x40U
+#define PR_SALL 0x7fU
 #define PR_BLOCK 0x01000000U
 #define PR_NOLIBC 0x02000000U
 #define IRIX_VM_ENTRIES 1024
@@ -61,7 +65,14 @@
 #define IRIX_VM_MAX VM_MAXUSER_ADDRESS
 #endif
 
+/* Mappings installed in both address spaces during this pairing. */
+struct irix_mirror {
+	LIST_ENTRY(irix_mirror) entries;
+	vaddr_t start, end;
+};
+
 struct irix_share {
+	LIST_HEAD(, irix_mirror) mirrors;
 	kmutex_t lock;
 	kcondvar_t cv;
 	struct irix_process *member[2];
@@ -205,7 +216,10 @@ irix_share_fork(struct proc *child, struct lwp *parent)
 	ip->share = g;
 	ip->vm = child->p_vmspace;
 	uvmspace_addref(ip->vm);
-	ip->sharemask = s->flags & (PR_SADDR | PR_SFDS);
+	/* Update the founder on each successful pairing. Preserve its original
+	 * address/descriptor mask for the historical partial-sharing modes. */
+	old->sharemask = (PR_SADDR | PR_SFDS) | (s->flags & PR_SALL);
+	ip->sharemask = s->flags & PR_SALL;
 	ip->entry = s->entry;
 	ip->argument = s->argument;
 	ip->stack_base = s->stack_base;
@@ -266,6 +280,12 @@ irix_share_leave(struct proc *p)
 			uvm_unmap(&peer->vm->vm_map, ip->stack_base,
 			    ip->stack_base + ip->stack_size);
 	}
+	/* A survivor keeps its mappings. A later pairing starts a new list. */
+	struct irix_mirror *m;
+	while ((m = LIST_FIRST(&g->mirrors)) != NULL) {
+		LIST_REMOVE(m, entries);
+		kmem_free(m, sizeof(*m));
+	}
 	last = --g->count == 0;
 	vm = ip->vm;
 	ip->share = NULL;
@@ -313,7 +333,7 @@ irix_share_prctl(struct lwp *l, uint32_t option, uint32_t pid, register_t *rval)
 	else if (option == 2)
 		*rval = target->blocked;
 	else if (option == 13)
-		*rval = 1 | (ip->sharemask & target->sharemask);
+		*rval = PR_SPROC | (ip->sharemask & target->sharemask);
 	else if (target == ip || ip->unblock != NULL)
 		error = EINVAL;
 	else {
@@ -401,9 +421,43 @@ irix_share_mmap(struct lwp *l, struct sys_mmap_args *args, register_t *rval,
 		if (error)
 			uvm_unmap(&peer->vm->vm_map, address, address + length);
 	}
-	if (error)
+	if (error) {
 		uvm_unmap(&ip->vm->vm_map, address, address + length);
+	} else {
+		struct irix_mirror *m = kmem_alloc(sizeof(*m), KM_SLEEP);
+		m->start = address;
+		m->end = address + length;
+		LIST_INSERT_HEAD(&g->mirrors, m, entries);
+	}
 out:
+	mutex_exit(&g->lock);
+	return error;
+}
+
+/* Only whole mappings published to both members can be removed together.
+ * No inherited mapping, private stack or PRDA can match this list. */
+int
+irix_share_unmap(struct lwp *l, vaddr_t start, vaddr_t end)
+{
+	struct irix_process *ip = l->l_proc->p_emuldata;
+	struct irix_share *g = ip->share;
+	struct irix_mirror *m;
+	int error = EOPNOTSUPP;
+
+	if (g == NULL)
+		return error;
+	mutex_enter(&g->lock);
+	LIST_FOREACH(m, &g->mirrors, entries) {
+		if (m->start != start || m->end != end)
+			continue;
+		KASSERT(g->count == 2);
+		for (unsigned i = 0; i < 2; i++)
+			uvm_unmap(&g->member[i]->vm->vm_map, start, end);
+		LIST_REMOVE(m, entries);
+		kmem_free(m, sizeof(*m));
+		error = 0;
+		break;
+	}
 	mutex_exit(&g->lock);
 	return error;
 }
@@ -418,10 +472,16 @@ irix_spawn(struct lwp *l, uint32_t entry, uint32_t flags, uint32_t argument,
 	struct irix_spawn *s;
 	struct irix_share *g;
 	bool newgroup = false, valid;
-	int error;
+	int error, forkflags = 0;
 
-	if ((flags & PR_NOLIBC) == 0 ||
-	    (flags & ~(PR_NOLIBC | PR_BLOCK | PR_SADDR | PR_SFDS)) != 0)
+	/*
+	 * Libc handles its arena in userspace. For PR_SALL, cwdinfo shares
+	 * the directories and umask. The personality supports queries for
+	 * the inherited IDs and file-size limit. Exec leaves the group.
+	 */
+	if ((flags & ~(PR_NOLIBC | PR_BLOCK | PR_SALL)) != 0 ||
+	    ((flags & PR_SALL) != PR_SALL &&
+	     (flags & ~(PR_NOLIBC | PR_BLOCK | PR_SADDR | PR_SFDS)) != 0))
 		return EOPNOTSUPP;
 	if (!irix_share_single(p) || ip->threads || ip->stack_top != 0 ||
 	    (p->p_slflag & PSL_TRACED) || (map->flags & VM_MAP_WIREFUTURE))
@@ -473,12 +533,12 @@ irix_spawn(struct lwp *l, uint32_t entry, uint32_t flags, uint32_t argument,
 	g = ip->share;
 	if (g == NULL) {
 		g = kmem_zalloc(sizeof(*g), KM_SLEEP);
+		LIST_INIT(&g->mirrors);
 		mutex_init(&g->lock, MUTEX_DEFAULT, IPL_NONE);
 		cv_init(&g->cv, "irsproc");
 		g->member[0] = ip;
 		g->count = 1;
 		ip->share = g;
-		ip->sharemask = PR_SADDR | PR_SFDS;
 		ip->vm = p->p_vmspace;
 		uvmspace_addref(ip->vm);
 		newgroup = true;
@@ -486,7 +546,11 @@ irix_spawn(struct lwp *l, uint32_t entry, uint32_t flags, uint32_t argument,
 	mutex_enter(&g->lock);
 	ip->spawning = s;
 	ip->blocked = (flags & PR_BLOCK) != 0;
-	error = fork1(l, flags & PR_SFDS ? FORK_SHAREFILES : 0, SIGCHLD,
+	if (flags & PR_SFDS)
+		forkflags |= FORK_SHAREFILES;
+	if (flags & PR_SDIR)
+		forkflags |= FORK_SHARECWD;
+	error = fork1(l, forkflags, SIGCHLD,
 	    NULL, 0, childfn, NULL, rval);
 	ip->spawning = NULL;
 	if (flags & PR_SADDR)
