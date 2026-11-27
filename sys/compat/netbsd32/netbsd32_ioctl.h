@@ -74,6 +74,35 @@
 /* from <sys/audioio.h> */
 #define AUDIO_WSEEK32	_IOR('A', 25, netbsd32_u_long)
 
+/* from <sys/scsiio.h> */
+struct netbsd32_scsireq {
+	netbsd32_u_long flags, timeout;
+	u_char cmd[16], cmdlen;
+	netbsd32_pointer_t databuf;
+	netbsd32_u_long datalen, datalen_used;
+	u_char sense[48], senselen, senselen_used, status, retsts;
+	int error;
+};
+#define SCIOCCOMMAND32	_IOWR('Q', 1, struct netbsd32_scsireq)
+
+/* from <sys/cdio.h> */
+struct netbsd32_ioc_read_toc_entry {
+	u_char	address_format;
+	u_char	starting_track;
+	u_short	data_len;
+	netbsd32_pointer_t data;
+};
+#define CDIOREADTOCENTRIES32	_IOWR('c', 5, struct netbsd32_ioc_read_toc_entry)
+
+struct netbsd32_ioc_read_subchannel {
+	u_char	address_format;
+	u_char	data_format;
+	u_char	track;
+	int	data_len;
+	netbsd32_pointer_t data;
+};
+#define CDIOCREADSUBCHANNEL32	_IOWR('c', 3, struct netbsd32_ioc_read_subchannel)
+
 /* from <sys/dkio.h> */
 typedef netbsd32_pointer_t netbsd32_disklabel_tp_t;
 typedef netbsd32_pointer_t netbsd32_partition_tp_t;
@@ -243,7 +272,7 @@ sys/rnd.h:186:#define RNDGETPOOL      _IOR('R',  103, u_char *)  /* get whole po
 sys/scanio.h:86:#define SCIOCGET	_IOR('S', 1, struct scan_io) /* retrieve parameters */
 sys/scanio.h:87:#define SCIOCSET	_IOW('S', 2, struct scan_io) /* set parameters */
 
-sys/scsiio.h:43:#define SCIOCCOMMAND	_IOWR('Q', 1, scsireq_t)
+
 #endif
 
 /* from <net/if.h> */

@@ -46,6 +46,8 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_ioctl.c,v 1.125 2026/05/11 10:32:28 martin 
 #include <sys/proc.h>
 #include <sys/socketvar.h>
 #include <sys/audioio.h>
+#include <sys/cdio.h>
+#include <sys/scsiio.h>
 #include <sys/disklabel.h>
 #include <sys/dkio.h>
 #include <sys/ataio.h>
@@ -1451,6 +1453,57 @@ netbsd32_ioctl(struct lwp *l,
 		error = (*fp->f_ops->fo_ioctl)(fp, FIOASYNC, (void *)&tmp);
 		break;
 
+	case SCIOCCOMMAND32: {
+		struct netbsd32_scsireq *r = data32;
+		struct scsireq req = {
+			.flags = r->flags,
+			.timeout = r->timeout,
+			.cmdlen = r->cmdlen,
+			.databuf = NETBSD32PTR64(r->databuf),
+			.datalen = r->datalen,
+			.senselen = r->senselen,
+		};
+		if (r->flags & SCCMD_IOV) {
+			error = EOPNOTSUPP;
+			break;
+		}
+		CTASSERT(sizeof(req.cmd) == sizeof(r->cmd));
+		CTASSERT(sizeof(req.sense) == sizeof(r->sense));
+		memcpy(req.cmd, r->cmd, sizeof(req.cmd));
+		error = (*fp->f_ops->fo_ioctl)(fp, SCIOCCOMMAND, &req);
+		if (error == 0) {
+			r->datalen_used = req.datalen_used;
+			r->senselen_used = req.senselen_used;
+			memcpy(r->sense, req.sense, sizeof(r->sense));
+			r->status = req.status;
+			r->retsts = req.retsts;
+			r->error = req.error;
+		}
+		break;
+	}
+	case CDIOREADTOCENTRIES32: {
+		const struct netbsd32_ioc_read_toc_entry *r = data32;
+		struct ioc_read_toc_entry req = {
+			.address_format = r->address_format,
+			.starting_track = r->starting_track,
+			.data_len = r->data_len,
+			.data = NETBSD32PTR64(r->data),
+		};
+		error = (*fp->f_ops->fo_ioctl)(fp, CDIOREADTOCENTRIES, &req);
+		break;
+	}
+	case CDIOCREADSUBCHANNEL32: {
+		const struct netbsd32_ioc_read_subchannel *r = data32;
+		struct ioc_read_subchannel req = {
+			.address_format = r->address_format,
+			.data_format = r->data_format,
+			.track = r->track,
+			.data_len = r->data_len,
+			.data = NETBSD32PTR64(r->data),
+		};
+		error = (*fp->f_ops->fo_ioctl)(fp, CDIOCREADSUBCHANNEL, &req);
+		break;
+	}
 	case AUDIO_WSEEK32:
 		IOCTL_CONV_TO(AUDIO_WSEEK, u_long);
 
