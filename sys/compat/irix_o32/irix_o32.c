@@ -3256,7 +3256,7 @@ struct irix_flock64 {
 };
 
 static int
-irix_fcntl_lock(struct lwp *l, int fd, int command, uint32_t arg,
+irix_fcntl_flock(struct lwp *l, int fd, int command, uint32_t arg,
     register_t *rval)
 {
 	union {
@@ -3269,6 +3269,7 @@ irix_fcntl_lock(struct lwp *l, int fd, int command, uint32_t arg,
 	file_t *fp;
 	off_t base = 0;
 	const bool wide = p->p_md.md_abi == _MIPS_BSD_API_N32;
+	const bool resize = command == 10 || command == 11;
 	const bool query = command == 14;
 	const size_t bytes = wide ? sizeof(foreign.wide) : sizeof(foreign.small);
 	int error, operation, flags = F_POSIX;
@@ -3279,7 +3280,17 @@ irix_fcntl_lock(struct lwp *l, int fd, int command, uint32_t arg,
 	CTASSERT(offsetof(struct irix_flock64, pid) == 28);
 	if ((fp = fd_getfile(fd)) == NULL)
 		return EBADF;
-	if (fp->f_type != DTYPE_VNODE || fp->f_ops->fo_advlock == NULL) {
+	if (resize && !(fp->f_flag & FWRITE)) {
+		error = EBADF;
+		goto out;
+	}
+	if (resize && (fp->f_type != DTYPE_VNODE ||
+	    fp->f_vnode->v_type != VREG || fp->f_ops->fo_truncate == NULL)) {
+		error = EINVAL;
+		goto out;
+	}
+	if (!resize && (fp->f_type != DTYPE_VNODE ||
+	    fp->f_ops->fo_advlock == NULL)) {
 		error = ENOSYS;
 		goto out;
 	}
@@ -3296,21 +3307,23 @@ irix_fcntl_lock(struct lwp *l, int fd, int command, uint32_t arg,
 		fl.l_start = foreign.small.start;
 		fl.l_len = foreign.small.len;
 	}
-	switch (foreign.small.type) {
-	case 1: fl.l_type = F_RDLCK; break;
-	case 2: fl.l_type = F_WRLCK; break;
-	case 3: fl.l_type = F_UNLCK; break;
-	default:
-		error = EINVAL;
-		goto out;
-	}
-	/* The BSD selectors retain IRIX's permission-independent locking.
-	 * Ownership, byte ranges and close/exit release are process based. */
-	if (!query && (command == 6 || command == 7) &&
-	    ((fl.l_type == F_RDLCK && !(fp->f_flag & FREAD)) ||
-	    (fl.l_type == F_WRLCK && !(fp->f_flag & FWRITE)))) {
-		error = EBADF;
-		goto out;
+	if (!resize) {
+		switch (foreign.small.type) {
+		case 1: fl.l_type = F_RDLCK; break;
+		case 2: fl.l_type = F_WRLCK; break;
+		case 3: fl.l_type = F_UNLCK; break;
+		default:
+			error = EINVAL;
+			goto out;
+		}
+		/* The BSD selectors retain IRIX's permission-independent locking.
+		 * Ownership, byte ranges and close/exit release are process based. */
+		if (!query && (command == 6 || command == 7) &&
+		    ((fl.l_type == F_RDLCK && !(fp->f_flag & FREAD)) ||
+		    (fl.l_type == F_WRLCK && !(fp->f_flag & FWRITE)))) {
+			error = EBADF;
+			goto out;
+		}
 	}
 	switch (fl.l_whence) {
 	case SEEK_SET:
@@ -3338,6 +3351,15 @@ irix_fcntl_lock(struct lwp *l, int fd, int command, uint32_t arg,
 	}
 	fl.l_start += base;
 	fl.l_whence = SEEK_SET;
+	/* IRIX fcntl(2) defines both space commands as setting the EOF at
+	 * l_start relative to l_whence. The kernel ignores type and length. */
+	if (resize) {
+		error = fl.l_start < 0 ? EINVAL :
+		    (*fp->f_ops->fo_truncate)(fp, fl.l_start);
+		if (error == 0)
+			*rval = 0;
+		goto out;
+	}
 	/* IRIX distinguishes a range wholly before offset zero from one
 	 * whose negative start reaches zero. Use unsigned magnitude for
 	 * INT64_MIN rather than negating it in signed arithmetic. */
@@ -3457,10 +3479,12 @@ irix_fcntl(struct lwp *l, const void *args, register_t *rval)
 		return 0;
 	case 6: /* F_SETLK */
 	case 7: /* F_SETLKW */
+	case 10: /* F_ALLOCSP */
+	case 11: /* F_FREESP */
 	case 12: /* F_SETBSDLK */
 	case 13: /* F_SETBSDLKW */
 	case 14: /* F_GETLK */
-		return irix_fcntl_lock(l, SCARG(uap, fd), SCARG(uap, cmd),
+		return irix_fcntl_flock(l, SCARG(uap, fd), SCARG(uap, cmd),
 		    arg, rval);
 	case 4: /* F_SETFL: append and canonicalized nonblocking subset. */
 		if (arg & ~(3U | 0x4U | 0x8U | 0x80U | 0x200U))

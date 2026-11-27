@@ -1492,3 +1492,16 @@ the fixed PRDA page used by the switch hook and serializes the range check
 and native mprotect with heap resizing, mmap and ELF loading. Native UVM
 enforces maximum permissions. Process-shared ranges, file-backed ranges
 and requests for execute permission remain outside the threaded subset.
+
+
+### Indy microphone recording and Sound Editor
+
+Both original SGI command-line clients, `sfrecord` and `sfplay`, work with
+the captured HAL2 microphone on the 6.5.22f and 6.5.30f emulated Indys.
+Input and output have independent sample rates. The default analog input
+uses the microphone and the recording port checks native device permissions.
+
+Sound Editor also uses IRIX `fcntl` commands 10 and 11 to size a scratch
+file. Both use the caller's flock layout and set EOF relative to the file
+start, current offset or end. The subsequent file-backed
+`MAP_SHARED | MAP_AUTOGROW` requires fault-time extension and remains open.
