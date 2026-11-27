@@ -96,6 +96,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 
 #include <sgimips/dev/int2reg.h>
 #include <sgimips/dev/crimevar.h>
+#include <sgimips/hpc/haltworeg.h>
 #include <sgimips/sgimips/arcemu.h>
 
 #include <dev/arcbios/arcbios.h>
@@ -117,6 +118,9 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2026/06/10 21:24:11 andvar Exp $")
 #if NMCCLOCK_MACE > 0
 void mcclock_poweroff(void);
 #endif
+
+/* The optional audio personality can also load on machines without HAL2. */
+struct haltwo_mute_hook_t haltwo_mute_hook;
 
 struct sgimips_intrhand intrtab[NINTR];
 

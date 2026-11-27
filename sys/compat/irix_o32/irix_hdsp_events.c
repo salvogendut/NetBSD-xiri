@@ -11,6 +11,7 @@
 #include <sys/systm.h>
 #include <sys/time.h>
 
+#include <sgimips/hpc/haltworeg.h>
 #include <compat/irix_o32/irix_hdsp.h>
 
 #define EVENT_NEXT	101
@@ -140,6 +141,12 @@ static const struct cdevsw queue_cdevsw = {
 	.d_discard = nodiscard, .d_flag = D_OTHER | D_MPSAFE,
 };
 
+static void
+irix_hdsp_mute_changed(bool mute)
+{
+	irix_hdsp_changed(AL_MUTE, mute);
+}
+
 int
 irix_hdsp_events_init(void)
 {
@@ -150,9 +157,12 @@ irix_hdsp_events_init(void)
 	/* Publish the exec handler before admitting the first open. */
 	stopping = true;
 	error = devsw_attach("xirihdsp", NULL, &b, &queue_cdevsw, &c);
-	if (error)
+	if (error) {
 		mutex_destroy(&queue_lock);
-	return error;
+		return error;
+	}
+	MODULE_HOOK_SET(haltwo_mute_hook, irix_hdsp_mute_changed);
+	return 0;
 }
 
 int
@@ -178,6 +188,7 @@ irix_hdsp_events_resume(void)
 void
 irix_hdsp_events_fini(void)
 {
+	MODULE_HOOK_UNSET(haltwo_mute_hook);
 	devsw_detach(NULL, &queue_cdevsw);
 	mutex_destroy(&queue_lock);
 }

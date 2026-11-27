@@ -480,12 +480,17 @@ haltwo_set_port(void *v, mixer_ctrl_t *mc)
 
 	sc = v;
 	if (mc->dev == HALTWO_MASTER_MUTE) {
+		bool oldmute = sc->sc_mute;
+
 		if (mc->type != AUDIO_MIXER_ENUM ||
 		    (mc->un.ord != 0 && mc->un.ord != 1))
 			return EINVAL;
 		sc->sc_mute = mc->un.ord != 0;
 		haltwo_write_indirect(sc, HAL2_IREG_DAC_C2,
 		    sc->sc_mute ? HAL2_DAC_C2_MUTE : 0, 0);
+		if (sc->sc_mute != oldmute)
+			MODULE_HOOK_CALL_VOID(haltwo_mute_hook, (sc->sc_mute),
+			    __nothing);
 		return 0;
 	}
 	if (mc->type != AUDIO_MIXER_VALUE)

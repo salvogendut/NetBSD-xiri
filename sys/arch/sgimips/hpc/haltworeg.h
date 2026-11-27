@@ -32,6 +32,11 @@
 #ifndef _ARCH_SGIMIPS_HPC_HALTWOREG_H_
 #define _ARCH_SGIMIPS_HPC_HALTWOREG_H_
 
+#ifdef _KERNEL
+#include <sys/module_hook.h>
+MODULE_HOOK(haltwo_mute_hook, void, (bool));
+#endif
+
 /* HAL2 direct-addressable registers, PBUS PIO channel 0 */
 #define HAL2_REG_CTL_ISR		0x10
 

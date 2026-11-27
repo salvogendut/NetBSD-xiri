@@ -473,7 +473,6 @@ param_value(file_t *fp, uint32_t resource, struct al_pv *pv, bool set)
 			error = (*fp->f_ops->fo_ioctl)(fp, AUDIO_MIXER_WRITE, &control);
 			if (error)
 				return error;
-			irix_hdsp_changed(AL_MUTE, control.un.ord);
 		}
 		pv->used = 1;
 		pv->value.fixed = 0;
