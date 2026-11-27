@@ -3072,6 +3072,7 @@
 ./usr/share/man/html8/wpa_supplicant.html	man-netutil-htmlman	wlan,html
 ./usr/share/man/html8/wsconscfg.html		man-sysutil-htmlman	html
 ./usr/share/man/html8/wsconsctl.html		man-sysutil-htmlman	html
+./usr/share/man/html8/wsdecorctl.html		man-sysutil-htmlman	html
 ./usr/share/man/html8/wsfontload.html		man-sysutil-htmlman	html
 ./usr/share/man/html8/wsmoused.html		man-sysutil-htmlman	html
 ./usr/share/man/html8/wsmuxctl.html		man-sysutil-htmlman	html
