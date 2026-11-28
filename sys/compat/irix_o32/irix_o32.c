@@ -162,6 +162,7 @@ irix_pointer(uint32_t value)
 #include <compat/irix_o32/irix_tty.h>
 #include <compat/irix_o32/irix_hdsp.h>
 #include <compat/irix_o32/irix_cdrom.h>
+#include <compat/irix_o32/irix_usema.h>
 
 static void irix_prda_sigmask(struct lwp *);
 
@@ -1919,8 +1920,8 @@ irix_o32_mmap(struct lwp *l, const void *args, register_t *rval)
 
 		/* /dev/zero has no file extent to grow. Native mmap converts
 		 * this device to anonymous memory, retaining the sharing type.
-		 * Shared regular files are extended by irix_trapsignal when
-		 * the first user access to a page would otherwise fault. */
+		 * Shared regular files are extended on a supported access to a
+		 * page beyond EOF, including a signal-mask result copy. */
 		if ((fp = fd_getfile(fd)) == NULL)
 			return EBADF;
 		if (fp->f_type == DTYPE_VNODE && fp->f_vnode->v_type == VREG &&
@@ -2075,6 +2076,25 @@ irix_o32_mprotect(struct lwp *l, const void *args, register_t *rval)
 		error = sys_mprotect(l, &native, rval);
 	rw_exit(&ip->maplock);
 	return error;
+}
+
+struct irix_msync_args {
+	syscallarg(uint32_t) addr;
+	syscallarg(uint32_t) len;
+	syscallarg(int32_t) flags;
+};
+
+static int
+irix_msync(struct lwp *l, const void *args, register_t *rval)
+{
+	const struct irix_msync_args *uap = args;
+	struct sys___msync13_args native = { 0 };
+
+	CTASSERT(MS_ASYNC == 1 && MS_INVALIDATE == 2 && MS_SYNC == 4);
+	SCARG(&native, addr) = irix_pointer(SCARG(uap, addr));
+	SCARG(&native, len) = SCARG(uap, len);
+	SCARG(&native, flags) = SCARG(uap, flags);
+	return sys___msync13(l, &native, rval);
 }
 
 struct irix_o32_sysmp_args {
@@ -3212,6 +3232,14 @@ irix_ioctl(struct lwp *l, const void *args, register_t *rval)
 	int32_t foreign_count;
 
 	CTASSERT(sizeof(available) == sizeof(foreign_count));
+	switch (SCARG(uap, command)) {
+	case IRIX_UIOCABLOCKQ:
+	case IRIX_UIOCAUNBLOCKQ:
+	case IRIX_UIOCIDADDR:
+	case IRIX_UIOCGETCOUNT:
+		return irix_usema_ioctl(SCARG(uap, fd), SCARG(uap, command),
+		    irix_pointer(SCARG(uap, data)), rval);
+	}
 	if (SCARG(uap, command) == IRIX_DS_ENTER)
 		return irix_cdrom_enter(SCARG(uap, fd), irix_pointer(SCARG(uap, data)));
 	if (SCARG(uap, command) == 101 || SCARG(uap, command) == 110 ||
@@ -3970,6 +3998,7 @@ irix_proc_exec(struct proc *p, struct exec_package *epp)
 	if (ip == NULL)
 		p->p_emuldata = kmem_zalloc(sizeof(*ip), KM_SLEEP);
 	else {
+		irix_usema_leave(p);
 		irix_usync_release(ip);
 		irix_threads_release(p);
 		irix_share_leave(p);
@@ -3994,6 +4023,7 @@ irix_proc_exit(struct proc *p)
 {
 	struct irix_process *ip = p->p_emuldata;
 
+	irix_usema_leave(p);
 	irix_usync_release(ip);
 	irix_threads_release(p);
 	irix_share_leave(p);
@@ -4002,38 +4032,20 @@ irix_proc_exit(struct proc *p)
 }
 
 /*
- * Handle only a user TLB miss which UVM attributed to the end of a
- * file. This runs after UVM dropped its locks, outside filesystem I/O.
- * Take a reference to the object of the faulting entry while the map
- * is stable. Never hold a map lock across a vnode operation. uvm_fault
- * checks the current mapping again before the instruction can resume.
+ * Called after an EOF fault, with no map or filesystem lock held. Take
+ * a reference while the entry is stable, then drop the map lock before
+ * growing the vnode. uvm_fault rechecks the mapping before retry.
  */
 static bool
-irix_grow_fault(struct lwp *l, const ksiginfo_t *ksi)
+irix_grow_page(struct lwp *l, vaddr_t va, vm_prot_t access)
 {
 	struct proc *p = l->l_proc;
 	struct vm_map *map = &p->p_vmspace->vm_map;
-	vaddr_t va = trunc_page((vaddr_t)ksi->ksi_addr);
 	struct vm_map_entry *entry;
 	struct vnode *vp;
 	uint64_t offset;
-	vm_prot_t access;
 	struct vattr attr;
 	int error;
-
-	if (ksi->ksi_signo != SIGBUS || ksi->ksi_code != BUS_ADRERR)
-		return false;
-	switch (ksi->ksi_trap) {
-	case T_TLB_LD_MISS:
-		access = VM_PROT_READ;
-		break;
-	case T_TLB_MOD:
-	case T_TLB_ST_MISS:
-		access = VM_PROT_WRITE;
-		break;
-	default:
-		return false;
-	}
 
 	vm_map_lock_read(map);
 	if (!uvm_map_lookup_entry(map, va, &entry) ||
@@ -4067,6 +4079,53 @@ irix_grow_fault(struct lwp *l, const ksiginfo_t *ksi)
 	/* Resolve the actual access. An unrelated pager error must still
 	 * deliver a signal even if another fault already grew this file. */
 	return error == 0 && uvm_fault(map, va, access) == 0;
+}
+
+static bool
+irix_grow_fault(struct lwp *l, const ksiginfo_t *ksi)
+{
+	vm_prot_t access;
+
+	if (ksi->ksi_signo != SIGBUS || ksi->ksi_code != BUS_ADRERR)
+		return false;
+	switch (ksi->ksi_trap) {
+	case T_TLB_LD_MISS:
+		access = VM_PROT_READ;
+		break;
+	case T_TLB_MOD:
+	case T_TLB_ST_MISS:
+		access = VM_PROT_WRITE;
+		break;
+	default:
+		return false;
+	}
+
+	return irix_grow_page(l, trunc_page((vaddr_t)ksi->ksi_addr), access);
+}
+
+/* A kernel copy to user space takes the MIPS onfault path instead of
+ * delivering SIGBUS. Retry each affected page only on the EOF error,
+ * at a call site that can safely enter the filesystem. */
+static int
+irix_copyout_grow(struct lwp *l, const void *src, void *dst, size_t len)
+{
+	const char *from = src;
+	vaddr_t to = (vaddr_t)dst;
+
+	while (len != 0) {
+		size_t n = MIN(len, PAGE_SIZE - (to & PAGE_MASK));
+		int error = copyout(from, (void *)to, n);
+
+		if (error == EINVAL && irix_grow_page(l, trunc_page(to),
+		    VM_PROT_WRITE))
+			error = copyout(from, (void *)to, n);
+		if (error != 0)
+			return error;
+		from += n;
+		to += n;
+		len -= n;
+	}
+	return 0;
 }
 
 static void
@@ -4122,7 +4181,8 @@ irix_sigprocmask(struct lwp *l, const void *args, register_t *rval)
 		return error;
 	if (SCARG(uap, oldset) != 0) {
 		irix_mask_export(&old, &out[0], &out[1]);
-		error = copyout(out, irix_pointer(SCARG(uap, oldset)), sizeof(out));
+		error = irix_copyout_grow(l, out, irix_pointer(SCARG(uap, oldset)),
+		    sizeof(out));
 		if (error != 0)
 			return error;
 	}
@@ -4790,6 +4850,17 @@ static struct sysent irix_o32_sysent[] = {
 		.sy_flags = SYCALL_ARG_PTR,
 		.sy_call = irix_o32_mprotect,
 	},
+	[153] = {
+		.sy_narg = 2,
+		.sy_argsize = sizeof(struct sys_fchmod_args),
+		.sy_call = irix_usema_fchmod,
+	},
+	[137] = {
+		.sy_narg = 3,
+		.sy_argsize = sizeof(struct irix_msync_args),
+		.sy_flags = SYCALL_ARG_PTR,
+		.sy_call = irix_msync,
+	},
 };
 
 static const uint32_t irix_o32_nomodbits[howmany(__arraycount(irix_o32_sysent), 32)] = { 0 };
@@ -4812,7 +4883,8 @@ static const char * const irix_o32_syscallnames[__arraycount(irix_o32_sysent)] =
 	[75] = "getrlimit64", [80] = "mkdir", [148] = "getrlimit", [130] = "prctl",
 	[2] = "fork", [129] = "sproc", [204] = "nsproc", [131] = "procblk", [132] = "sprocsp", [20] = "getpid", [164] = "sigprocmask", [166] = "sigpoll", [170] = "waitsys",
 	[47] = "getgid", [54] = "ioctl", [56] = "sysmp", [134] = "mmap", [135] = "munmap",
-	[136] = "mprotect", [158] = "xstat", [159] = "lxstat", [160] = "fxstat", [77] = "nanosleep", [82] = "sginap", [87] = "poll", [91] = "connect",
+	[136] = "mprotect", [137] = "msync", [153] = "fchmod",
+	[158] = "xstat", [159] = "lxstat", [160] = "fxstat", [77] = "nanosleep", [82] = "sginap", [87] = "poll", [91] = "connect",
 	[89] = "accept", [90] = "bind", [96] = "listen",
 	[93] = "getpeername", [94] = "getsockname", [95] = "getsockopt",
 	[62] = "fcntl", [99] = "recvmsg", [100] = "select",
@@ -4932,7 +5004,9 @@ irix_o32_syscall(struct lwp *l, uint32_t status, uint32_t cause, vaddr_t pc)
 	case 1134: code = 134; break;
 	case 1135: code = 135; break;
 	case 1136: code = 136; break;
+	case 1137: code = 137; break;
 	case 1148: code = 148; break;
+	case 1153: code = 153; break;
 	case 1155: code = 155; break;
 	case 1146: code = 146; break;
 	case 1158: code = 158; break;
@@ -5497,21 +5571,37 @@ compat_irix_o32_modcmd(modcmd_t cmd, void *arg)
 		error = irix_hdsp_events_init();
 		if (error)
 			return error;
-		error = exec_add(irix_o32_execsw, __arraycount(irix_o32_execsw));
-		if (error)
+		error = irix_usema_init();
+		if (error) {
 			irix_hdsp_events_fini();
-		else
+			return error;
+		}
+		error = exec_add(irix_o32_execsw, __arraycount(irix_o32_execsw));
+		if (error) {
+			irix_usema_fini();
+			irix_hdsp_events_fini();
+		} else {
+			irix_usema_resume();
 			irix_hdsp_events_resume();
+		}
 		return error;
 	case MODULE_CMD_FINI:
-		error = irix_hdsp_events_quiesce();
+		error = irix_usema_quiesce();
 		if (error)
 			return error;
+		error = irix_hdsp_events_quiesce();
+		if (error) {
+			irix_usema_resume();
+			return error;
+		}
 		error = exec_remove(irix_o32_execsw, __arraycount(irix_o32_execsw));
-		if (error)
+		if (error) {
 			irix_hdsp_events_resume();
-		else
+			irix_usema_resume();
+		} else {
+			irix_usema_fini();
 			irix_hdsp_events_fini();
+		}
 		return error;
 	default:
 		return ENOTTY;

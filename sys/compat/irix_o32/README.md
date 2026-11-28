@@ -869,12 +869,27 @@ delivers any remaining fault. Native mmaps use the ordinary EOF policy.
 IRIX 6.5.22f and 6.5.30f grow a 17-byte file to 12288 bytes on a read
 or store at offset 8192 with 4096-byte pages. Unflagged mappings signal
 SIGBUS. Original IRIX also provides private zero-filled pages past EOF.
-Private regular-file AUTOGROW and a kernel copy as the first access to a
-missing page remain outside this implementation.
+The signal-mask result copy can also grow an untouched shared AUTOGROW
+page. The module retries the copy outside the process lock, one page at a
+time. Other kernel copies and private regular-file growth are unqualified.
+IRIX msync (1137) delegates the mapped range and standard flags to native
+msync. Media Recorder uses MS_INVALIDATE without an explicit sync flag.
 Native zero-device access policy, page alignment, stricter invalid flags,
 empty/bad-protection errors and signed 32-bit offsets remain explicit limits.
 AUTORESRV does not establish IRIX logical-swap accounting/exhaustion behavior;
 LOCAL still requires one LWP and an unshared vmspace.
+
+The module registers the character driver `xiriusema`. Minor zero provides
+the `/dev/usemaclone` endpoint in the emulation root. An open creates an
+independent queue whose descriptor can be inherited across fork. The clone
+reports its device identity, owner and mode through fstat; fchmod changes
+that clone's mode. An asynchronous block queues the calling process. An
+unblock wakes the oldest waiter. Poll readiness belongs to that process
+and persists until it queues again. Unblocks with no waiters accumulate
+credits for subsequent blocks. The count ioctl reports credits minus
+waiters. Process exit, exec and descriptor close release queue state.
+Open clones keep the module busy. The separate `/dev/usema` attachment
+interface, synchronous operations and checkpoint/restore are unimplemented.
 
 Xiri lab/irix-mmap-shared compares 472 original records/backing files with
 1,180 native records/backing files and 44 native/vendor controls across LP64
